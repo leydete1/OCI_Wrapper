@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 6 - Validation failure
+ VARCHAR2_COL value exceeds field_length=100.
+ Stage 1 must catch this BEFORE any OCI call.
+ Watch log for "Stage 1 validation failed" - no OCI calls after.
+========================================================================
+-->
+
+<Insert_Template>
+    <operation>INSERT</operation>
+    <table_name>OCI_FIELD_TEST</table_name>
+    <owner>DATA_MANAGER</owner>
+
+    <row number="1">
+
+        <field>
+            <field_number>1</field_number>
+            <field_name>NUMBER_COL</field_name>
+            <field_type>NUMBER</field_type>
+            <field_length>22</field_length>
+            <field_precision>-1</field_precision>
+            <field_scale>-1</field_scale>
+            <field_nullable>Y</field_nullable>
+            <field_default></field_default>
+            <insert_value>999</insert_value>
+        </field>
+
+        <field>
+            <field_number>2</field_number>
+            <field_name>VARCHAR2_COL</field_name>
+            <field_type>VARCHAR2</field_type>
+            <field_length>100</field_length>
+            <field_precision>-1</field_precision>
+            <field_scale>-1</field_scale>
+            <field_nullable>N</field_nullable>
+            <field_default></field_default>
+
+            <insert_value>
+                THIS VALUE IS DELIBERATELY TOO LONG -
+                AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+            </insert_value>
+
+        </field>
+
+    </row>
+
+    <column_count>2</column_count>
+
+</Insert_Template>
+

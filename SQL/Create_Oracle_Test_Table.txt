@@ -1,0 +1,444 @@
+This is a copy of a conversation between ChatGPT & Anonymous.
+You said:
+Hi. I have 2 bits to do today. I am writing a general oci wrapper for oracle 23ai. Now i have oracle installed and workong on ubuntu24 . Tge laptop has 32gb ram so it is handling it well. First thing i need is a table lets call it oci_field_test.  This table should have one test_field_type_colum for each oracle data type including clob and blob. I will also need an insert statement to insert a test row. For the moment you can leave the blob null and i will adress it last
+
+ChatGPT said:
+
+Great 👍 since you’re targeting Oracle 23ai and building a general OCI wrapper, the best approach is to create a table that covers:
+
+    All scalar SQL types
+
+    Character + national character types
+
+    Date/time types (including time zone variants)
+
+    Interval types
+
+    LOBs (CLOB, NCLOB, BLOB)
+
+    RAW / LONG RAW
+
+    Rowid types
+
+Below is a clean, OCI-friendly test table and a matching insert.
+1️⃣ Create Table: oci_field_test
+
+CREATE TABLE oci_field_test (
+    -- Numeric types
+    number_col              NUMBER,
+    number_p_s_col          NUMBER(10, 2),
+    float_col               FLOAT,
+    binary_float_col        BINARY_FLOAT,
+    binary_double_col       BINARY_DOUBLE,
+
+    -- Character types
+    char_col                CHAR(10),
+    varchar2_col            VARCHAR2(100),
+    nchar_col               NCHAR(10),
+    nvarchar2_col           NVARCHAR2(100),
+
+    -- Date & Time types
+    date_col                DATE,
+    timestamp_col           TIMESTAMP,
+    timestamp_tz_col        TIMESTAMP WITH TIME ZONE,
+    timestamp_ltz_col       TIMESTAMP WITH LOCAL TIME ZONE,
+
+    -- Interval types
+    interval_ym_col         INTERVAL YEAR(4) TO MONTH,
+    interval_ds_col         INTERVAL DAY(4) TO SECOND(6),
+
+    -- Binary types
+    raw_col                 RAW(50),
+
+    -- LOB types
+    clob_col                CLOB,
+    nclob_col               NCLOB,
+    blob_col                BLOB,
+
+    -- Rowid types
+    rowid_col               ROWID,
+    urowid_col              UROWID
+);
+
+Notes for OCI testing:
+
+    FLOAT is internally NUMBER — useful for testing describe behavior.
+
+    BINARY_FLOAT / BINARY_DOUBLE test native IEEE bindings.
+
+    TIMESTAMP WITH LOCAL TIME ZONE is normalized to DB time zone.
+
+    ROWID and UROWID are useful for descriptor handling.
+
+    LONG is intentionally excluded (deprecated and problematic in OCI).
+
+    BFILE excluded unless you specifically need external LOB testing.
+
+2️⃣ Insert Test Row
+
+This gives you deterministic values that are easy to verify in your wrapper.
+
+INSERT INTO oci_field_test (
+    number_col,
+    number_p_s_col,
+    float_col,
+    binary_float_col,
+    binary_double_col,
+    char_col,
+    varchar2_col,
+    nchar_col,
+    nvarchar2_col,
+    date_col,
+    timestamp_col,
+    timestamp_tz_col,
+    timestamp_ltz_col,
+    interval_ym_col,
+    interval_ds_col,
+    raw_col,
+    clob_col,
+    nclob_col,
+    blob_col,
+    rowid_col,
+    urowid_col
+)
+VALUES (
+    42,
+    12345.67,
+    3.14,
+    1.5f,
+    2.718281828,
+    'CHAR_TEST',
+    'VARCHAR2_TEST',
+    N'NCHAR_TEST',
+    N'NVARCHAR2_TEST',
+    SYSDATE,
+    SYSTIMESTAMP,
+    SYSTIMESTAMP,
+    SYSTIMESTAMP,
+    INTERVAL '2-6' YEAR TO MONTH,
+    INTERVAL '5 12:30:45.123456' DAY TO SECOND,
+    HEXTORAW('DEADBEEF'),
+    'This is a CLOB test value.',
+    N'This is an NCLOB test value.',
+    NULL, -- blob left NULL as requested
+    NULL, -- rowid must be generated
+    NULL
+);
+
+
+
+
+
+
+CREATE TABLE OCI_LOB_TEST (
+    ID             	NUMBER,
+    DESCRIPTION         VARCHAR2(200),
+    FILE_NAME           VARCHAR2(100),
+    PHOTO               BLOB
+);
+
+GRANT ALL ON OCI_LOB_TEST TO PUBLIC;
+
+/**Insert test blob records*/
+
+CREATE OR REPLACE DIRECTORY PHOTO_DIR AS 
+'/opt/oracle/Photos';
+
+
+
+SELECT directory_name, directory_path
+FROM all_directories
+WHERE directory_name = 'PHOTO_DIR';
+
+commit;
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Adam_1.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (1, 'Adams pizza', 'Adam_1.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+docker stop oracle23c
+
+/*Docker must be able to see the files,  so it needs to be stopped and started with a mount point*/
+docker run -d \
+
+
+Here is sql to load some samples for testing
+
+Images to load
+
+leyden100@Terry-HP-Laptop-15-fd0xxx:/opt/oracle$ ls -l /opt/oracle/Photos
+total 2112
+-rw-r--r-- 1 54321 54321 456547 Mar 12 09:47 Adam_1.jpg		done
+-rw-r--r-- 1 54321 54321  72585 Mar 12 09:47 Emily_big_hug.jpg   done
+-rw-r--r-- 1 54321 54321 423891 Mar 12 09:47 Emily_Football.jpg  done
+-rw-r--r-- 1 54321 54321 502790 Mar 12 09:47 Sophi.jpg
+-rw-r--r-- 1 54321 54321 670535 Mar 12 09:47 The_Gang.jpg
+-rw-r--r-- 1 54321 54321  26263 Mar 12 09:47 Uncle_James.jpg
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Adam_1.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (1, 'Adam enjoying pizza', 'Adam_1.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Emily_big_hug.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (2, 'Big hug for Emily', 'Emily_big_hug.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Emily_Football.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (3, 'Football Team', 'Emily_Football.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+
+ 	
+
+
+
+select * from OCI_LOB_TEST
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Sophi.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (4, 'Cousin Sophie', 'Sophi.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','The_Gang.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (5, 'The kids', 'The_Gang.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Uncle_James.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (6, 'The one and only James', 'Uncle_James.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/
+
+
+DECLARE
+    v_blob  BLOB;
+    v_bfile BFILE := BFILENAME('PHOTO_DIR','Adam_1.jpg');
+
+BEGIN
+    INSERT INTO OCI_LOB_TEST (id, DESCRIPTION , FILE_NAME , photo)
+    VALUES (1, 'Adams pizza', 'Adam_1.jpg', EMPTY_BLOB())
+    RETURNING photo INTO v_blob;
+
+    DBMS_LOB.OPEN(v_bfile, DBMS_LOB.LOB_READONLY);
+
+    DBMS_LOB.LOADFROMFILE(
+        dest_lob => v_blob,
+        src_lob  => v_bfile,
+        amount   => DBMS_LOB.GETLENGTH(v_bfile)
+    );
+
+    DBMS_LOB.CLOSE(v_bfile);
+
+    COMMIT;
+END;
+/+++
+
+
+CREATE TABLE OCI_CLOB_TEST (
+    ID             	NUMBER,
+    DESCRIPTION         VARCHAR2(200),
+    FILE_NAME           VARCHAR2(100),
+    LARGE_CLOB          CLOB
+);
+
+GRANT ALL ON OCI_CLOB_TEST TO PUBLIC;
+
+
+
+ * 5.  Suggested Oracle test procedure DDL
+ *     Run these in SQL*Plus or SQL Developer as DATA_MANAGER
+ *     before executing the unit test XML files.
+ * ----------------------------------------------------------------
+ *
+ * -- Round 1: scalar IN + scalar OUT
+ * CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_DEPT_STATUS (
+ *     P_DEPT_ID   IN  NUMBER,
+ *     P_STATUS    OUT INTEGER
+ * ) AS
+ * BEGIN
+ *     SELECT COUNT(*) INTO P_STATUS
+ *     FROM   DATA_MANAGER.OCI_FIELD_TEST
+ *     WHERE  NUMBER_COL = P_DEPT_ID;
+ * END;
+ * /
+ *
+ * -- Round 2: IN + CURSOR OUT
+ * CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_FIELD_ROWS (
+ *     P_MIN_NUM   IN  NUMBER,
+ *     P_RESULTS   OUT SYS_REFCURSOR
+ * ) AS
+ * BEGIN
+ *     OPEN P_RESULTS FOR
+ *         SELECT NUMBER_COL, VARCHAR2_COL, DATE_COL
+ *         FROM   DATA_MANAGER.OCI_FIELD_TEST
+ *         WHERE  NUMBER_COL >= P_MIN_NUM
+ *         ORDER  BY NUMBER_COL;
+ * END;
+ * /
+ *
+ * -- Round 3: IN + scalar OUT + CURSOR OUT
+ * CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_ROWS_WITH_STATUS (
+ *     P_MIN_NUM   IN  NUMBER,
+ *     P_ROW_COUNT OUT INTEGER,
+ *     P_RESULTS   OUT SYS_REFCURSOR
+ * ) AS
+ * BEGIN
+ *     SELECT COUNT(*) INTO P_ROW_COUNT
+ *     FROM   DATA_MANAGER.OCI_FIELD_TEST
+ *     WHERE  NUMBER_COL >= P_MIN_NUM;
+ *
+ *     OPEN P_RESULTS FOR
+ *         SELECT NUMBER_COL, VARCHAR2_COL, DATE_COL
+ *         FROM   DATA_MANAGER.OCI_FIELD_TEST
+ *         WHERE  NUMBER_COL >= P_MIN_NUM
+ *         ORDER  BY NUMBER_COL;
+ * END;
+ * /
+ *
+ * -- Round 4: no-parameter procedure
+ * CREATE OR REPLACE PROCEDURE DATA_MANAGER.PURGE_OLD_ROWS AS
+ * BEGIN
+ *     DELETE FROM DATA_MANAGER.OCI_FIELD_TEST
+ *     WHERE  DATE_COL < SYSDATE - 365;
+ *     COMMIT;
+ * END;
+ * /
+ * ----------------------------------------------------------------
+ */
+
+

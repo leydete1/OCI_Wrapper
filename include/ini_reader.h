@@ -1,0 +1,427 @@
+ #ifndef INI_READER_H
+#define INI_READER_H
+
+#include <stddef.h>
+
+/* Forward declaration */
+typedef struct oci_context_t oci_context_t;
+
+typedef enum
+{
+    CFG_INT,
+    CFG_BOOL,
+    CFG_STRING
+} cfg_type_t;
+
+typedef struct {
+    char *name;
+    char *value;
+} ini_entry_t;
+
+typedef struct {
+    ini_entry_t *entries;
+    size_t count;
+} ini_file_t;
+
+
+typedef struct
+{
+    /* ----------------------------------------------------------------
+     * Logging
+     * ---------------------------------------------------------------- */
+
+	/*Main log*/
+	char log_file_name[256];
+    int  log_file_max_size;
+    int  log_file_rotation_number;
+    char log_level[20];
+    int  log_level_num;
+
+	/*Cache log file*/
+	char cache_log_file_name[256];
+    int  cache_log_file_max_size;
+    int  cache_log_file_rotation_number;
+    char cache_log_level[20];
+    int  cache_log_level_num;
+
+	/*Select log file*/
+	char select_log_file_name[256];
+    int  select_log_file_max_size;
+    int  select_log_file_rotation_number;
+    char select_log_level[20];
+    int  select_log_level_num;
+
+
+	/*Metadata log file*/
+	char Metadata_log_file_name[256];
+    int  Metadata_log_file_max_size;
+    int  Metadata_log_file_rotation_number;
+    char Metadata_log_level[20];
+    int  Metadata_log_level_num;
+
+
+
+	/*connection log file*/
+	char connection_log_file_name[256];
+    int  connection_log_file_max_size;
+    int  connection_log_file_rotation_number;
+    char connection_log_level[20];
+    int  connection_log_level_num;
+
+
+	/*connectionpool log file*/
+	char connectionpool_log_file_name[256];
+    int  connectionpool_log_file_max_size;
+    int  connectionpool_log_file_rotation_number;
+    char connectionpool_log_level[20];
+    int  connectionpool_log_level_num;
+    
+    
+   	/*update log file*/
+	char update_log_file_name[256];
+    int  update_log_file_max_size;
+    int  update_log_file_rotation_number;
+    char update_log_level[20];
+    int  update_log_level_num;
+    
+   
+      	/*insert log file*/
+	char insert_log_file_name[256];
+    int  insert_log_file_max_size;
+    int  insert_log_file_rotation_number;
+    char insert_log_level[20];
+    int  insert_log_level_num;
+
+
+     	/*delete log file*/
+	char delete_log_file_name[256];
+    int  delete_log_file_max_size;
+    int  delete_log_file_rotation_number;
+    char delete_log_level[20];
+    int  delete_log_level_num;
+
+
+     	/*dml log file*/
+	char dml_log_file_name[256];
+    int  dml_log_file_max_size;
+    int  dml_log_file_rotation_number;
+    char dml_log_level[20];
+    int  dml_log_level_num;
+
+
+   	/*ddl log file*/
+	char ddl_log_file_name[256];
+    int  ddl_log_file_max_size;
+    int  ddl_log_file_rotation_number;
+    char ddl_log_level[20];
+    int  ddl_log_level_num;
+
+     	/*procedure log file*/
+	char procedure_log_file_name[256];
+    int  procedure_log_file_max_size;
+    int  procedure_log_file_rotation_number;
+    char procedure_log_level[20];
+    int  procedure_log_level_num;
+
+  /*Additional logs  error , metrics, transaction , security . crypt, audit , session added 31-May-2026*/
+
+    	/*error log file*/
+	char error_log_file_name[256];
+    int  error_log_file_max_size;
+    int  error_log_file_rotation_number;
+    char error_log_level[20];
+    int  error_log_level_num;
+
+    	/*metrics log file*/
+	char metrics_log_file_name[256];
+    int  metrics_log_file_max_size;
+    int  metrics_log_file_rotation_number;
+    char metrics_log_level[20];
+    int  metrics_log_level_num;
+
+  	/*transaction log file*/
+	char transaction_log_file_name[256];
+    int  transaction_log_file_max_size;
+    int  transaction_log_file_rotation_number;
+    char transaction_log_level[20];
+    int  transaction_log_level_num;
+
+
+  	/*security log file*/
+	char security_log_file_name[256];
+    int  security_log_file_max_size;
+    int  security_log_file_rotation_number;
+    char security_log_level[20];
+    int  security_log_level_num;
+
+	/*crypt log file*/
+	char crypt_log_file_name[256];
+    int  crypt_log_file_max_size;
+    int  crypt_log_file_rotation_number;
+    char crypt_log_level[20];
+    int  crypt_log_level_num;
+
+
+ 	/*audit log file*/
+	char audit_log_file_name[256];
+    int  audit_log_file_max_size;
+    int  audit_log_file_rotation_number;
+    char audit_log_level[20];
+    int  audit_log_level_num;
+    
+    	/*session log file*/
+	char session_log_file_name[256];
+    int  session_log_file_max_size;
+    int  session_log_file_rotation_number;
+    char session_log_level[20];
+    int  session_log_level_num;
+
+
+   	/*sql_parser log file*/
+	char sql_parser_log_file_name[256];
+    int  sql_parser_log_file_max_size;
+    int  sql_parser_log_file_rotation_number;
+    char sql_parser_log_level[20];
+    int  sql_parser_log_level_num;
+
+  /*End Additional logs  error , metrics, tx , sec . crypt, audit , session added 31-May-2026*/
+
+    /* ----------------------------------------------------------------
+     * Database credentials / connection string
+     * ---------------------------------------------------------------- */
+    char TEST_SQL_FILE_NAME[256];
+    char dbname          [128];
+    char username        [64];   /* retained for logging / NLS only    */
+
+    /* ----------------------------------------------------------------
+     * Oracle Wallet - replaces plaintext password in config.ini.
+     * Set use_wallet = 1 and wallet_location = path to wallet dir.
+     * OCI will use OCI_CRED_EXT and read credentials from the wallet
+     * transparently.  username and password are NOT required when
+     * use_wallet = 1.  TNS_ADMIN is set programmatically from
+     * wallet_location before the first OCI call.
+     *
+     * use_wallet = 0 (default): legacy OCI_CRED_RDBMS mode.
+     *   Requires password field below.  Development / fallback only.
+     *   Not recommended for production or GxP environments.
+     *
+     * use_wallet = 1 (recommended): OCI_CRED_EXT wallet mode.
+     *   password field is ignored.  wallet_location must point to a
+     *   directory containing cwallet.sso, ewallet.p12, sqlnet.ora.
+     * ---------------------------------------------------------------- */
+    int  use_wallet;              /* 0=legacy RDBMS creds  1=wallet    */
+    char wallet_location [256];   /* path to Oracle Wallet directory   */
+    char password        [64];    /* legacy only - ignored if use_wallet=1
+                                     leave blank in production config  */
+
+    /* ----------------------------------------------------------------
+     * XML I/O directories
+     * ---------------------------------------------------------------- */
+    char xml_input_dir [256];
+    char xml_output_dir[256];
+    char xml_error_dir [256];
+
+    /* ----------------------------------------------------------------
+     * Threading (direct connection mode)
+     * ---------------------------------------------------------------- */
+    int  max_threads;
+    int  min_threads;
+    int  query_timeout;
+    int  connection_timeout;
+    int  heartbeat_on;
+    int  heartbeat_timeout;
+    int  max_num_timeouts;
+
+    /* ----------------------------------------------------------------
+     * LOB / BLOB / CLOB output
+     * ---------------------------------------------------------------- */
+    int  xml_share_BLOB_output_dir;
+    int  xml_share_CLOB_output_dir;
+    int  xml_share_BLOB_host_path;
+    int  xml_share_CLOB_URL_path;
+    int  xml_share_BLOB_URL_path;
+    char BLOB_host_path[256];
+    char CLOB_URL_path [256];
+    char BLOB_URL_path [256];
+    char BLOB_output_dir[256];
+    char CLOB_output_dir[256];
+    int  max_BLOBS_per_record;
+    int  max_CLOBS_per_record;
+    unsigned long chunk_read_size;
+    int  query_max_record_count;
+
+    char BLOB_default_file_name_col  [50];
+    char BLOB_default_file_name_col_1[50];
+    char BLOB_default_file_name_col_2[50];
+    char BLOB_default_file_name_col_3[50];
+    char BLOB_default_file_name_col_4[50];
+    char BLOB_default_file_name_col_5[50];
+    char BLOB_default_MIME_col       [10];
+    char BLOB_default_MIME_TYPE_col_1[10];
+    char BLOB_default_MIME_TYPE_col_2[10];
+    char BLOB_default_MIME_TYPE_col_3[10];
+    char BLOB_default_MIME_TYPE_col_4[10];
+    char BLOB_default_MIME_TYPE_col_5[10];
+    char BLOB_default_MIME_TYPE      [10];
+    char BLOB_default_file_name      [10];
+    int  BLOB_append_file_timestamp;
+    int  query_fetch_batch_size;
+    char clob_default_extension[16];
+
+    /* ----------------------------------------------------------------
+     * Insert template defaults
+     * ---------------------------------------------------------------- */
+    int  insert_table_defaults;
+
+    char insert_default_number      [64];
+    char insert_default_float       [64];
+    char insert_default_binary_float [64];
+    char insert_default_binary_double[64];
+    char insert_default_char        [64];
+    char insert_default_varchar2    [64];
+    char insert_default_nchar       [64];
+    char insert_default_nvarchar2   [64];
+    char insert_default_date        [32];
+    char insert_default_timestamp   [64];
+    char insert_default_interval_ym [32];
+    char insert_default_interval_ds [64];
+    char insert_default_raw         [64];
+    char insert_default_clob        [64];
+    char insert_default_nclob       [64];
+    char insert_default_blob        [256];
+    char insert_default_rowid       [32];
+    char insert_default_urowid      [32];
+
+    /* ----------------------------------------------------------------
+     * Bulk insert control
+     * ---------------------------------------------------------------- */
+    int  max_bulk_inserts;
+
+    /* ================================================================
+     * Connection pool parameters
+     *
+     * use_connection_pool = 1  activates OCI_Connect_pool() instead
+     * of OCI_Connect().  All other pool fields are only read when the
+     * pool is active.  Every field has a safe default in ini_reader.c
+     * so adding these to an existing ini file is optional.
+     * ================================================================ */
+
+    /* Master switch */
+    int  use_connection_pool;         /* 0=direct connect  1=pool       */
+
+    /* Pool sizing */
+    int  pool_min_size;               /* sessions opened at startup      */
+    int  pool_max_size;               /* maximum concurrent sessions      */
+    int  pool_increment;              /* sessions added when pool grows   */
+
+    /* Timeout settings - all in seconds */
+    int  pool_connection_timeout;     /* wait for a free slot             */
+    int  session_idle_timeout;        /* recycle idle session after N s   */
+    int  max_time_to_establish;       /* OCIServerAttach limit            */
+    int  network_read_write_timeout;  /* socket read/write timeout        */
+    int  query_execution_timeout;     /* max query run time (0=unlimited) */
+    int  authentication_handshake_timeout; /* OCISessionBegin limit       */
+    int  login_auth_timeout;          /* alias: auth handshake limit      */
+    int  session_max_lifetime;        /* recycle session after N s        */
+    int  heartbeat_keepalive_interval;/* background ping interval         */
+
+    /* Retry */
+    int  retries_on_connection_failure; /* open/reopen attempts           */
+
+    /* Session behaviour */
+    int  connection_validation_on_borrow; /* OCIPing before handing out   */
+    int  rollback_on_return_to_pool;      /* rollback when returned       */
+    int  autocommit_mode;                 /* ALTER SESSION SET AUTOCOMMIT */
+
+    /* NLS / character set */
+    char nls_date_format    [64];   /* default "YYYY-MM-DD HH24:MI:SS"   */
+    char nls_language       [64];   /* default "AMERICAN"                */
+    char nls_territory      [64];   /* default "AMERICA"                 */
+    char nls_characterset   [64];   /* default "AL32UTF8"                */
+    char nls_session_timezone[64];  /* default "UTC"                     */
+    
+    /* ================================================================
+     * Result Set Cache parameters
+     * ================================================================ */
+    int  resultset_cache_enabled;              /* 0=off  1=on            */
+    int  resultset_cache_ttl_seconds;          /* entry lifetime          */
+    int  resultset_cache_max_entries;          /* max cached queries      */
+    int  resultset_cache_max_memory_mb;        /* memory cap in MB        */
+    int  resultset_cache_bucket_count;         /* hash table width        */
+    char resultset_cache_hash_algorithm[16];   /* fnv1a|djb2|murmur3     */
+
+    /* ================================================================
+     * Metadata Cache parameters
+     * ================================================================ */
+    int  metadata_cache_enabled;
+    int  metadata_cache_ttl_seconds;
+    int  metadata_cache_max_entries;
+    int  metadata_cache_max_memory_mb;
+    int  metadata_cache_bucket_count;
+    char metadata_cache_hash_algorithm[16];
+
+    /* ================================================================
+     * Statement Cache parameters
+     * ================================================================ */
+    int  statement_cache_enabled;
+    int  statement_cache_ttl_seconds;
+    int  statement_cache_max_entries;
+    int  statement_cache_max_memory_mb;
+    int  statement_cache_bucket_count;
+    char statement_cache_hash_algorithm[16];
+
+
+
+
+
+   /* ================================================================
+     * Transaction Manager parameters
+     * ================================================================ */
+    int  tx_timeout_seconds;
+     int  tx_max_retries;    
+     int  tx_retry_delay_ms;     
+     int  tx_log_begin;          
+     int  tx_log_commit;         
+     int  tx_log_rollback;       
+     int  tx_log_timeout;  
+     
+   /* ================================================================
+     * Metrics parameters
+     * ================================================================ */
+      int  metrics_display_input_file_name;
+      int  metrics_display_input_xml;
+      int  metrics_display_output_xml;
+      
+      
+    /* ================================================================
+     * Session Cache parameters
+     * ================================================================ */
+    int  session_cache_enabled;
+    int  session_cache_ttl_seconds;
+    int  session_cache_max_entries;
+    int  session_cache_max_memory_mb;
+    int  session_cache_bucket_count;
+    char session_cache_hash_algorithm[16];
+
+    /* ================================================================
+     * Session Manager parameters
+     * ================================================================ */
+    int  session_default_ttl_seconds;
+    int  session_log_create;
+    int  session_log_end;
+    int  session_log_reconcile;
+
+} app_config_t;
+
+
+/* INI file functions */
+void        ini_free     (ini_file_t *ini);
+const char *ini_get_str  (const ini_file_t *ini, const char *name, const char *default_val);
+int         ini_get_int  (const ini_file_t *ini, const char *name, int default_val);
+double      ini_get_double(const ini_file_t *ini, const char *name, double default_val);
+int         ini_get_bool (const ini_file_t *ini, const char *name, int default_val);
+void        ini_dump     (const ini_file_t *ini);
+int         load_ini     (const char *filename, app_config_t *config, oci_context_t *ctx);
+int         populate_ctx_from_ini(app_config_t *ini);
+
+#endif /* INI_READER_H */

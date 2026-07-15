@@ -1,0 +1,424 @@
+.
+├── Blob_Tester
+├── Debug
+│   ├── Cluade
+│   │   └── subdir.mk
+│   ├── makefile
+│   ├── OCI_Wrapper
+│   ├── sources.mk
+│   └── src
+│       ├── ctx_header.d
+│       ├── ctx_header.o
+│       ├── ini_reader.d
+│       ├── ini_reader.o
+│       ├── logger.d
+│       ├── logger.o
+│       ├── metadata_cache.d
+│       ├── metadata_cache.o
+│       ├── metrics.d
+│       ├── metrics.o
+│       ├── OCI_Audit_Trail_Manager.d
+│       ├── OCI_Audit_Trail_Manager.o
+│       ├── oci_cache.d
+│       ├── oci_cache.o
+│       ├── OCI_Connection.d
+│       ├── OCI_Connection.o
+│       ├── OCI_Connection_Pool.d
+│       ├── OCI_Connection_Pool.o
+│       ├── OCI_Delete_Execute_Module.d
+│       ├── OCI_Delete_Execute_Module.o
+│       ├── OCI_Execute_Procedure_Module.d
+│       ├── OCI_Execute_Procedure_Module.o
+│       ├── OCI_Execute_Query_Batch_Module.d
+│       ├── OCI_Execute_Query_Batch_Module.o
+│       ├── OCI_Execute_Query_Module.d
+│       ├── OCI_Execute_Query_Module.o
+│       ├── OCI_Insert_Execute_Module (Copy).d
+│       ├── OCI_Insert_Execute_Module (Copy).o
+│       ├── OCI_Insert_Execute_Module.d
+│       ├── OCI_Insert_Execute_Module.o
+│       ├── OCI_Insert_Template_Module.d
+│       ├── OCI_Insert_Template_Module.o
+│       ├── OCI_Insert_Validate_Module.d
+│       ├── OCI_Insert_Validate_Module.o
+│       ├── OCI_Session_Manager.d
+│       ├── OCI_Session_Manager.o
+│       ├── OCI_Table_Metadata_Module.d
+│       ├── OCI_Table_Metadata_Module.o
+│       ├── OCI_Transaction_Manager.d
+│       ├── OCI_Transaction_Manager.o
+│       ├── OCI_Update_Execute_Module.d
+│       ├── OCI_Update_Execute_Module.o
+│       ├── Oci_xml_tester.d
+│       ├── Oci_xml_tester.o
+│       ├── resultset_cache.d
+│       ├── resultset_cache.o
+│       ├── session_cache.d
+│       ├── session_cache.o
+│       ├── sql_dependency_extractor.d
+│       ├── sql_dependency_extractor.o
+│       ├── string_utils.d
+│       ├── string_utils.o
+│       ├── subdir.mk
+│       ├── Test_XML_Runner.d
+│       ├── Test_XML_Runner.o
+│       ├── Unit_Test.d
+│       ├── Unit_Test_Insert.d
+│       ├── Unit_Test_Insert.o
+│       ├── Unit_Test.o
+│       ├── Unit_Test_Select.d
+│       ├── Unit_Test_Select.o
+│       ├── XML_Helper.d
+│       └── XML_Helper.o
+├── Docs
+│   ├── Data_Manager_Request_Definitions.docx
+│   ├── gdb_doc.odt
+│   └── Request extraction layer proposal.docx
+├── include
+│   ├── ctx_helper.h
+│   ├── ini_reader.h
+│   ├── jzndom.h
+│   ├── jznerr.h
+│   ├── jznev.h
+│   ├── jznotn.h
+│   ├── jzntypes.h
+│   ├── ldap.h
+│   ├── logger.h
+│   ├── logger.h_31May
+│   ├── metadata_cache.h
+│   ├── metadata_cache_meta.h
+│   ├── metrics.h
+│   ├── metrics.h_15Jun
+│   ├── metrics.h_23June
+│   ├── nzerror.h
+│   ├── nzt.h
+│   ├── occiAQ.h
+│   ├── occiCommon.h
+│   ├── occiControl.h
+│   ├── occiData.h
+│   ├── occi.h
+│   ├── occiObjects.h
+│   ├── oci1.h
+│   ├── oci8dp.h
+│   ├── ociap.h
+│   ├── ociapr.h
+│   ├── OCI_Audit_Trail_Manager.h
+│   ├── oci_cache.h
+│   ├── OCI_Connection.h
+│   ├── OCI_Connection.h_13JUL
+│   ├── OCI_Connection_Pool.h
+│   ├── ocidef.h
+│   ├── OCI_Delete_Execute_Module.h
+│   ├── ocidem.h
+│   ├── ocidfn.h
+│   ├── OCI_Execute_Procedure_Module.h
+│   ├── OCI_Execute_Query_Module.h
+│   ├── ociextp.h
+│   ├── oci.h
+│   ├── OCI_Insert_Execute_Module.h
+│   ├── OCI_Insert_Template_Module.h
+│   ├── OCI_Insert_Validate_Module.h
+│   ├── ocijson.h
+│   ├── ocikpr.h
+│   ├── OCI_Request_Response_Types.h
+│   ├── OCI_Session_Manager.h
+│   ├── OCI_Table_Metadata_Module.h
+│   ├── OCI_Transaction_Manager.h
+│   ├── OCI_Update_Execute_Module.h
+│   ├── ociver.h
+│   ├── ocixmldb.h
+│   ├── Oci_xml_tester.h
+│   ├── ocixstream.h
+│   ├── odci.h
+│   ├── ons.h
+│   ├── opmnlist.h
+│   ├── orajson.h
+│   ├── orastruc.h
+│   ├── oratypes.h
+│   ├── oraxmlcg.h
+│   ├── oraxml.h
+│   ├── oraxml.hpp
+│   ├── oraxsd.h
+│   ├── oraxsd.hpp
+│   ├── orid.h
+│   ├── ori.h
+│   ├── orl.h
+│   ├── oro.h
+│   ├── ort.h
+│   ├── resultset_cache.h
+│   ├── session_cache.h
+│   ├── sql_dependency_extractor.h
+│   ├── string_utils.h
+│   ├── Unit_Test.h
+│   ├── xa.h
+│   ├── xmlctx.hpp
+│   ├── xmldav.h
+│   ├── xmldf.h
+│   ├── xmlerr.h
+│   ├── xmlev.h
+│   ├── xml.h
+│   ├── XML_Helper.h
+│   ├── xml.hpp
+│   ├── xmlotn.h
+│   ├── xmlotn.hpp
+│   ├── xmlproc.h
+│   ├── xmlsch.h
+│   ├── xmlsoapc.hpp
+│   ├── xmlsoap.h
+│   ├── xmlsoap.hpp
+│   ├── xmlurl.h
+│   ├── xmlxptr.h
+│   ├── xmlxsl.h
+│   └── xmlxvm.h
+├── logs
+│   ├── audit_Data_Manager.log
+│   ├── cache_Data_Manager.log
+│   ├── connectionpool_Data_Manager.log
+│   ├── crypt_Data_Manager.log
+│   ├── Data_Manager.log
+│   ├── ddl_Data_Manager.log
+│   ├── delete_Data_Manager.log
+│   ├── error_Data_Manager.log
+│   ├── insert_Data_Manager.log
+│   ├── Metadata_Data_Manager.log
+│   ├── metrics_Data_Manager.csv
+│   ├── procedure_Data_Manager.log
+│   ├── security_Data_Manager.log
+│   ├── select_Data_Manager.log
+│   ├── session_Data_Manager.log
+│   ├── sql_parser_log__Data_Manager.log
+│   ├── Transaction_Data_Manager.log
+│   └── update_Data_Manager.log
+├── oci
+│   ├── adrci
+│   ├── BASIC_LICENSE
+│   ├── BASIC_README
+│   ├── fips1403.so
+│   ├── fips.so
+│   ├── genezi
+│   ├── instantclient-basic-linux.x64-23.26.1.0.0
+│   │   ├── instantclient_23_26
+│   │   └── META-INF
+│   ├── instantclient-sdk-linux.x64-23.26.1.0.0
+│   │   ├── instantclient_23_26
+│   │   └── META-INF
+│   ├── legacy.so
+│   ├── libclntshcore.so -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.12.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.18.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.19.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.20.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.21.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.22.1 -> libclntshcore.so.23.1
+│   ├── libclntshcore.so.23.1
+│   ├── libclntsh.so -> libclntsh.so.23.1
+│   ├── libclntsh.so.10.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.11.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.12.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.18.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.19.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.20.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.21.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.22.1 -> libclntsh.so.23.1
+│   ├── libclntsh.so.23.1
+│   ├── libnnz.so
+│   ├── libocci.so -> libocci.so.23.1
+│   ├── libocci.so.10.1 -> libocci.so.23.1
+│   ├── libocci.so.11.1 -> libocci.so.23.1
+│   ├── libocci.so.12.1 -> libocci.so.23.1
+│   ├── libocci.so.18.1 -> libocci.so.23.1
+│   ├── libocci.so.19.1 -> libocci.so.23.1
+│   ├── libocci.so.20.1 -> libocci.so.23.1
+│   ├── libocci.so.21.1 -> libocci.so.23.1
+│   ├── libocci.so.22.1 -> libocci.so.23.1
+│   ├── libocci.so.23.1
+│   ├── libociei.so
+│   ├── libocijdbc23.so
+│   ├── libtfojdbc1.so
+│   ├── network
+│   │   └── admin
+│   ├── ojdbc11.jar
+│   ├── ojdbc17.jar
+│   ├── ojdbc8.jar
+│   ├── pkcs11.so
+│   ├── ucp11.jar
+│   ├── ucp17.jar
+│   ├── ucp.jar
+│   ├── uidrvci
+│   └── xstreams.jar
+├── OCI_Tester
+│   ├── Archive_Inputs
+│   │   ├── BLOB_Test
+│   │   ├── CLOB_Test
+│   │   ├── Delete_Test
+│   │   ├── Insert_Test
+│   │   ├── OCI_LOB_Test
+│   │   ├── Procedure_Test
+│   │   ├── Test_All
+│   │   ├── Test_Select_1_blobs.xml
+│   │   ├── Test_Select_1_clobs.xml
+│   │   ├── Test_Select_2.xml
+│   │   ├── Test_Select_3.xml
+│   │   ├── Unit_Test_Delete_Round_1.xml
+│   │   ├── Unit_Test_Delete_Round_2.xml
+│   │   ├── Unit_Test_Delete_Round_3.xml
+│   │   ├── Unit_Test_Insert_Round_1.xml
+│   │   ├── Unit_Test_Insert_Round_2.xml
+│   │   ├── Unit_Test_Insert_Round_3.xml
+│   │   ├── Unit_Test_Insert_Round_4.xml
+│   │   ├── Unit_Test_Insert_Round_5.xml
+│   │   ├── Unit_Test_Insert_Round_6.xml
+│   │   ├── update_blob_test.xml
+│   │   ├── update_clob_test.xml
+│   │   ├── update_scalar_test.xml
+│   │   └── Update_Test
+│   ├── Error_XML
+│   ├── Input_XML
+│   │   ├── Test_Select_1_blobs.xml
+│   │   ├── Test_Select_1_clobs.xml
+│   │   ├── Test_Select_2_blobs.xml
+│   │   ├── Test_Select_2.xml
+│   │   ├── Test_Select_3.xml
+│   │   ├── Unit_Test_Delete_Round_1.xml
+│   │   ├── Unit_Test_Delete_Round_2.xml
+│   │   ├── Unit_Test_Delete_Round_3.xml
+│   │   ├── Unit_Test_Insert_Round_1.xml
+│   │   ├── Unit_Test_Insert_Round_2.xml
+│   │   ├── Unit_Test_Insert_Round_3.xml
+│   │   ├── update_blob_test.xml
+│   │   ├── update_clob_test.xml
+│   │   └── update_scalar_test.xml
+│   ├── OCI_Test_Create_Session.xml
+│   └── Output_XML
+├── output_clobs
+│   ├── CLOB_COL_row12_clob11.txt
+│   ├── CLOB_COL_row13_clob12.txt
+│   ├── CLOB_COL_row14_clob13.txt
+│   ├── CLOB_COL_row155_clob154.txt
+│   ├── CLOB_COL_row156_clob155.txt
+│   ├── CLOB_COL_row158_clob157.txt
+│   ├── CLOB_COL_row159_clob158.txt
+│   ├── CLOB_COL_row160_clob159.txt
+│   ├── CLOB_COL_row161_clob160.txt
+│   ├── CLOB_COL_row163_clob162.txt
+│   ├── CLOB_COL_row165_clob164.txt
+│   ├── CLOB_COL_row166_clob165.txt
+│   ├── CLOB_COL_row167_clob166.txt
+│   ├── CLOB_COL_row168_clob167.txt
+│   ├── CLOB_COL_row171_clob170.txt
+│   ├── CLOB_COL_row172_clob171.txt
+│   ├── CLOB_COL_row173_clob172.txt
+│   ├── CLOB_COL_row174_clob173.txt
+│   ├── CLOB_COL_row175_clob174.txt
+│   ├── CLOB_COL_row176_clob175.txt
+│   ├── CLOB_COL_row177_clob176.txt
+│   ├── CLOB_COL_row178_clob177.txt
+│   ├── CLOB_COL_row179_clob178.txt
+│   ├── CLOB_COL_row180_clob179.txt
+│   ├── CLOB_COL_row181_clob180.txt
+│   ├── CLOB_COL_row182_clob181.txt
+│   ├── CLOB_COL_row183_clob182.txt
+│   ├── CLOB_COL_row184_clob183.txt
+│   ├── LARGE_CLOB_row1_clob0.txt
+│   ├── LARGE_CLOB_row2_clob1.txt
+│   ├── LARGE_CLOB_row3_clob2.txt
+│   └── LARGE_CLOB_row4_clob3.txt
+├── output_lobs
+│   ├── Adam_1_20260714_213714_0.jpg
+│   ├── Adam_1_20260714_213714_1.jpg
+│   ├── Adam_1_20260714_213714_2.jpg
+│   ├── blob_outp_167
+│   ├── blob_outp_183
+│   ├── Emily_big_hug_20260714_213714_1.jpg
+│   ├── Emily_big_hug_20260714_213714_3.jpg
+│   ├── Emily_big_hug_20260714_213714_4.jpg
+│   ├── Emily_big_hug_20260714_213714_5.jpg
+│   ├── Emily_Football_20260714_213714_2.jpg
+│   ├── Emily_Football_20260714_213714_6.jpg
+│   ├── Emily_Football_20260714_213714_7.jpg
+│   ├── Emily_Football_20260714_213714_8.jpg
+│   ├── Sophi_20260714_213714_10.jpg
+│   ├── Sophi_20260714_213714_11.jpg
+│   ├── Sophi_20260714_213714_3.jpg
+│   ├── Sophi_20260714_213714_9.jpg
+│   ├── The_Gang_20260714_213714_12.jpg
+│   ├── The_Gang_20260714_213714_13.jpg
+│   ├── The_Gang_20260714_213714_14.jpg
+│   ├── The_Gang_20260714_213714_4.jpg
+│   ├── Uncle_James_20260714_213714_15.jpg
+│   ├── Uncle_James_20260714_213714_16.jpg
+│   ├── Uncle_James_20260714_213714_17.jpg
+│   └── Uncle_James_20260714_213714_5.jpg
+├── Photos
+│   ├── Adam_1.jpg
+│   ├── Emily_big_hug.jpg
+│   ├── Emily_Football.jpg
+│   ├── Sophi.jpg
+│   ├── The_Gang.jpg
+│   └── Uncle_James.jpg
+├── Props
+│   └── config.ini
+├── scripts
+│   └── Backup.sh
+├── SQL
+│   ├── Create_Audit_Table.txt
+│   ├── Create_Oracle_Test_Table.txt
+│   ├── Create_Session_Table.txt
+│   ├── test_all_types_Original.sql
+│   └── test_all_types.sql
+├── src
+│   ├── ctx_header.c
+│   ├── ini_reader.c
+│   ├── ini_reader.c_11JUL
+│   ├── logger.c
+│   ├── metadata_cache.c
+│   ├── metrics.c
+│   ├── metrics.c_13JUL
+│   ├── OCI_Audit_Trail_Manager.c
+│   ├── oci_cache.c
+│   ├── OCI_Connection.c
+│   ├── OCI_Connection_Pool.c
+│   ├── OCI_Delete_Execute_Module.c
+│   ├── OCI_Execute_Procedure_Module.c
+│   ├── OCI_Execute_Query_Batch_Module.c
+│   ├── OCI_Execute_Query_Module.c
+│   ├── OCI_Insert_Execute_Module.c
+│   ├── OCI_Insert_Template_Module.c
+│   ├── OCI_Insert_Validate_Module.c
+│   ├── OCI_Session_Manager.c
+│   ├── OCI_Session_Manager.c_09JUL
+│   ├── OCI_Session_Manager.c_09JUN_2
+│   ├── OCI_Session_Manager.c_13JUL
+│   ├── OCI_Table_Metadata_Module.c
+│   ├── OCI_Transaction_Manager.c
+│   ├── OCI_Update_Execute_Module.c
+│   ├── Oci_xml_tester.c
+│   ├── resultset_cache.c
+│   ├── session_cache.c
+│   ├── sql_dependency_extractor.c
+│   ├── string_utils.c
+│   ├── Test_XML_Runner.c
+│   ├── Unit_Test.c
+│   ├── Unit_Test_Insert.c
+│   ├── Unit_Test_Select.c
+│   └── XML_Helper.c
+├── Templates
+│   ├── insert_template_empty_Metatdata_broken_out.xml
+│   ├── insert_template_empty_original_19_May.xml
+│   └── Request.odt
+├── test_data
+│   ├── test.bin
+│   ├── test.bin_May21
+│   └── test_clob.txt
+├── tree.txt
+├── wallet
+│   ├── cwallet.sso
+│   ├── ewallet.p12
+│   └── sqlnet.ora
+└── XML_Clobs
+    ├── Orig_Test_Select_1.xml
+    ├── Test_Select_1.xml
+    ├── Test_Select_2.xml
+    └── Test_Select_3.xml
+
+41 directories, 381 files

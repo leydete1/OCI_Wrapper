@@ -1,0 +1,8 @@
+﻿<oci_test>
+    <operation>SELECT</operation>
+
+    <sql>
+        SELECT *  FROM OCI_CLOB_TEST  order by 1
+    </sql>
+</oci_test>
+

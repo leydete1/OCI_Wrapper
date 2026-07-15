@@ -1,0 +1,11 @@
+﻿<oci_test>
+    <operation>SELECT</operation>
+
+    <sql>
+        SELECT float_col FROM OCI_FIELD_TEST
+    </sql>
+</oci_test>
+
+
+
+

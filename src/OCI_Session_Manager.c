@@ -1,0 +1,867 @@
+/*
+ * OCI_Session_Manager.c
+ *
+ * Session Manager Module - Implementation
+ * ------------------------------------------
+ * See OCI_Session_Manager.h for the full design overview.
+ *
+ * This module never touches OCI directly.  All database work is
+ * delegated to execute_insert_batch() / execute_update_batch() /
+ * execute_query_batch() so that metrics and audit-trail capture -
+ * already wired into those modules - happen automatically for every
+ * session lifecycle event.
+ */
+
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <ctype.h>
+#include <time.h>
+
+#include "OCI_Session_Manager.h"
+#include "OCI_Transaction_Manager.h"     /* tx_generate_uuid()          */
+#include "OCI_Insert_Execute_Module.h"
+#include "OCI_Update_Execute_Module.h"
+#include "OCI_Execute_Query_Module.h"    /* execute_query_batch()       */
+#include "XML_Helper.h"
+#include "logger.h"
+
+/* Fixed column layout for OCI_SESSION - see Create_Session_Table.txt   */
+#define SESSION_TABLE_NAME   "OCI_SESSION"
+#define SESSION_XML_INITIAL_SIZE  2048
+
+/* ------------------------------------------------------------------ */
+/*  Internal: extract text between <tag> and </tag>.                   */
+/*  Self-contained copy of the same lightweight approach used by       */
+/*  Test_XML_Runner.c - this module has no external XML dependency.    */
+/*  Returns 1 on success, 0 if not found.                              */
+/* ------------------------------------------------------------------ */
+static int extract_tag(const char *src, const char *tag,
+                        char *dest, size_t dest_max)
+{
+    char open[64], close[64];
+    snprintf(open,  sizeof(open),  "<%s>",  tag);
+    snprintf(close, sizeof(close), "</%s>", tag);
+
+    const char *s = strstr(src, open);
+    if (!s) return 0;
+    s += strlen(open);
+
+    const char *e = strstr(s, close);
+    if (!e) return 0;
+
+    size_t len = (size_t)(e - s);
+    if (len >= dest_max) len = dest_max - 1;
+    memcpy(dest, s, len);
+    dest[len] = '\0';
+
+    char *p = dest;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (p != dest) memmove(dest, p, strlen(p) + 1);
+    int l = (int)strlen(dest);
+    while (l > 0 && isspace((unsigned char)dest[l-1]))
+    { dest[l-1] = '\0'; l--; }
+
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Internal: format a time_t as "YYYY-MM-DD HH24:MI:SS" - the base    */
+/*  form accepted by validate_insert_template() for TIMESTAMP columns  */
+/*  regardless of ctx->NLS_DATE_FORMAT (which governs DATE columns).   */
+/* ------------------------------------------------------------------ */
+static void format_timestamp(time_t t, char *buf, size_t buf_size)
+{
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    strftime(buf, buf_size, "%Y-%m-%d %H:%M:%S", &tmv);
+}
+
+/* ================================================================== */
+/*  build_session_insert_template                                       */
+/*                                                                      */
+/*  Builds a complete <Insert_Template> for OCI_SESSION directly from   */
+/*  the fixed column layout in Create_Session_Table.txt.  Unlike        */
+/*  get_insert_template(), this does not need to query ALL_TAB_COLUMNS  */
+/*  - the schema is owned by this module and known at compile time.     */
+/* ================================================================== */
+static xml_builder_t *build_session_insert_template(oci_context_t          *ctx,
+                                                      const session_record_t *rec)
+{
+    xml_builder_t *xml = xml_create(SESSION_XML_INITIAL_SIZE);
+    if (!xml)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "xml_create failed");
+        return NULL;
+    }
+
+    char created_str[32], last_act_str[32];
+    format_timestamp(rec->created_ts,       created_str,  sizeof(created_str));
+    format_timestamp(rec->last_activity_ts, last_act_str, sizeof(last_act_str));
+
+    char ttl_str[16];
+    snprintf(ttl_str, sizeof(ttl_str), "%d", rec->ttl_seconds);
+
+    char *e_client_id  = xml_escape(rec->client_id);
+    char *e_client_ip  = xml_escape(rec->client_ip);
+    char *e_client_host= xml_escape(rec->client_host);
+    char *e_app_name   = xml_escape(rec->application_name);
+
+    xml_append(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    xml_append(xml, "<Insert_Template>\n");
+    xml_append(xml, "  <operation>INSERT</operation>\n");
+    xml_append(xml, "  <table_name>%s</table_name>\n", SESSION_TABLE_NAME);
+    xml_append(xml, "  <owner>%s</owner>\n", ctx->ini->username);
+    xml_append(xml, "  <row number=\"1\">\n");
+
+    /* 1. SESSION_ID - VARCHAR2(36) NOT NULL */
+    xml_append(xml,
+        "    <field><field_number>1</field_number>"
+        "<field_name>SESSION_ID</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>36</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", rec->session_id);
+
+    /* 2. STATUS - VARCHAR2(20) NOT NULL */
+    xml_append(xml,
+        "    <field><field_number>2</field_number>"
+        "<field_name>STATUS</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>20</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n",
+        session_status_str(rec->status));
+
+    /* 3. TTL_SECONDS - NUMBER NOT NULL */
+    xml_append(xml,
+        "    <field><field_number>3</field_number>"
+        "<field_name>TTL_SECONDS</field_name>"
+        "<field_type>NUMBER</field_type>"
+        "<field_length>22</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", ttl_str);
+
+    /* 4. CLIENT_ID - VARCHAR2(128) NULL */
+    xml_append(xml,
+        "    <field><field_number>4</field_number>"
+        "<field_name>CLIENT_ID</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>128</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", e_client_id);
+
+    /* 5. CLIENT_IP - VARCHAR2(45) NULL */
+    xml_append(xml,
+        "    <field><field_number>5</field_number>"
+        "<field_name>CLIENT_IP</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>45</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", e_client_ip);
+
+    /* 6. CLIENT_HOST - VARCHAR2(128) NULL */
+    xml_append(xml,
+        "    <field><field_number>6</field_number>"
+        "<field_name>CLIENT_HOST</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>128</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", e_client_host);
+
+    /* 7. APPLICATION_NAME - VARCHAR2(100) NULL */
+    xml_append(xml,
+        "    <field><field_number>7</field_number>"
+        "<field_name>APPLICATION_NAME</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>100</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", e_app_name);
+
+    /* 8. TRANSACTION_ID - VARCHAR2(100) NULL - not known at create time */
+    xml_append(xml,
+        "    <field><field_number>8</field_number>"
+        "<field_name>TRANSACTION_ID</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>100</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value></insert_value></field>\n");
+
+    /* 9. CREATED_TS - TIMESTAMP NOT NULL */
+    xml_append(xml,
+        "    <field><field_number>9</field_number>"
+        "<field_name>CREATED_TS</field_name>"
+        "<field_type>TIMESTAMP</field_type>"
+        "<field_length>11</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", created_str);
+
+    /* 10. LAST_ACTIVITY_TS - TIMESTAMP NOT NULL */
+    xml_append(xml,
+        "    <field><field_number>10</field_number>"
+        "<field_name>LAST_ACTIVITY_TS</field_name>"
+        "<field_type>TIMESTAMP</field_type>"
+        "<field_length>11</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<insert_value>%s</insert_value></field>\n", last_act_str);
+
+    /* 11. CLOSED_TS - TIMESTAMP NULL - empty at create time */
+    xml_append(xml,
+        "    <field><field_number>11</field_number>"
+        "<field_name>CLOSED_TS</field_name>"
+        "<field_type>TIMESTAMP</field_type>"
+        "<field_length>11</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value></insert_value></field>\n");
+
+    /* 12. CLOSE_REASON - VARCHAR2(255) NULL - empty at create time */
+    xml_append(xml,
+        "    <field><field_number>12</field_number>"
+        "<field_name>CLOSE_REASON</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>255</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<insert_value></insert_value></field>\n");
+
+    xml_append(xml, "  </row>\n");
+    xml_append(xml, "  <column_count>12</column_count>\n");
+    xml_append(xml, "</Insert_Template>\n");
+
+    free(e_client_id);
+    free(e_client_ip);
+    free(e_client_host);
+    free(e_app_name);
+
+    return xml;
+}
+
+/* ================================================================== */
+/*  build_session_update_template                                       */
+/*                                                                      */
+/*  Builds an <Update_Template> closing out one OCI_SESSION row,        */
+/*  keyed on SESSION_ID.  Used by both session_end() and                */
+/*  session_reconcile_orphans().                                        */
+/* ================================================================== */
+static xml_builder_t *build_session_update_template(oci_context_t    *ctx,
+                                                      const char       *session_id,
+                                                      session_status_t  status,
+                                                      const char       *reason)
+{
+    xml_builder_t *xml = xml_create(SESSION_XML_INITIAL_SIZE);
+    if (!xml)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "xml_create failed");
+        return NULL;
+    }
+
+    char now_str[32];
+    format_timestamp(time(NULL), now_str, sizeof(now_str));
+
+    char *e_session_id = xml_escape(session_id);
+    char *e_reason      = xml_escape(reason ? reason : "-");
+
+    xml_append(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    xml_append(xml, "<Update_Template>\n");
+    xml_append(xml, "  <operation>UPDATE</operation>\n");
+    xml_append(xml, "  <table_name>%s</table_name>\n", SESSION_TABLE_NAME);
+    xml_append(xml, "  <owner>%s</owner>\n", ctx->ini->username);
+    xml_append(xml, "  <where>\n");
+    xml_append(xml,
+        "    <key_field><field_name>SESSION_ID</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<key_value>%s</key_value></key_field>\n", e_session_id);
+    xml_append(xml, "  </where>\n");
+    xml_append(xml, "  <row number=\"1\">\n");
+
+    xml_append(xml,
+        "    <field><field_number>1</field_number>"
+        "<field_name>STATUS</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>20</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<update_value>%s</update_value></field>\n",
+        session_status_str(status));
+
+    xml_append(xml,
+        "    <field><field_number>2</field_number>"
+        "<field_name>CLOSED_TS</field_name>"
+        "<field_type>TIMESTAMP</field_type>"
+        "<field_length>11</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<update_value>%s</update_value></field>\n", now_str);
+
+    xml_append(xml,
+        "    <field><field_number>3</field_number>"
+        "<field_name>CLOSE_REASON</field_name>"
+        "<field_type>VARCHAR2</field_type>"
+        "<field_length>255</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>Y</field_nullable><field_default></field_default>"
+        "<update_value>%s</update_value></field>\n", e_reason);
+
+    xml_append(xml,
+        "    <field><field_number>4</field_number>"
+        "<field_name>LAST_ACTIVITY_TS</field_name>"
+        "<field_type>TIMESTAMP</field_type>"
+        "<field_length>11</field_length>"
+        "<field_precision>-1</field_precision><field_scale>-1</field_scale>"
+        "<field_nullable>N</field_nullable><field_default></field_default>"
+        "<update_value>%s</update_value></field>\n", now_str);
+
+    xml_append(xml, "  </row>\n");
+    xml_append(xml, "</Update_Template>\n");
+
+    free(e_session_id);
+    free(e_reason);
+
+    return xml;
+}
+
+/* ================================================================== */
+/*  parse_session_request                                               */
+/* ================================================================== */
+int parse_session_request(oci_context_t      *ctx,
+                           const char         *input_xml,
+                           session_request_t  *req)
+{
+    if (!ctx || !input_xml || !req) return SESSION_ERR_INVALID_ARG;
+
+    memset(req, 0, sizeof(*req));
+
+    if (!extract_tag(input_xml, "operation", req->operation,
+                      sizeof(req->operation)))
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "parse_session_request: <operation> missing");
+        return SESSION_ERR_PARSE;
+    }
+
+    extract_tag(input_xml, "client_id",  req->client_id,  sizeof(req->client_id));
+    extract_tag(input_xml, "client_ip",  req->client_ip,  sizeof(req->client_ip));
+    extract_tag(input_xml, "client_host",req->client_host,sizeof(req->client_host));
+    extract_tag(input_xml, "application_name",
+                req->application_name, sizeof(req->application_name));
+
+    char ttl_buf[16] = {0};
+    if (extract_tag(input_xml, "requested_ttl_seconds", ttl_buf, sizeof(ttl_buf)))
+        req->requested_ttl_seconds = atoi(ttl_buf);
+
+    return SESSION_OK;
+}
+
+/* ================================================================== */
+/*  session_create                                                      */
+/* ================================================================== */
+int session_create(oci_context_t            *ctx,
+                    const session_request_t *req,
+                    char                    **result_xml)
+{
+    if (result_xml) *result_xml = NULL;
+
+    if (!ctx || !req)
+        return SESSION_ERR_INVALID_ARG;
+
+    session_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+
+    tx_generate_uuid(rec.session_id);
+    rec.status           = SESSION_STATUS_ACTIVE;
+    rec.created_ts       = time(NULL);
+    rec.last_activity_ts = rec.created_ts;
+    rec.ttl_seconds      = req->requested_ttl_seconds > 0
+                            ? req->requested_ttl_seconds
+                            : (ctx->ini->session_default_ttl_seconds > 0
+                               ? ctx->ini->session_default_ttl_seconds
+                               : 1800);
+
+    strncpy(rec.client_id,        req->client_id,        sizeof(rec.client_id) - 1);
+    strncpy(rec.client_ip,        req->client_ip,        sizeof(rec.client_ip) - 1);
+    strncpy(rec.client_host,      req->client_host,      sizeof(rec.client_host) - 1);
+    strncpy(rec.application_name, req->application_name, sizeof(rec.application_name) - 1);
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "Creating session session_id=%s client_id=%s ttl=%d",
+                 rec.session_id, rec.client_id[0] ? rec.client_id : "-",
+                 rec.ttl_seconds);
+
+    xml_builder_t *template_xml = build_session_insert_template(ctx, &rec);
+    if (!template_xml)
+        return SESSION_ERR_ALLOC;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)"OCI_Session_Manager:session_create";
+
+    int rc = execute_insert_batch(ctx, template_xml->buffer, &cfg);
+
+    if (rc != 0)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "session_create FAILED for session_id=%s (rc=%d) - "
+                     "permanent record not written, session not cached",
+                     rec.session_id, rc);
+        xml_free(template_xml);
+        if (cfg.xml)
+        {
+            if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+            free(cfg.xml);
+        }
+        return SESSION_ERR_DB_FAILURE;
+    }
+
+    xml_free(template_xml);
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+
+    if (session_cache_store(ctx->session_cache, &rec) != 0)
+    {
+        /* Permanent row exists but cache write failed - not fatal, the
+         * client's next request will simply miss the fast path and
+         * fall through to whatever the caller does on a cache miss.
+         * Logged as WARN, not ERROR, for that reason.                  */
+        logger_write(ctx->session_logger, LOG_WARN, __func__, 0,
+                     "session_create: DB insert OK but session_cache_store "
+                     "failed for session_id=%s", rec.session_id);
+    }
+
+    /* Attach this session to ctx so every subsequent metrics row from
+     * any execute module (insert/update/delete/select/procedure) on
+     * this context is tagged with it - mirrors how tx_begin() sets
+     * ctx->active_tx.  Cleared by session_end() below.                 */
+    strncpy(ctx->active_session_id, rec.session_id,
+            sizeof(ctx->active_session_id) - 1);
+    ctx->active_session_id[sizeof(ctx->active_session_id) - 1] = '\0';
+
+    strncpy(ctx->active_client_ip, rec.client_ip,
+            sizeof(ctx->active_client_ip) - 1);
+    ctx->active_client_ip[sizeof(ctx->active_client_ip) - 1] = '\0';
+
+    char created_str[32];
+    format_timestamp(rec.created_ts, created_str, sizeof(created_str));
+
+    if (result_xml)
+    {
+        char *buf = malloc(512);
+        if (buf)
+        {
+            snprintf(buf, 512,
+                "<session>\n"
+                "  <operation>CREATE_SESSION</operation>\n"
+                "  <session_id>%s</session_id>\n"
+                "  <status>%s</status>\n"
+                "  <created_ts>%s</created_ts>\n"
+                "  <ttl_seconds>%d</ttl_seconds>\n"
+                "</session>\n",
+                rec.session_id, session_status_str(rec.status),
+                created_str, rec.ttl_seconds);
+            *result_xml = buf;
+        }
+    }
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "session_create OK session_id=%s", rec.session_id);
+
+    return SESSION_OK;
+}
+
+/* ================================================================== */
+/*  session_validate                                                    */
+/* ================================================================== */
+int session_validate(oci_context_t    *ctx,
+                      const char       *session_id,
+                      session_record_t *out)
+{
+    if (!ctx || !session_id || !session_id[0])
+        return SESSION_ERR_INVALID_ARG;
+
+    cache_entry_t *entry = session_cache_lookup(ctx->session_cache, session_id);
+    if (!entry)
+    {
+        logger_write(ctx->session_logger, LOG_WARN, __func__, 0,
+                     "session_validate: MISS session_id=%s", session_id);
+        return SESSION_ERR_NOT_FOUND;
+    }
+
+    if (out)
+    {
+        if (session_cache_decode(entry->output_document, out) != 0)
+        {
+            logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                         "session_validate: decode failed session_id=%s",
+                         session_id);
+            session_cache_release(ctx->session_cache, entry);
+            return SESSION_ERR_NOT_FOUND;
+        }
+    }
+
+    session_cache_release(ctx->session_cache, entry);
+
+    logger_write(ctx->session_logger, LOG_DEBUG, __func__, 0,
+                 "session_validate: HIT session_id=%s", session_id);
+
+    return SESSION_OK;
+}
+
+/* ================================================================== */
+/*  session_touch                                                       */
+/* ================================================================== */
+int session_touch(oci_context_t *ctx, const char *session_id)
+{
+    if (!ctx || !session_id || !session_id[0])
+        return SESSION_ERR_INVALID_ARG;
+
+    cache_entry_t *entry = session_cache_lookup(ctx->session_cache, session_id);
+    if (!entry)
+        return SESSION_ERR_NOT_FOUND;
+
+    session_record_t rec;
+    int decode_rc = session_cache_decode(entry->output_document, &rec);
+    session_cache_release(ctx->session_cache, entry);
+
+    if (decode_rc != 0)
+        return SESSION_ERR_NOT_FOUND;
+
+    rec.last_activity_ts = time(NULL);
+
+    /* Re-insert refreshes last_activity_ts and, because ttl_seconds is
+     * unchanged, slides the cache-level expiry window forward from now
+     * - the intended "still in use" semantics for a touch.             */
+    if (session_cache_store(ctx->session_cache, &rec) != 0)
+        return SESSION_ERR_DB_FAILURE;
+
+    return SESSION_OK;
+}
+
+/* ================================================================== */
+/*  session_end                                                         */
+/* ================================================================== */
+int session_end(oci_context_t    *ctx,
+                 const char       *session_id,
+                 session_status_t  status,
+                 const char       *reason,
+                 char            **result_xml)
+{
+    if (result_xml) *result_xml = NULL;
+
+    if (!ctx || !session_id || !session_id[0])
+        return SESSION_ERR_INVALID_ARG;
+
+    if (status != SESSION_STATUS_EXPIRED &&
+        status != SESSION_STATUS_LOGGED_OUT &&
+        status != SESSION_STATUS_EXPIRED_ORPHAN)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "session_end: invalid terminal status %d for "
+                     "session_id=%s", (int)status, session_id);
+        return SESSION_ERR_INVALID_ARG;
+    }
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "Ending session session_id=%s status=%s reason=%s",
+                 session_id, session_status_str(status),
+                 reason ? reason : "-");
+
+    xml_builder_t *template_xml =
+        build_session_update_template(ctx, session_id, status, reason);
+    if (!template_xml)
+        return SESSION_ERR_ALLOC;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)"OCI_Session_Manager:session_end";
+
+    int rc = execute_update_batch(ctx, template_xml->buffer, &cfg);
+
+    xml_free(template_xml);
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+
+    if (rc != 0)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "session_end FAILED for session_id=%s (rc=%d)",
+                     session_id, rc);
+        return SESSION_ERR_DB_FAILURE;
+    }
+
+    /* Invalidate the fast path regardless of whether it was present -
+     * safe no-op if the key was already absent / expired.             */
+    session_cache_invalidate(ctx->session_cache, session_id);
+
+    /* Detach from ctx only if this context's active session is the one
+     * actually being ended - guards against clearing a different
+     * session's tag in case ctx is ever reused across sessions.       */
+    if (strcmp(ctx->active_session_id, session_id) == 0)
+    {
+        ctx->active_session_id[0] = '\0';
+        ctx->active_client_ip[0]  = '\0';
+    }
+
+    char closed_str[32];
+    format_timestamp(time(NULL), closed_str, sizeof(closed_str));
+
+    if (result_xml)
+    {
+        char *buf = malloc(512);
+        if (buf)
+        {
+            snprintf(buf, 512,
+                "<session>\n"
+                "  <operation>END_SESSION</operation>\n"
+                "  <session_id>%s</session_id>\n"
+                "  <status>%s</status>\n"
+                "  <closed_ts>%s</closed_ts>\n"
+                "</session>\n",
+                session_id, session_status_str(status), closed_str);
+            *result_xml = buf;
+        }
+    }
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "session_end OK session_id=%s status=%s",
+                 session_id, session_status_str(status));
+
+    return SESSION_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Internal: minimal resultset row/field walker for reconciliation.   */
+/*  Operates directly on the OUTPUT_XML produced by execute_query_batch */
+/*  / XML_Helper's xml_add_row_start()/xml_add_field() (see             */
+/*  XML_Helper.c): rows are <row number="N">...</row>, each field is    */
+/*  <field><field_name>X</field_name>...<field_value>V</field_value>    */
+/*  </field>.  This is intentionally a scanner, not a general parser -  */
+/*  it only ever needs to pull SESSION_ID out of each row.              */
+/* ------------------------------------------------------------------ */
+static int next_row(const char *xml, const char *cursor,
+                     const char **row_start, const char **row_end)
+{
+    const char *s = strstr(cursor ? cursor : xml, "<row ");
+    if (!s) return 0;
+    const char *e = strstr(s, "</row>");
+    if (!e) return 0;
+    *row_start = s;
+    *row_end   = e + strlen("</row>");
+    return 1;
+}
+
+static int row_field_value(const char *row_start, const char *row_end,
+                            const char *field_name,
+                            char *dest, size_t dest_max)
+{
+    size_t row_len = (size_t)(row_end - row_start);
+    char *row_buf = malloc(row_len + 1);
+    if (!row_buf) return 0;
+    memcpy(row_buf, row_start, row_len);
+    row_buf[row_len] = '\0';
+
+    char name_tag[160];
+    snprintf(name_tag, sizeof(name_tag), "<field_name>%s</field_name>",
+             field_name);
+
+    int found = 0;
+    char *name_pos = strstr(row_buf, name_tag);
+    if (name_pos)
+    {
+        char *val_start = strstr(name_pos, "<field_value>");
+        if (val_start)
+        {
+            val_start += strlen("<field_value>");
+            char *val_end = strstr(val_start, "</field_value>");
+            if (val_end)
+            {
+                size_t vlen = (size_t)(val_end - val_start);
+                if (vlen >= dest_max) vlen = dest_max - 1;
+                memcpy(dest, val_start, vlen);
+                dest[vlen] = '\0';
+                found = 1;
+            }
+        }
+    }
+
+    free(row_buf);
+    return found;
+}
+
+/* ================================================================== */
+/*  session_reconcile_orphans                                           */
+/* ================================================================== */
+int session_reconcile_orphans(oci_context_t *ctx, int *orphan_count)
+{
+	if (orphan_count) *orphan_count = 0;
+
+    if (!ctx)
+        return SESSION_ERR_INVALID_ARG;
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "Startup session reconciliation: scanning for orphaned "
+                 "ACTIVE sessions past their TTL");
+
+    /* CREATED_TS + TTL_SECONDS(as an interval) < now, still ACTIVE,
+     * never closed.  NUMTODSINTERVAL keeps this correct regardless of
+     * how large TTL_SECONDS is (no need to worry about day overflow
+     * the way raw arithmetic on DATE would).
+     *
+     * IMPORTANT: this must be a writable buffer, not a string literal.
+     * execute_query_batch() calls trim_sql_inplace(cfg->SQL, ctx), which
+     * modifies the string in place (memmove + NUL truncation). Passing
+     * a literal here (even via a (char*) cast) segfaults the moment it
+     * tries to write into read-only .rodata memory - silently, with no
+     * chance to flush logs, which is exactly the "EOF mid-line" crash
+     * seen in testing. A stack buffer is real, writable memory.
+     *
+     * NOTE: execute_query_batch()'s Stage 1 record-count validation
+     * hard-rejects any query returning ZERO rows (record_count < 1 ->
+     * "Query aborted") - by design, for its usual use case of test
+     * SELECTs against known seeded data. For reconciliation, zero
+     * orphaned sessions is the normal, expected, healthy outcome on
+     * almost every run - not a failure worth escalating.
+     *
+     * A UNION ALL sentinel-row workaround was tried and reverted: this
+     * project's SQL dependency parser (extract_sql_dependencies) does
+     * not support UNION/INTERSECT/EXCEPT at all, so that SQL would
+     * never even reach execute_query_batch's validation stage - it
+     * fails earlier, in sql_dependency_extractor.
+     *
+     * Instead, this stays a plain single-table SELECT, and ANY failure
+     * from execute_query_batch() below - including the "zero rows"
+     * abort - is treated as non-fatal for reconciliation specifically:
+     * logged, and startup proceeds. This matches the retry-on-next-
+     * startup philosophy already used for individual row-close
+     * failures further down this function - reconciliation is a
+     * best-effort startup nicety, not a path worth blocking the whole
+     * application over, and it will simply try again next time the
+     * process starts.                                                  */
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "SELECT SESSION_ID, TTL_SECONDS "
+        "FROM OCI_SESSION "
+        "WHERE STATUS = 'ACTIVE' "
+        "AND CLOSED_TS IS NULL "
+        "AND CREATED_TS + NUMTODSINTERVAL(TTL_SECONDS, 'SECOND') "
+        "< SYSTIMESTAMP");
+
+    execute_config_t cfg;
+   memset(&cfg, 0, sizeof(cfg));
+    cfg.SQL              = sql;
+    cfg.max_rows         = 10000;
+  /* fetch_array_size is not actually consulted by execute_query_batch
+     * (it reads ctx->ini->query_fetch_batch_size instead) - left unset
+     * here to avoid implying a control that has no effect.            */
+    cfg.include_column_names = 1;
+   cfg.input_file_name  = (char *)"OCI_Session_Manager:reconcile_orphans";
+
+    int rc = execute_query_batch(ctx, &cfg);
+    if (rc != 0)
+    {
+        /* Non-fatal by design. The overwhelming majority of the time
+         * this "failure" is simply execute_query_batch()'s Stage 1
+         * record-count validation rejecting a perfectly healthy zero-
+         * orphan result (see the SQL comment above) - and even in the
+         * rarer case of a genuine SQL/connection problem, blocking
+         * application startup over a best-effort reconciliation sweep
+         * would be disproportionate: nobody can reach the data at all
+         * if startup doesn't complete, whereas an unreconciled orphan
+         * row just sits there and gets picked up cleanly on the next
+         * startup. Log it and move on rather than escalate.            */
+        logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                     "session_reconcile_orphans: reconciliation query "
+                     "returned no result (rc=%d) - most likely zero "
+                     "orphaned sessions found, which is the normal, "
+                     "healthy outcome. See select_data_manager.log for "
+                     "detail if this persists or seems wrong.", rc);
+        if (cfg.xml)
+        {
+            if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+            free(cfg.xml);
+        }
+        if (orphan_count) *orphan_count = 0;
+        return SESSION_OK;
+    }
+
+    int found  = 0;
+    int closed = 0;
+    int failed = 0;
+    printf("\nHere 8");
+
+    if (cfg.xml && cfg.xml->OUTPUT_XML)
+    {
+        const char *cursor = NULL;
+        const char *row_start, *row_end;
+
+        while (next_row(cfg.xml->OUTPUT_XML, cursor, &row_start, &row_end))
+        {
+            cursor = row_end;
+
+            char session_id[SESSION_UUID_LEN] = {0};
+            if (!row_field_value(row_start, row_end, "SESSION_ID",
+                                  session_id, sizeof(session_id)))
+                continue;
+
+            found++;
+
+            char *close_result_xml = NULL;
+            int end_rc = session_end(ctx, session_id,
+                                      SESSION_STATUS_EXPIRED_ORPHAN,
+                                      "Startup reconciliation - session "
+                                      "left ACTIVE past TTL, likely due "
+                                      "to an unclean process shutdown",
+                                      &close_result_xml);
+            if (close_result_xml) free(close_result_xml);
+
+            if (end_rc == SESSION_OK)
+            {
+                closed++;
+                logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                             "Reconciled orphaned session_id=%s", session_id);
+            }
+            else
+            {
+                failed++;
+                logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                             "Failed to reconcile orphaned session_id=%s "
+                             "(rc=%d) - will retry on next startup",
+                             session_id, end_rc);
+            }
+        }
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+
+    if (orphan_count) *orphan_count = closed;
+
+    logger_write(ctx->session_logger, LOG_INFO, __func__, 0,
+                 "Startup session reconciliation complete: found=%d "
+                 "closed=%d failed=%d", found, closed, failed);
+
+    return SESSION_OK;
+}

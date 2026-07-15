@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Unit_Test_Procedure_Round_1.xml
+ Scalar IN + scalar OUT test.
+ Calls a procedure that takes a department ID and returns a status code.
+
+ Example Oracle procedure this test targets:
+ -------------------------------------------
+ CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_DEPT_STATUS (
+     P_DEPT_ID   IN  NUMBER,
+     P_STATUS    OUT INTEGER
+ ) AS
+ BEGIN
+     SELECT COUNT(*) INTO P_STATUS
+     FROM   OCI_FIELD_TEST
+     WHERE  NUMBER_COL = P_DEPT_ID;
+ END;
+
+ Expected log markers:
+   Stage 4: Executing PL/SQL block
+   PL/SQL execute OK elapsed=...
+   OUT param 'P_STATUS' type='INTEGER' value='...'
+   execute_procedure complete
+========================================================================
+-->
+
+<Procedure_Template>
+    <operation>EXECUTE_PROCEDURE</operation>
+    <procedure_name>GET_DEPT_STATUS</procedure_name>
+    <owner>DATA_MANAGER</owner>
+    <parameters>
+
+        <parameter>
+            <param_name>P_DEPT_ID</param_name>
+            <param_type>NUMBER</param_type>
+            <param_direction>IN</param_direction>
+            <param_value>42</param_value>
+        </parameter>
+
+        <parameter>
+            <param_name>P_STATUS</param_name>
+            <param_type>INTEGER</param_type>
+            <param_direction>OUT</param_direction>
+            <param_value></param_value>
+        </parameter>
+
+    </parameters>
+</Procedure_Template>

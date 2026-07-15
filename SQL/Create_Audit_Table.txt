@@ -1,0 +1,96 @@
+
+CREATE TABLE AUDIT_TRAIL (
+    -- Primary Key
+    AUDIT_ID                NUMBER          GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    -- What was audited (record context)
+    TABLE_NAME              VARCHAR2(128)   NOT NULL,
+    RECORD_ID               VARCHAR2(255)   NOT NULL,
+    FIELD_NAME              VARCHAR2(128)   NOT NULL,
+
+    -- Change data
+    ACTION_TYPE             VARCHAR2(10)    NOT NULL
+                                CHECK (ACTION_TYPE IN ('INSERT', 'UPDATE', 'DELETE')),
+    OLD_VALUE               CLOB,
+    NEW_VALUE               CLOB,
+    DATA_TYPE               VARCHAR2(50),
+
+    -- Who / When / Where
+    CHANGED_BY              VARCHAR2(100)   NOT NULL,
+    CHANGED_BY_DB_USER      VARCHAR2(100)   DEFAULT SYS_CONTEXT('USERENV','SESSION_USER') NOT NULL,
+    CHANGE_TIMESTAMP        TIMESTAMP       DEFAULT SYSTIMESTAMP NOT NULL,
+    CHANGE_REASON           VARCHAR2(500)   NOT NULL,  -- Mandatory, no longer nullable
+
+    -- Transaction link (app layer fires this in same tx)
+    TRANSACTION_ID          VARCHAR2(100)   NOT NULL,  -- Passed in from app layer
+    SESSION_ID              VARCHAR2(100),
+    CLIENT_IP               VARCHAR2(45),
+    APPLICATION_NAME        VARCHAR2(100),
+    MODULE_NAME             VARCHAR2(100),
+
+    -- E-Signature (reference to your signatures table)
+    ESIG_ID                 NUMBER,                    -- FK to ELECTRONIC_SIGNATURES table
+    ESIG_MEANING            VARCHAR2(100),             -- e.g. 'Approved', 'Reviewed', 'Authored'
+    ESIG_TIMESTAMP          TIMESTAMP,                 -- When sig was applied
+    ESIG_REQUIRED           VARCHAR2(1)  DEFAULT 'N'
+                                CHECK (ESIG_REQUIRED IN ('Y', 'N')),
+
+    -- Integrity / tamper detection
+    ROW_HASH                VARCHAR2(64)   NOT NULL,   -- SHA-256 of key fields
+
+    -- Partition key (must be included for range partitioning)
+    PARTITION_DATE          DATE           GENERATED ALWAYS AS
+                                (CAST(CHANGE_TIMESTAMP AS DATE)) VIRTUAL
+)
+TABLESPACE USERS
+PARTITION BY RANGE (PARTITION_DATE)
+INTERVAL (NUMTOYMINTERVAL(1, 'MONTH'))
+(
+    -- Seed partition — Oracle auto-creates monthly partitions beyond this
+    PARTITION P_INITIAL VALUES LESS THAN (DATE '2026-01-01')
+)
+STORAGE (
+    INITIAL     10M
+    NEXT        10M
+    PCTINCREASE 0
+);
+
+-- Indexes (LOCAL = partition-aligned, critical for performance)
+CREATE INDEX IDX_AT_TABLE_RECORD
+    ON AUDIT_TRAIL (TABLE_NAME, RECORD_ID)
+    LOCAL;
+
+CREATE INDEX IDX_AT_TIMESTAMP
+    ON AUDIT_TRAIL (CHANGE_TIMESTAMP)
+    LOCAL;
+
+CREATE INDEX IDX_AT_CHANGED_BY
+    ON AUDIT_TRAIL (CHANGED_BY, CHANGE_TIMESTAMP)
+    LOCAL;
+
+CREATE INDEX IDX_AT_TRANSACTION
+    ON AUDIT_TRAIL (TRANSACTION_ID)
+    LOCAL;
+
+CREATE INDEX IDX_AT_ESIG
+    ON AUDIT_TRAIL (ESIG_ID)
+    LOCAL;
+
+-- Immutability trigger (GxP: audit rows are write-once)
+CREATE OR REPLACE TRIGGER TRG_AUDIT_TRAIL_IMMUTABLE
+BEFORE UPDATE OR DELETE ON AUDIT_TRAIL
+FOR EACH ROW
+BEGIN
+    RAISE_APPLICATION_ERROR(
+        -20001,
+        'GxP Violation: AUDIT_TRAIL records are immutable and cannot be modified or deleted.'
+    );
+END;
+/
+
+-- FK to your e-signatures table (add once that table exists)
+-- ALTER TABLE AUDIT_TRAIL
+--     ADD CONSTRAINT FK_AT_ESIG
+--     FOREIGN KEY (ESIG_ID)
+--     REFERENCES ELECTRONIC_SIGNATURES (ESIG_ID);
+

@@ -1,0 +1,8 @@
+﻿<oci_test>
+    <operation>SELECT</operation>
+
+    <sql>
+        SELECT OCI_LOB_TEST.*  FROM OCI_LOB_TEST
+    </sql>
+</oci_test>
+

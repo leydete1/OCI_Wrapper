@@ -1,0 +1,77 @@
+
+CREATE TABLE OCI_SESSION (
+    -- Primary Key
+    SESSION_ROW_ID           NUMBER          GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    -- Identity - the UUID handed back to the client and used as the
+    -- session_cache key.  Unique so a crash-recovery re-insert attempt
+    -- fails loudly instead of silently duplicating.
+    SESSION_ID               VARCHAR2(36)    NOT NULL,
+
+    -- Lifecycle
+    STATUS                   VARCHAR2(20)    NOT NULL
+                                CHECK (STATUS IN ('CREATED', 'ACTIVE', 'EXPIRED',
+                                                   'LOGGED_OUT', 'EXPIRED_ORPHAN')),
+    TTL_SECONDS              NUMBER          NOT NULL,
+
+    -- Who / What
+    CLIENT_ID                VARCHAR2(128),
+    CLIENT_IP                VARCHAR2(45),
+    CLIENT_HOST              VARCHAR2(128),
+    APPLICATION_NAME         VARCHAR2(100),
+
+    -- Correlation - the transaction this session's client work runs under.
+    -- Populated once OCI_Transaction_Manager.tx_begin() is called with
+    -- this session_id.  NULL until then.
+    TRANSACTION_ID            VARCHAR2(100),
+
+    -- Timestamps
+    CREATED_TS                TIMESTAMP      DEFAULT SYSTIMESTAMP NOT NULL,
+    LAST_ACTIVITY_TS          TIMESTAMP      DEFAULT SYSTIMESTAMP NOT NULL,
+    CLOSED_TS                 TIMESTAMP,
+    CLOSE_REASON              VARCHAR2(255),
+
+    -- Partition key (mirrors AUDIT_TRAIL pattern for consistent purge /
+    -- archival tooling across the project)
+    PARTITION_DATE            DATE           GENERATED ALWAYS AS
+                                (CAST(CREATED_TS AS DATE)) VIRTUAL
+)
+TABLESPACE USERS
+PARTITION BY RANGE (PARTITION_DATE)
+INTERVAL (NUMTOYMINTERVAL(1, 'MONTH'))
+(
+    -- Seed partition - Oracle auto-creates monthly partitions beyond this
+    PARTITION P_INITIAL VALUES LESS THAN (DATE '2026-01-01')
+)
+STORAGE (
+    INITIAL     10M
+    NEXT        10M
+    PCTINCREASE 0
+);
+
+-- SESSION_ID must be unique for cache-key integrity, but is NOT the
+-- primary key so partition-local uniqueness enforcement (via a LOCAL
+-- index) is not possible - a GLOBAL index is required here since the
+-- session table is partitioned by date, not by session_id.
+CREATE UNIQUE INDEX IDX_SESSION_ID_UQ
+    ON OCI_SESSION (SESSION_ID)
+    GLOBAL;
+
+-- Reconciliation query pattern (session_reconcile_orphans):
+--   SELECT SESSION_ID, CREATED_TS, TTL_SECONDS
+--   FROM   OCI_SESSION
+--   WHERE  STATUS = 'ACTIVE'
+--     AND  CLOSED_TS IS NULL
+--     AND  CREATED_TS + NUMTODSINTERVAL(TTL_SECONDS, 'SECOND') < SYSTIMESTAMP
+-- This composite index makes that scan cheap even on a large table.
+CREATE INDEX IDX_SESSION_STATUS_CREATED
+    ON OCI_SESSION (STATUS, CREATED_TS)
+    LOCAL;
+
+CREATE INDEX IDX_SESSION_TRANSACTION
+    ON OCI_SESSION (TRANSACTION_ID)
+    LOCAL;
+
+CREATE INDEX IDX_SESSION_CLIENT
+    ON OCI_SESSION (CLIENT_ID, CREATED_TS)
+    LOCAL;

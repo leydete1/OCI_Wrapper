@@ -1,0 +1,55 @@
+# ==================================================
+# OCI_Wrapper Git Ignore
+# Directory level exclusions
+# ==================================================
+
+# Oracle Instant Client (external dependency)
+oci/
+
+# Eclipse generated build directory
+Debug/
+
+# Runtime logs
+logs/
+
+# Generated BLOB/CLOB test output
+output_lobs/
+output_clobs/
+
+# Test generated data
+test_data/
+
+# Oracle wallets / certificates - DO NOT COMMIT
+wallet/
+
+# Personal images / test evidence
+Photos/
+
+# Temporary backup files
+Backup/
+
+# Temporary editor files
+tmp/
+temp/
+
+# ==================================================
+# Build artefacts
+# ==================================================
+
+*.o
+*.d
+*.a
+*.so
+*.exe
+
+# Eclipse metadata
+.project
+.cproject
+.settings/
+
+# ==================================================
+# Runtime generated files
+# ==================================================
+
+*.log
+*.csv

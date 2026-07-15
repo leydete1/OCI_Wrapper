@@ -1,0 +1,46 @@
+SELECT number_col FROM OCI_FIELD_TEST
+
+SELECT number_p_s_col FROM OCI_FIELD_TEST
+
+SELECT float_col FROM OCI_FIELD_TEST
+
+SELECT binary_float_col FROM OCI_FIELD_TEST
+
+SELECT binary_double_col FROM OCI_FIELD_TEST
+
+SELECT char_col FROM OCI_FIELD_TEST
+
+SELECT varchar2_col FROM OCI_FIELD_TEST
+
+SELECT nchar_col FROM OCI_FIELD_TEST
+
+SELECT nvarchar2_col FROM OCI_FIELD_TEST
+
+SELECT date_col FROM OCI_FIELD_TEST
+
+SELECT timestamp_col FROM OCI_FIELD_TEST
+
+
+SELECT timestamp_tz_col FROM OCI_FIELD_TEST
+
+SELECT timestamp_ltz_col FROM OCI_FIELD_TEST
+
+SELECT interval_ym_col FROM OCI_FIELD_TEST
+
+
+SELECT interval_ds_col FROM OCI_FIELD_TEST
+
+SELECT raw_col FROM OCI_FIELD_TEST
+
+
+SELECT clob_col FROM OCI_FIELD_TEST
+
+SELECT nclob_col FROM OCI_FIELD_TEST
+
+-- SELECT blob_col FROM OCI_FIELD_TEST  -- leave commented initially
+SELECT rowid_col FROM OCI_FIELD_TEST
+
+
+SELECT urowid_col FROM OCI_FIELD_TEST
+
+

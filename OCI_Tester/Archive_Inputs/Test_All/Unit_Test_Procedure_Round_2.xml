@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Unit_Test_Procedure_Round_2.xml
+ CURSOR OUT test - procedure returns a SYS_REFCURSOR result set.
+ This exercises the full fetch_cursor_to_xml path including column
+ describe, buffer allocation, batch fetch loop, and XML row building.
+
+ Example Oracle procedure this test targets:
+ -------------------------------------------
+ CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_FIELD_ROWS (
+     P_MIN_NUM   IN  NUMBER,
+     P_RESULTS   OUT SYS_REFCURSOR
+ ) AS
+ BEGIN
+     OPEN P_RESULTS FOR
+         SELECT NUMBER_COL,
+                VARCHAR2_COL,
+                DATE_COL
+         FROM   DATA_MANAGER.OCI_FIELD_TEST
+         WHERE  NUMBER_COL >= P_MIN_NUM
+         ORDER  BY NUMBER_COL;
+ END;
+
+ Expected log markers:
+   Stage 4: Executing PL/SQL block
+   PL/SQL execute OK elapsed=...
+   Stage 6: Fetching CURSOR param='P_RESULTS'
+   Cursor 'P_RESULTS' col_count=3
+   fetch_cursor_to_xml complete cursor='P_RESULTS' rows=N
+   execute_procedure complete
+
+ Expected result XML structure:
+   <Procedure_Result>
+     <execution>
+       <procedure_name>DATA_MANAGER.GET_FIELD_ROWS</procedure_name>
+       ...
+     </execution>
+     <resultset param_name="P_RESULTS">
+       <row number="1">...</row>
+       ...
+     </resultset>
+   </Procedure_Result>
+========================================================================
+-->
+
+<Procedure_Template>
+    <operation>EXECUTE_PROCEDURE</operation>
+    <procedure_name>GET_FIELD_ROWS</procedure_name>
+    <owner>DATA_MANAGER</owner>
+    <parameters>
+
+        <parameter>
+            <param_name>P_MIN_NUM</param_name>
+            <param_type>NUMBER</param_type>
+            <param_direction>IN</param_direction>
+            <param_value>1</param_value>
+        </parameter>
+
+        <parameter>
+            <param_name>P_RESULTS</param_name>
+            <param_type>CURSOR</param_type>
+            <param_direction>OUT</param_direction>
+            <param_value></param_value>
+        </parameter>
+
+    </parameters>
+</Procedure_Template>

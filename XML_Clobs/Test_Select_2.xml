@@ -1,0 +1,8 @@
+﻿<oci_test>
+    <operation>SELECT</operation>
+
+    <sql>
+        SELECT number_p_s_col FROM OCI_FIELD_TEST
+    </sql>
+</oci_test>
+

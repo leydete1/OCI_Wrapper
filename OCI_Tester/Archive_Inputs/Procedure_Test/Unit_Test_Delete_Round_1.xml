@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Unit_Test_Delete_Round_1.xml
+ Single-key DELETE by NUMBER_COL.
+ Deletes the row inserted by Unit_Test_Insert_Round_1 (NUMBER_COL=42).
+ Watch log for "rows_deleted=1" and result XML confirming the key.
+========================================================================
+-->
+
+<Delete_Template>
+    <operation>DELETE</operation>
+    <table_name>OCI_FIELD_TEST</table_name>
+    <owner>DATA_MANAGER</owner>
+    <where>
+        <key_field>
+            <field_name>NUMBER_COL</field_name>
+            <field_type>NUMBER</field_type>
+            <key_value>42</key_value>
+        </key_field>
+    </where>
+</Delete_Template>
