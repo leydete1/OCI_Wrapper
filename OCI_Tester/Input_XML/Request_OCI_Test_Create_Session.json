@@ -1,0 +1,17 @@
+{
+    "external_audit_id": "audit_stub_create_session",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "CREATE_SESSION",
+                "client_id": "stub_client_001",
+                "client_ip": "127.0.0.1",
+                "client_host": "localhost",
+                "application_name": "Data_Manager_Test_Runner",
+                "requested_ttl_seconds": 1800
+            }
+        ]
+    }
+}

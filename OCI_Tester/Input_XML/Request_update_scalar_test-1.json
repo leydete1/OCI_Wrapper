@@ -1,0 +1,21 @@
+{
+    "external_audit_id": "audit_stub_update_scalar",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "UPDATE",
+                "table_name": "OCI_FIELD_TEST",
+                "owner": "DATA_MANAGER",
+                "where": [
+                    { "field_name": "NUMBER_COL", "key_value": "42" }
+                ],
+                "set": [
+                    { "field_name": "VARCHAR2_COL", "value": "Updated by test" },
+                    { "field_name": "DATE_COL",     "value": "2026-05-23 00:00:00" }
+                ]
+            }
+        ]
+    }
+}

@@ -1,0 +1,30 @@
+{
+    "external_audit_id": "audit_stub_insert_round_1",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "INSERT",
+                "table_name": "OCI_FIELD_TEST",
+                "owner": "DATA_MANAGER",
+                "rows": [
+                    {
+                        "fields": [
+                            { "field_name": "NUMBER_COL",   "value": "42" },
+                            { "field_name": "VARCHAR2_COL", "value": "Round 1 test row 1" },
+                            { "field_name": "DATE_COL",     "value": "2026-05-20" }
+                        ]
+                    },
+                    {
+                        "fields": [
+                            { "field_name": "NUMBER_COL",   "value": "99" },
+                            { "field_name": "VARCHAR2_COL", "value": "Round 1 test row 2" },
+                            { "field_name": "DATE_COL",     "value": "2026-05-20" }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}
