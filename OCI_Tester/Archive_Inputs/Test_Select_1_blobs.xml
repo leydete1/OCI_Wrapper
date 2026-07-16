@@ -1,8 +1,0 @@
-﻿<oci_test>
-    <operation>SELECT</operation>
-
-    <sql>
-        SELECT OCI_LOB_TEST.* , PHOTO AS Second_Blob , PHOTO AS Third_Blob FROM OCI_LOB_TEST order by 1
-    </sql>
-</oci_test>
-

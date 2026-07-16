@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Request_Get_Insert_Template.xml
+
+ Step 1 of the two-round-trip flow: client asks for a blank
+ field/column template for OCI_FIELD_TEST before building an INSERT.
+ The response (a get_template_response_t, per OCI_Request_Response_
+ Types.h) carries full column metadata - name/type/length/precision/
+ scale/nullable/default - with every value left empty.
+
+ The client then fills in values and sends Request_Unit_Test_Insert_
+ Round_1.xml-style operation as a SEPARATE follow-up request - the two
+ stay independent round-trips for now (2026-07-14 decision), not
+ combined into one multi-operation transaction.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_get_insert_template</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="0">
+
+        <operation type="GET_TEMPLATE">
+            <target_operation>INSERT</target_operation>
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+        </operation>
+
+    </transaction>
+</request>

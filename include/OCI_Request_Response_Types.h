@@ -36,7 +36,7 @@
  * owns its own concrete per-operation request/response struct (the way
  * OCI_Session_Manager.h owns session_request_t) - this header does not
  * become a dumping ground for every module's fields. select_request_t/
- * select_response_t below are a first concrete example, added because
+ * dml_response_t below are a first concrete example, added because
  * Select is first in the refactor sequence; insert_request_t etc.
  * should be added the same way, in their own module headers, as each
  * CRUD module is actually refactored - not pre-guessed here.
@@ -79,6 +79,9 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 typedef enum {
     OP_UNKNOWN = 0,
+    OP_GET_TEMPLATE,        /* client asks for a blank field/column
+                              * template for a table before building an
+                              * INSERT (or, once supported, UPDATE)      */
     OP_SELECT,
     OP_INSERT,
     OP_UPDATE,
@@ -89,8 +92,201 @@ typedef enum {
 } operation_type_t;
 
 /* ------------------------------------------------------------------ */
+/*  field_spec_t                                                        */
+/*  One column's worth of metadata + value. Deliberately shared, not    */
+/*  duplicated, across three uses that are all structurally the same    */
+/*  shape already in the existing XML - a template response, an        */
+/*  INSERT operation's row fields, and an UPDATE operation's SET        */
+/*  fields (WHERE key fields are a separate, smaller concept - see      */
+/*  where_key_t below):                                                 */
+/*                                                                       */
+/*    - get_template_response_t.columns: value left empty ("")          */
+/*    - insert_request_t.rows[n].fields:  value = the insert value      */
+/*    - update_request_t.set_fields:      value = the new value         */
+/*                                                                       */
+/*  This is the field structure Level 2 will need to define concretely  */
+/*  once Insert/Update are actually refactored - sketched here now      */
+/*  because get_template_response_t needs it today, and duplicating a   */
+/*  near-identical struct later under a different name would defeat     */
+/*  the point.                                                          */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    int  field_number;
+    char field_name    [128];
+    char field_type     [32];   /* NUMBER, VARCHAR2, DATE, BLOB, CLOB... */
+    int  field_length;
+    int  field_precision;       /* -1 = not applicable                  */
+    int  field_scale;           /* -1 = not applicable                  */
+    int  field_nullable;        /* 1 = Y, 0 = N                          */
+    char field_default  [256];  /* "" = no default                       */
+    char value          [4096]; /* insert_value / update_value / "" for
+                                  * a template response                  */
+} field_spec_t;
+
+/* ------------------------------------------------------------------ */
+/*  GET_TEMPLATE request/response                                       */
+/*  Mirrors template_request_t / get_insert_template() in                */
+/*  OCI_Insert_Template_Module.h - target_operation is carried through   */
+/*  rather than hardcoded, since that module's own template_request_t   */
+/*  already anticipates other operations (UPDATE) being supported later, */
+/*  even though only INSERT is implemented today.                       */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    char target_operation[32];   /* "INSERT" today; "UPDATE" reserved   */
+    char table_name[128];
+    char owner[128];             /* "" = auto-resolve, matches existing
+                                   * template_request_t behaviour        */
+} get_template_request_t;
+
+typedef struct {
+    char table_name[128];
+    char owner[128];
+    int  column_count;
+    field_spec_t *columns;       /* array of column_count entries, every
+                                   * .value left empty - client fills   */
+                                  /* these in and resubmits as the real  */
+                                  /* INSERT/UPDATE operation             */
+} get_template_response_t;
+
+/* ------------------------------------------------------------------ */
+/*  field_value_t                                                       */
+/*  Deliberately NOT field_spec_t. field_spec_t (full metadata) only    */
+/*  ever travels server -> client, on a GET_TEMPLATE response. The      */
+/*  client has no authority over field_type/length/precision/scale/     */
+/*  nullable/default - those live in the database and are already       */
+/*  served by metadata_cache - so asking the client to echo them back   */
+/*  on every INSERT/UPDATE is pure overhead, and worse, opens a class   */
+/*  of bug where client-supplied metadata could disagree with what the  */
+/*  server actually has. The actual client -> server request just needs */
+/*  field_name + value; Level 2 validation resolves the real metadata   */
+/*  itself via metadata_cache before executing.                         */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    char field_name[128];
+    char value      [4096];
+} field_value_t;
+
+/* ------------------------------------------------------------------ */
+/*  First concrete sketch: INSERT / UPDATE request shapes               */
+/*  Rough - these belong in their own module headers once Insert/       */
+/*  Update are actually refactored (same convention as select_request_t */
+/*  below), included here just to anchor field_value_t against          */
+/*  something real.                                                     */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    int            field_count;
+    field_value_t *fields;      /* one row's worth of field_name/value */
+} insert_row_t;
+
+typedef struct {
+    char table_name[128];
+    char owner[128];
+    int  row_count;
+    insert_row_t *rows;         /* bulk insert - multiple rows per request */
+} insert_request_t;
+
+typedef struct {
+    char field_name[128];
+    char key_value  [4096];
+} where_key_t;
+
+typedef struct {
+    char table_name[128];
+    char owner[128];
+    int  key_count;
+    where_key_t   *keys;        /* WHERE clause - AND'd together        */
+    int            field_count;
+    field_value_t *fields;      /* SET clause                            */
+} update_request_t;
+
+typedef struct {
+    char table_name[128];
+    char owner[128];
+    int  key_count;
+    where_key_t *keys;          /* WHERE clause - AND'd together. No SET
+                                  * clause - DELETE has nothing else to
+                                  * carry, unlike UPDATE.                 */
+} delete_request_t;
+
+/* ------------------------------------------------------------------ */
+/*  END_SESSION request                                                 */
+/*  Maps to session_end(ctx, session_id, SESSION_STATUS_LOGGED_OUT,      */
+/*  reason, ...) - status is always LOGGED_OUT for a client-initiated    */
+/*  request; EXPIRED/EXPIRED_ORPHAN are system-detected conditions       */
+/*  (TTL timeout, startup reconciliation), never something a client      */
+/*  explicitly asks for.                                                 */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    char session_id[64];
+    char reason[256];           /* optional; "-" if not supplied         */
+} end_session_request_t;
+
+/* ------------------------------------------------------------------ */
+/*  EXECUTE_PROCEDURE                                                    */
+/*  Anchored directly in OCI_Execute_Procedure_Module.h's documented     */
+/*  contract (XML input layout / result XML layout in that header),     */
+/*  not guessed - that header is a complete, unambiguous specification  */
+/*  of a working, proven module, same standing as a real test fixture.  */
+/* ------------------------------------------------------------------ */
+typedef enum {
+    PARAM_DIR_IN,
+    PARAM_DIR_OUT,
+    PARAM_DIR_IN_OUT
+} param_direction_t;
+
+typedef struct {
+    char param_name[128];
+    char param_type[32];        /* NUMBER, INTEGER, VARCHAR2, DATE,
+                                  * TIMESTAMP, CURSOR                    */
+    param_direction_t direction;
+    char param_value[4096];     /* IN value on the request; "" for a
+                                  * pure OUT param going in              */
+} procedure_param_t;
+
+typedef struct {
+    char procedure_name[128];   /* may include package prefix, e.g.
+                                  * "MY_PKG.GET_DATA"                    */
+    char owner[128];            /* optional schema prefix                */
+    int  param_count;
+    procedure_param_t *parameters;
+} execute_procedure_request_t;
+
+typedef struct {
+    char   param_name[128];      /* which CURSOR OUT param this came from */
+    char  *resultset_xml_fragment; /* same reused shape as
+                                     * dml_response_t's field - one
+                                     * <resultset>...</resultset> body per
+                                     * CURSOR OUT parameter                */
+} procedure_resultset_t;
+
+typedef struct {
+    char   procedure_name[128];
+    double execution_time_seconds;
+
+    int    out_param_count;
+    procedure_param_t *out_parameters;  /* OUT/IN_OUT values after execution */
+
+    int    resultset_count;             /* number of CURSOR OUT params that
+                                          * actually produced a resultset -
+                                          * a procedure may have zero, one,
+                                          * or several                     */
+    procedure_resultset_t *resultsets;
+} execute_procedure_response_t;
+
+/* ------------------------------------------------------------------ */
 /*  Status / error - same shape as metrics_record_t / logger_last_error */
 /*  Reused deliberately rather than inventing a parallel convention.    */
+/*                                                                       */
+/*  error_code/error_text are populated here at BOTH levels this struct  */
+/*  is used - per-operation (output_c_operation_result_t.status) and     */
+/*  request-level (output_c_response_t.request_status) - and the         */
+/*  Response layer MUST render both into the actual XML/JSON the client  */
+/*  receives, not just keep them as internal C fields. Per your          */
+/*  feedback 2026-07-15: this level of detail has been genuinely         */
+/*  valuable for debugging throughout this project (logger_last_error,   */
+/*  metrics_Data_Manager.csv's own error_code/error_text columns) and     */
+/*  that value only exists if it's actually visible in what a client/    */
+/*  tester sees, not just logged internally.                             */
 /* ------------------------------------------------------------------ */
 typedef struct {
     int  status_code;         /* 0 = OK, non-zero = failure            */
@@ -145,8 +341,9 @@ typedef struct {
 /*                                                                       */
 /*  Like input_c_operation_t's payload, result_payload is void* here -   */
 /*  each CRUD module produces its own concrete result struct (e.g. a     */
-/*  select_response_t* for OP_SELECT) and the Response layer switches    */
-/*  on `type` to know how to render it back into the original format.   */
+/*  dml_response_t* for OP_SELECT/OP_INSERT/OP_UPDATE/OP_DELETE) and the */
+/*  Response layer switches on `type` to know how to render it back     */
+/*  into the original format.                                            */
 /*                                                                       */
 /*  If the overall request rolled back (input_c_request_t.               */
 /*  transaction_required was set and a later operation failed), earlier  */
@@ -212,19 +409,45 @@ typedef struct {
     int  include_column_names;
 } select_request_t;
 
+/* ================================================================== */
+/*  dml_response_t                                                       */
+/*  Shared response shape for SELECT / INSERT / UPDATE / DELETE.         */
+/*  Anchored directly against real output_xml captured in                */
+/*  metrics_Data_Manager.csv across all four operations - they turned    */
+/*  out to be structurally near-identical (operation/table_name/owner/   */
+/*  execution_time always present; rows_affected just has a different    */
+/*  XML tag name per operation today - rows_inserted/rows_updated/        */
+/*  rows_deleted/implicitly num_rows for SELECT), so one struct with      */
+/*  optional fields is used instead of four almost-duplicate ones.        */
+/*  Which fields are meaningful depends on operation_type_t on the        */
+/*  enclosing output_c_operation_result_t:                                */
+/*    SELECT  - sql_query, resultset_xml_fragment populated; table_name/  */
+/*              owner/lobs_written not applicable                        */
+/*    INSERT  - table_name/owner/rows_affected/lobs_written populated;    */
+/*              sql_query/resultset not applicable                       */
+/*    UPDATE  - as INSERT                                                */
+/*    DELETE  - as UPDATE, minus lobs_written (nothing written)           */
+/*                                                                        */
+/*  No WHERE-clause echo on the response - DELETE's existing output_xml   */
+/*  used to include one (where_keys) and UPDATE's didn't; per your call   */
+/*  2026-07-14, removed from DELETE for consistency rather than added to  */
+/*  UPDATE, so neither echoes it.                                        */
+/* ================================================================== */
 typedef struct {
-    int      num_rows;
-    uint64_t execution_time_total_us;
-    int      fetch_batch_size;
-    int      blobs_extracted;
-    int      clobs_extracted;
-    char    *resultset_xml_fragment; /* the <resultset>...</resultset> body
-                                       * already produced internally by
-                                       * execute_query_batch() today -
-                                       * reused as-is; the Response layer
-                                       * decides whether to emit it as XML
-                                       * verbatim or convert to JSON      */
-} select_response_t;
+    char   table_name[128];      /* "" for SELECT                        */
+    char   owner[128];           /* "" for SELECT                        */
+
+    int    rows_affected;        /* rows_inserted/updated/deleted, or
+                                   * num_rows for SELECT                  */
+    int    lobs_written;         /* INSERT/UPDATE only; 0 otherwise       */
+    int    lobs_extracted;       /* SELECT only; 0 otherwise              */
+    double execution_time_seconds;
+
+    char  *sql_query;              /* SELECT only                        */
+    char  *resultset_xml_fragment; /* SELECT only - same reused shape as
+                                     * execute_query_batch's existing
+                                     * <resultset> body                  */
+} dml_response_t;
 
 #ifdef __cplusplus
 }

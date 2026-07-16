@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Slimmed to field_name/value pairs (and field_name/key_value for the
+ WHERE clause) - see update_scalar_test for the reasoning.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_update_blob</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+
+        <operation type="UPDATE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+
+            <!-- WHERE: update the row we inserted in Round 2 (NUMBER_COL=200) -->
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>200</key_value></key>
+            </where>
+
+            <set>
+                <field><field_name>VARCHAR2_COL</field_name><value>BLOB updated by Test_XML_Runner</value></field>
+                <field><field_name>BLOB_COL</field_name><value>/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test.bin</value></field>
+            </set>
+
+        </operation>
+
+    </transaction>
+</request>

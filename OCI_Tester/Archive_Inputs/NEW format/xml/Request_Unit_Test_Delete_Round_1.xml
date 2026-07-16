@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Single-key DELETE by NUMBER_COL.
+ Deletes the row inserted by Unit_Test_Insert_Round_1 (NUMBER_COL=42).
+
+ Slimmed to field_name/key_value pairs - same reasoning as UPDATE's
+ WHERE clause: field_type is resolved server-side via metadata_cache,
+ not supplied by the client.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_delete_round_1</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+        <operation type="DELETE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>42</key_value></key>
+            </where>
+        </operation>
+    </transaction>
+</request>

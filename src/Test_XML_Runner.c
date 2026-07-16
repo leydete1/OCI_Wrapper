@@ -1256,7 +1256,7 @@ static int initialise_loggers(oci_context_t *ctx,
 /* ================================================================== */
 /*  main                                                                */
 /* ================================================================== */
-int main(int argc, char *argv[])
+int main_Test_XML_Runner(int argc, char *argv[])
 {
 	/*flush all printf immediatly*/
 	setvbuf(stdout, NULL, _IONBF, 0);

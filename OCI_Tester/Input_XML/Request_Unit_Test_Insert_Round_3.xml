@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 3 - CLOB inline text
+ value = plain text string, no file:// prefix.
+
+ Slimmed to field_name/value pairs only - see Round 1 for the reasoning.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_3</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>300</value></field>
+                <field>
+                    <field_name>CLOB_COL</field_name>
+                    <value>
+                        This is inline CLOB text for Round 3.
+                        The quick brown fox jumps over the lazy dog.
+                        Testing chunked CLOB write path.
+                    </value>
+                </field>
+            </row>
+
+        </operation>
+
+    </transaction>
+</request>
