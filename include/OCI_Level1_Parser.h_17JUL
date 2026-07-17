@@ -28,12 +28,8 @@
  *
  *   4. On success, return a populated input_c_request_t (envelope
  *      fields + one input_c_operation_t per <operation>, with type set
- *      and, where Level 1 knows how to extract it, payload already
- *      built - e.g. select_request_t for OP_SELECT, since building it
- *      is purely format-aware extraction with no validation involved.
- *      Operation types Level 1 doesn't build a payload for yet leave
- *      payload NULL; Level 2 remains entirely format-blind either way -
- *      it only ever sees the already-built struct, never raw XML/JSON.
+ *      but payload left NULL - Level 2 owns building the concrete
+ *      per-operation payload struct and doing per-operation validation).
  *      On failure at any step, populate error_detail and return
  *      non-zero; do not partially populate the request.
  *

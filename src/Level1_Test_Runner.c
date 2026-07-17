@@ -33,6 +33,7 @@
 #include "ini_reader.h"
 #include "logger.h"
 #include "OCI_Level1_Parser.h"
+#include "OCI_Request_Response_Types.h"
 
 /* ------------------------------------------------------------------ */
 /*  read_file - whole-file read into a heap buffer                     */
@@ -162,7 +163,15 @@ int main(int argc, char *argv[])
 
         if (rc == LEVEL1_OK)
         {
-            printf("[PASS] %-45s format=%s audit_id=%s session_id=%s operations=%d\n",
+			for (int op_i = 0; op_i < request.operation_count; op_i++)
+			{
+				if (request.operations[op_i].type == OP_SELECT && request.operations[op_i].payload)
+				{
+					select_request_t *sel = (select_request_t *)request.operations[op_i].payload;
+					printf("       -> operation[%d] SELECT sql=\"%s\"\n", op_i, sel->sql);
+				}
+			}
+          printf("[PASS] %-45s format=%s audit_id=%s session_id=%s operations=%d\n",
                    entry->d_name,
                    request.source_format == INPUT_FORMAT_XML ? "XML" : "JSON",
                    request.external_audit_id,

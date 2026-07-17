@@ -72,97 +72,6 @@ static operation_type_t map_operation_type(const char *s)
     return OP_UNKNOWN;
 }
 
-/*
- * trim_inplace()
- * XML element content (e.g. <sql>\n    SELECT ...\n</sql>) carries
- * the surrounding indentation/newlines as part of its text content -
- * xmlNodeGetContent() does not trim this. Strip it so select_request_t.
- * sql holds just the query, matching how the pre-refactor XML runner's
- * own extract_tag()+trim() always did the same thing.
- */
-static void trim_inplace(char *s)
-{
-    if (!s) return;
-    char *start = s;
-    while (*start && isspace((unsigned char)*start)) start++;
-    if (start != s) memmove(s, start, strlen(start) + 1);
-    size_t len = strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1])) { s[len - 1] = '\0'; len--; }
-}
-
-/*
- * build_payload_xml() / build_payload_json()
- *
- * Builds the concrete per-operation payload struct for operation types
- * Level 1 knows how to extract today. Only OP_SELECT is implemented -
- * everything else returns NULL (payload stays unset) until Level 1 is
- * extended for that operation type, same as before this change.
- *
- * max_rows/fetch_batch_size are left 0 deliberately - select_request_t's
- * own doc comment says 0 means "use ctx->ini->query_max_record_count /
- * query_fetch_batch_size", so Level 2 (or execute_query_batch() itself)
- * resolves the real default rather than Level 1 guessing at one.
- */
-static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
-{
-    switch (type)
-    {
-        case OP_SELECT:
-        {
-            select_request_t *req = calloc(1, sizeof(select_request_t));
-            if (!req) return NULL;
-
-            for (xmlNodePtr child = op_node->children; child; child = child->next)
-            {
-                if (child->type != XML_ELEMENT_NODE) continue;
-                if (xmlStrcmp(child->name, (const xmlChar *)"sql") == 0)
-                {
-                    xmlChar *content = xmlNodeGetContent(child);
-                    if (content)
-                    {
-                        strncpy(req->sql, (const char *)content, sizeof(req->sql) - 1);
-                        trim_inplace(req->sql);
-                    }
-                    xmlFree(content);
-                }
-            }
-
-            req->max_rows              = 0;
-            req->fetch_batch_size      = 0;
-            req->include_column_names  = 1;
-            return req;
-        }
-        default:
-            return NULL;
-    }
-}
-
-static void *build_payload_json(cJSON *op_json, operation_type_t type)
-{
-    switch (type)
-    {
-        case OP_SELECT:
-        {
-            select_request_t *req = calloc(1, sizeof(select_request_t));
-            if (!req) return NULL;
-
-            cJSON *sql = cJSON_GetObjectItemCaseSensitive(op_json, "sql");
-            if (cJSON_IsString(sql) && sql->valuestring)
-            {
-                strncpy(req->sql, sql->valuestring, sizeof(req->sql) - 1);
-                trim_inplace(req->sql);
-            }
-
-            req->max_rows              = 0;
-            req->fetch_batch_size      = 0;
-            req->include_column_names  = 1;
-            return req;
-        }
-        default:
-            return NULL;
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /*  XML path                                                             */
 /* ------------------------------------------------------------------ */
@@ -266,7 +175,7 @@ static int parse_xml(oci_context_t *ctx, const char *buf, size_t len,
                 xmlChar *type_attr = xmlGetProp(op, (const xmlChar *)"type");
                 out->operations[idx].type = map_operation_type((const char *)type_attr);
                 xmlFree(type_attr);
-                out->operations[idx].payload = build_payload_xml(op, out->operations[idx].type);
+                out->operations[idx].payload = NULL;  /* Level 2's job */
                 idx++;
             }
         }
@@ -381,7 +290,7 @@ static int parse_json(oci_context_t *ctx, const char *buf, size_t len,
             cJSON *type = cJSON_GetObjectItemCaseSensitive(op, "type");
             out->operations[i].type = map_operation_type(
                 cJSON_IsString(type) ? type->valuestring : NULL);
-            out->operations[i].payload = build_payload_json(op, out->operations[i].type);
+            out->operations[i].payload = NULL;   /* Level 2's job */
         }
     }
 
@@ -466,18 +375,6 @@ int level1_parse(oci_context_t *ctx, const char *buf, size_t len,
 void level1_free_request(input_c_request_t *request)
 {
     if (!request) return;
-
-    for (int i = 0; i < request->operation_count; i++)
-    {
-        /* select_request_t has no nested allocations - a flat free() is
-         * correct today. Types with nested arrays (insert_request_t's
-         * rows, update_request_t's keys/fields, etc.) will need their
-         * own type-aware free logic here once Level 1 builds those
-         * payloads too - a flat free() would leak the nested
-         * allocations for those.                                        */
-        free(request->operations[i].payload);
-    }
-
     free(request->operations);
     request->operations = NULL;
     request->operation_count = 0;
