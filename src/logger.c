@@ -246,19 +246,33 @@ void logger_write(logger_t   *logger,
             msg);
     fflush(logger->file);
 
-    /*This guard is needed incase the error_logger is null*/
-    if (level == LOG_ERROR && logger->error_logger)
+    /**Set the last error */
+    if (level == LOG_ERROR)
     {
-        fprintf(logger->error_logger->file,
-                "%s.%06ld [%s] [T%d] [%s] %s\n",
-                buffer,
-                ts.tv_nsec / 1000,
-                level_str,
-                thread_id,
-                func,
-                msg);
+        strncpy(logger_last_error.error_code, "Error",
+                sizeof(logger_last_error.error_code) - 1);
+        logger_last_error.error_code[sizeof(logger_last_error.error_code) - 1] = '\0';
 
-        fflush(logger->error_logger->file);
+        strncpy(logger_last_error.error_text, msg,
+                sizeof(logger_last_error.error_text) - 1);
+        logger_last_error.error_text[sizeof(logger_last_error.error_text) - 1] = '\0';
+    }
+
+
+    /*This guard is needed incase the error_logger is null*/
+    if (level == LOG_ERROR && logger->error_logger )
+    {
+
+		fprintf(logger->error_logger->file,
+					"%s.%06ld [%s] [T%d] [%s] %s\n",
+					buffer,
+					ts.tv_nsec / 1000,
+					level_str,
+					thread_id,
+					func,
+					msg);
+
+			fflush(logger->error_logger->file);
     }
 
 

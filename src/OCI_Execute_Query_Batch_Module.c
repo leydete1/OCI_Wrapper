@@ -59,6 +59,8 @@
 #include "resultset_cache.h"
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
+#include "OCI_Resultset_Builder.h"
+
 
 /* ------------------------------------------------------------------ */
 /*  Local OCI error macro - mirrors execute_query style                */
@@ -103,35 +105,44 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 /*  Forward declarations                                               */
 /* ------------------------------------------------------------------ */
-static int  allocate_batch_buffers  (oci_context_t *ctx, batch_ctx_t *bc);
-static int  handle_clob_column_batch(oci_context_t *ctx,
-                                     batch_ctx_t *bc,
-                                     ub4 col_idx,
-                                     unsigned int abs_rownum,
-                                     int *CLOB_index_ptr,
-                                     int max_clobs,
-                                     uint64_t *clob_bytes_acc,
-                                     xml_builder_t *xml);
-static int  handle_blob_column_batch(oci_context_t *ctx,
-                                     batch_ctx_t *bc,
-                                     ub4 row_in_batch,
-                                     ub4 col_idx,
-                                     unsigned int abs_rownum,
-                                     lob_item_t *BLOB_list,
-                                     int *BLOB_index_ptr,
-                                     int max_lobs,
-                                     xml_builder_t *xml);
-static int  build_row_xml_batch     (oci_context_t *ctx,
-                                     batch_ctx_t *bc,
-                                     ub4 row_in_batch,
-                                     unsigned int abs_rownum,
-                                     lob_item_t *BLOB_list,
-                                     int *BLOB_index_ptr,
-                                     int max_lobs,
-                                     int *CLOB_index_ptr,
-                                     int max_clobs,
-                                     uint64_t *clob_bytes_acc,
-                                     xml_builder_t *xml);
+static int  allocate_batch_buffers(oci_context_t *ctx, batch_ctx_t *bc);
+
+static int handle_clob_column_batch(oci_context_t *ctx,
+        batch_ctx_t   *bc,
+        ub4            col_idx,
+        unsigned int   abs_rownum,
+        int           *CLOB_index_ptr,
+        int            max_clobs,
+        uint64_t      *clob_bytes_acc,
+        xml_builder_t *xml,
+        resultset_row_t *rs_row,
+        int              field_index);
+
+static int handle_blob_column_batch(oci_context_t *ctx,
+                                         batch_ctx_t   *bc,
+                                         ub4            row_in_batch,
+                                         ub4            col_idx,
+                                         unsigned int   abs_rownum,
+                                         lob_item_t    *BLOB_list,
+                                         int           *BLOB_index_ptr,
+                                         int            max_lobs,
+                                         xml_builder_t *xml,
+                                         resultset_row_t *rs_row,
+                                         int              field_index);
+
+
+static int  build_row_xml_batch(oci_context_t *ctx,
+										batch_ctx_t   *bc,
+										ub4            row_in_batch,
+										unsigned int   abs_rownum,
+										lob_item_t    *BLOB_list,
+										int           *BLOB_index_ptr,
+										int            max_lobs,
+										int           *CLOB_index_ptr,
+										int            max_clobs,
+										uint64_t      *clob_bytes_acc,
+										xml_builder_t *xml,
+										resultset_t   *rs);
 static void free_batch_ctx          (oci_context_t *ctx, batch_ctx_t *bc);
 
 
@@ -184,13 +195,15 @@ static int allocate_batch_buffers(oci_context_t *ctx, batch_ctx_t *bc)
 /*      NULL and empty CLOB both emit empty XML field safely.          */
 /* ================================================================== */
 static int handle_clob_column_batch(oci_context_t *ctx,
-                                     batch_ctx_t   *bc,
-                                     ub4            col_idx,
-                                     unsigned int   abs_rownum,
-                                     int           *CLOB_index_ptr,
-                                     int            max_clobs,
-                                     uint64_t      *clob_bytes_acc,
-                                     xml_builder_t *xml)
+                                         batch_ctx_t   *bc,
+                                         ub4            col_idx,
+                                         unsigned int   abs_rownum,
+                                         int           *CLOB_index_ptr,
+                                         int            max_clobs,
+                                         uint64_t      *clob_bytes_acc,
+                                         xml_builder_t *xml,
+                                         resultset_row_t *rs_row,
+                                         int              field_index)
 {
     int CLOB_index = *CLOB_index_ptr;
 
@@ -211,6 +224,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "CLOB col=%u is NULL, emitting empty field", col_idx);
         xml_add_field(xml, bc->col_names[col_idx], "CLOB", "");
+        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
         (*CLOB_index_ptr)++;
         return 0;
     }
@@ -233,6 +247,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "CLOB col=%u is empty, emitting empty field", col_idx);
         xml_add_field(xml, bc->col_names[col_idx], "CLOB", "");
+        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
         (*CLOB_index_ptr)++;
         return 0;
     }
@@ -323,6 +338,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
                      "Failed to open CLOB output file: %s - "
                      "emitting inline content", clob_filepath);
         xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_buf);
+        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_buf);   /* ADD */
         free(clob_buf);
         (*CLOB_index_ptr)++;
         return 0;
@@ -352,6 +368,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
 
     /* Emit XML field: value is the URL/path to the written file */
     xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_url);
+    resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_url);   /* ADD */
 
     (*CLOB_index_ptr)++;
 
@@ -377,7 +394,9 @@ static int handle_blob_column_batch(oci_context_t *ctx,
                                      lob_item_t    *BLOB_list,
                                      int           *BLOB_index_ptr,
                                      int            max_lobs,
-                                     xml_builder_t *xml)
+                                     xml_builder_t *xml,
+                                     resultset_row_t *rs_row,
+                                     int              field_index)
 {
     int BLOB_index = *BLOB_index_ptr;
 
@@ -403,7 +422,8 @@ static int handle_blob_column_batch(oci_context_t *ctx,
                      "BLOB col=%u row=%u is NULL, emitting empty field",
                      col_idx, row_in_batch);
         xml_add_field(xml, bc->col_names[col_idx], "BLOB", "");
-        (*BLOB_index_ptr)++;
+        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");
+     (*BLOB_index_ptr)++;
         return 0;
     }
 
@@ -441,6 +461,7 @@ static int handle_blob_column_batch(oci_context_t *ctx,
                      "BLOB col=%u row=%u is empty, emitting empty field",
                      col_idx, row_in_batch);
         xml_add_field(xml, bc->col_names[col_idx], "BLOB", "");
+        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");   /* ADD */
         (*BLOB_index_ptr)++;
         return 0;
     }
@@ -567,6 +588,12 @@ static int handle_blob_column_batch(oci_context_t *ctx,
     logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
                  "Calling xml_add_blob_field_1");
     xml_add_blob_field_1(xml, item, ctx);
+    resultset_set_blob_field(rs_row, field_index, item->column_name,
+                              item->file_name,
+                              item->output_file_destination,
+                              item->output_file_url,
+                              item->blob_size,
+                              item->mime_type);
 
     (*BLOB_index_ptr)++;
 
@@ -583,22 +610,27 @@ static int handle_blob_column_batch(oci_context_t *ctx,
 /*      Dispatches to BLOB, CLOB or scalar handler per column type.    */
 /* ================================================================== */
 static int build_row_xml_batch(oci_context_t *ctx,
-                                batch_ctx_t   *bc,
-                                ub4            row_in_batch,
-                                unsigned int   abs_rownum,
-                                lob_item_t    *BLOB_list,
-                                int           *BLOB_index_ptr,
-                                int            max_lobs,
-                                int           *CLOB_index_ptr,
-                                int            max_clobs,
-                                uint64_t      *clob_bytes_acc,
-                                xml_builder_t *xml)
+								batch_ctx_t   *bc,
+								ub4            row_in_batch,
+								unsigned int   abs_rownum,
+								lob_item_t    *BLOB_list,
+								int           *BLOB_index_ptr,
+								int            max_lobs,
+								int           *CLOB_index_ptr,
+								int            max_clobs,
+								uint64_t      *clob_bytes_acc,
+								xml_builder_t *xml,
+								resultset_t   *rs)
 {
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Entering row_in_batch=%u abs_rownum=%u",
                  row_in_batch, abs_rownum);
 
     xml_add_row_start(xml, abs_rownum);
+    /*18-JUL 19:45 : New code added to test the new c struct implementation*/
+    resultset_row_t *rs_row = resultset_get_row(rs, abs_rownum);
+
+
 
     for (ub4 i = 0; i < bc->col_count; i++)
     {
@@ -623,28 +655,37 @@ static int build_row_xml_batch(oci_context_t *ctx,
 
         if (bc->data_types[i] == SQLT_BLOB)
         {
+
+            /*New code 18-JUL */
             int rc = handle_blob_column_batch(ctx, bc,
-                                              row_in_batch, i,
-                                              abs_rownum,
-                                              BLOB_list, BLOB_index_ptr,
-                                              max_lobs, xml);
+                                                row_in_batch, i,
+                                                abs_rownum,
+                                                BLOB_list, BLOB_index_ptr,
+                                                max_lobs, xml,
+                                                rs_row, (int)i);          /* ADD */
+
             if (rc != 0)
             {
                 logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                              "handle_blob_column_batch failed col=%u", i);
                 return rc;
             }
+
+
         }
         else if (bc->data_types[i] == SQLT_CLOB)
         {
+            /*New code 18-JUL */
             int rc = handle_clob_column_batch(ctx, bc,
-                                              i,
-                                              abs_rownum,
-                                              CLOB_index_ptr,
-                                              max_clobs,
-                                              clob_bytes_acc,
-                                              xml);
-            if (rc != 0)
+                                               i,
+                                               abs_rownum,
+                                               CLOB_index_ptr,
+                                               max_clobs,
+                                               clob_bytes_acc,
+                                               xml,
+                                               rs_row,
+											   (int)i);          /* ADD */
+          if (rc != 0)
             {
                 logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                              "handle_clob_column_batch failed col=%u", i);
@@ -666,6 +707,10 @@ static int build_row_xml_batch(oci_context_t *ctx,
                          bc->col_names[i]);
 
             xml_add_field(xml, bc->col_names[i], type_str, value);
+
+            /*18-JUL 19:50 : New code to test new struct for non xml implementation */
+            resultset_set_field(rs_row, (int)i, bc->col_names[i], type_str, value);   /* ADD THIS LINE */
+
         }
     }
 
@@ -1400,6 +1445,17 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 4: Build XML document");
 
+    /*18-JUL*/
+    resultset_t *rs = resultset_create(record_count, (int)bc.col_count);
+     if (!rs)
+     {
+         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                      "resultset_create failed - record_count=%d fields_per_row=%u",
+                      record_count, bc.col_count);
+         rc = -1;
+         goto Cleanup;
+     }
+
     xml = xml_create(16384);
     xml_start_document(xml);
     xml_start_execution(xml);
@@ -1462,7 +1518,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                                               &CLOB_index,
                                               max_clobs,
                                               &clob_bytes,
-                                              xml);
+                                              xml,
+											  rs);
             if (row_rc != 0)
             {
                 logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
@@ -1569,6 +1626,9 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
 
 Cleanup:
+
+	resultset_free(rs);   /* ADD THIS LINE - not yet consumed, just avoiding a leak */
+
     /* ================================================================
      *  Stage 7 - Cleanup: reverse allocation order, guard all frees
      * ================================================================ */

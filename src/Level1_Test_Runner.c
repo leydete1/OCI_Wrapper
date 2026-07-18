@@ -34,6 +34,7 @@
 #include "logger.h"
 #include "OCI_Level1_Parser.h"
 #include "OCI_Request_Response_Types.h"
+#include "OCI_Level2_Parser.h"
 
 /* ------------------------------------------------------------------ */
 /*  read_file - whole-file read into a heap buffer                     */
@@ -107,6 +108,32 @@ int main(int argc, char *argv[])
     }
     ctx.logger = &logger;
 
+
+    logger_t select_logger;
+    if (logger_init_str(&select_logger, config.select_log_file_name,
+                         config.select_log_file_max_size,
+                         config.select_log_file_rotation_number,
+                         config.select_log_level) != 0)
+    {
+        printf("Failed to open select logger: %s\n", config.select_log_file_name);
+        return -1;
+    }
+    ctx.select_logger = &select_logger;
+
+
+
+    logger_t sql_parser_logger;
+    if (logger_init_str(&sql_parser_logger, config.sql_parser_log_file_name,
+                         config.sql_parser_log_file_max_size,
+                         config.sql_parser_log_file_rotation_number,
+                         config.sql_parser_log_level) != 0)
+    {
+        printf("Failed to open sql_parser logger: %s\n", config.sql_parser_log_file_name);
+        return -1;
+    }
+    ctx.sql_parser_logger = &sql_parser_logger;
+
+
     logger_write(&logger, LOG_INFO, __func__, 0,
                  "================================================");
     logger_write(&logger, LOG_INFO, __func__, 0,
@@ -163,29 +190,58 @@ int main(int argc, char *argv[])
 
         if (rc == LEVEL1_OK)
         {
-			for (int op_i = 0; op_i < request.operation_count; op_i++)
-			{
-				if (request.operations[op_i].type == OP_SELECT && request.operations[op_i].payload)
-				{
-					select_request_t *sel = (select_request_t *)request.operations[op_i].payload;
-					printf("       -> operation[%d] SELECT sql=\"%s\"\n", op_i, sel->sql);
-				}
-			}
-          printf("[PASS] %-45s format=%s audit_id=%s session_id=%s operations=%d\n",
-                   entry->d_name,
-                   request.source_format == INPUT_FORMAT_XML ? "XML" : "JSON",
-                   request.external_audit_id,
-                   request.session_id,
-                   request.operation_count);
-            passed++;
+            int level2_rc = level2_validate(&ctx, &request);
+
+            if (level2_rc == LEVEL2_OK)
+            {
+                printf("[PASS] %-45s format=%s audit_id=%s session_id=%s operations=%d\n",
+                       entry->d_name,
+                       request.source_format == INPUT_FORMAT_XML ? "XML" : "JSON",
+                       request.external_audit_id,
+                       request.session_id,
+                       request.operation_count);
+
+                for (int op_i = 0; op_i < request.operation_count; op_i++)
+                {
+                    if (request.operations[op_i].type == OP_SELECT && request.operations[op_i].payload)
+                    {
+                        select_request_t *sel = (select_request_t *)request.operations[op_i].payload;
+                        printf("       -> operation[%d] SELECT sql=\"%s\"\n", op_i, sel->sql);
+                    }
+                }
+
+                passed++;
+            }
+            else
+            {
+                /* Find the operation that actually failed Level 2, for the error detail */
+                int failed_op = -1;
+                for (int op_i = 0; op_i < request.operation_count; op_i++)
+                {
+                    if (request.operations[op_i].validation_status.status_code != 0)
+                    {
+                        failed_op = op_i;
+                        break;
+                    }
+                }
+
+                if (failed_op >= 0)
+                    printf("[FAIL] %-45s LEVEL2 operation[%d] type=%d error_code=%s error_text=%s\n",
+                           entry->d_name, failed_op,
+                           (int)request.operations[failed_op].type,
+                           request.operations[failed_op].validation_status.error_code,
+                           request.operations[failed_op].validation_status.error_text);
+                else
+                    printf("[FAIL] %-45s LEVEL2 rc=%d (no operation reported a specific error)\n",
+                           entry->d_name, level2_rc);
+
+                failed++;
+            }
+
             level1_free_request(&request);
         }
-        else
-        {
-            printf("[FAIL] %-45s rc=%d error_code=%s error_text=%s\n",
-                   entry->d_name, rc, error_detail.error_code, error_detail.error_text);
-            failed++;
-        }
+
+
 
         free(buf);
     }
@@ -204,5 +260,8 @@ int main(int argc, char *argv[])
                  total, passed, failed);
 
     logger_close(&logger);
+    logger_close(&select_logger);
+    logger_close(&sql_parser_logger);
+
     return (failed == 0) ? 0 : -1;
 }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Request_Test_Select_Union_Invalid.xml
+
+ Deliberately invalid - UNION is not supported by
+ sql_dependency_extractor.h (Rule 4: "Subqueries, UNION, INTERSECT,
+ EXCEPT are not supported"). Should pass Level 1 (structurally valid
+ request envelope) and fail Level 2 with LEVEL2_ERR_SQL_INVALID, error
+ text sourced from extract_sql_dependencies() via logger_last_error.
+
+ This is exactly the case that previously sailed through as a
+ structurally valid request and only failed much later, deep inside
+ execute_query_batch() - discovered the hard way during the session
+ reconciliation work. Level 2 now catches it here instead.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_select_union_invalid</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+
+        <operation type="SELECT">
+            <sql>
+                SELECT NUMBER_COL FROM OCI_FIELD_TEST
+                UNION
+                SELECT NUMBER_COL FROM OCI_FIELD_TEST
+            </sql>
+        </operation>
+
+    </transaction>
+</request>
