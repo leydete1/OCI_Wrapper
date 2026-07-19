@@ -60,7 +60,7 @@
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
 #include "OCI_Resultset_Builder.h"
-
+#include "OCI_Response_Writer.h";
 
 /* ------------------------------------------------------------------ */
 /*  Local OCI error macro - mirrors execute_query style                */
@@ -825,6 +825,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     OCIStmt   *stmt       = NULL;
     OCIStmt   *stmt_count = NULL;
     lob_item_t *BLOB_list = NULL;
+    resultset_t *rs = NULL;
     xml_builder_t *xml    = NULL;
     char parse_msg[256];
 
@@ -1446,7 +1447,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                  "Stage 4: Build XML document");
 
     /*18-JUL*/
-    resultset_t *rs = resultset_create(record_count, (int)bc.col_count);
+    rs = resultset_create(record_count, (int)bc.col_count);
      if (!rs)
      {
          logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
@@ -1564,6 +1565,114 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     xml_append(xml, "<clobs_extracted>%d</clobs_extracted>\n", CLOB_index);
     xml_end_execution(xml);
     xml_finalize(xml);
+
+
+    /* ---- Stage 3: compare old and new resultset XML (temporary - verification only) ---- */
+     /*   char *new_response_xml = response_write_xml(ctx, rs);
+
+        if (new_response_xml)
+        {
+            printf("\n===== OLD (existing xml->buffer) =====\n%s\n", xml->buffer);
+            printf("\n===== NEW (response_write_xml) =====\n%s\n", new_response_xml);
+
+            if (strcmp(xml->buffer, new_response_xml) == 0)
+            {
+                printf("\n[STAGE3] MATCH - old and new resultset XML are identical\n");
+                logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                             "STAGE3 MATCH - old and new resultset XML identical");
+            }
+            else
+            {
+                printf("\n[STAGE3] MISMATCH - old and new resultset XML differ\n");
+                logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                             "STAGE3 MISMATCH - old and new resultset XML differ");
+            }
+
+            free(new_response_xml);
+        }
+        else
+        {
+            printf("\n[STAGE3] response_write_xml returned NULL\n");
+        }
+
+	*/
+
+
+    /* ---- Stage 3: compare old and new resultset XML (temporary - verification only) ---- */
+    char *new_response_xml = response_write_xml(ctx, rs);
+
+    if (new_response_xml)
+    {
+        /* Extract just <resultset>...</resultset> from the old buffer -
+         * response_write_xml() only ever produces that fragment, not the
+         * surrounding <output_xml>/<execution_envelope> wrapper, so
+         * comparing against the whole old buffer was never a fair
+         * like-for-like check.                                          */
+        const char *old_start = strstr(xml->buffer, "<resultset>");
+        const char *old_end   = old_start ? strstr(old_start, "</resultset>") : NULL;
+
+        if (old_start && old_end)
+        {
+            old_end += strlen("</resultset>");
+            size_t old_fragment_len = (size_t)(old_end - old_start);
+
+            char *old_fragment = malloc(old_fragment_len + 1);
+            if (old_fragment)
+            {
+                memcpy(old_fragment, old_start, old_fragment_len);
+                old_fragment[old_fragment_len] = '\0';
+
+
+                /* Trim trailing whitespace/newline from both before comparing -
+                 * xml_end_resultset() appends "</resultset>\n" with the
+                 * newline as part of that one write, which response_write_xml()'s
+                 * strdup(xml->buffer) naturally picks up but this substring
+                 * extraction does not - a trivial difference, not a real one. */
+                size_t ol = strlen(old_fragment);
+                while (ol > 0 && (old_fragment[ol-1] == '\n' || old_fragment[ol-1] == '\r' || old_fragment[ol-1] == ' '))
+                    old_fragment[--ol] = '\0';
+
+                size_t nl = strlen(new_response_xml);
+                while (nl > 0 && (new_response_xml[nl-1] == '\n' || new_response_xml[nl-1] == '\r' || new_response_xml[nl-1] == ' '))
+                    new_response_xml[--nl] = '\0';
+
+
+                printf("\n===== OLD resultset fragment only =====\n%s\n", old_fragment);
+                printf("\n===== NEW (response_write_xml) =====\n%s\n", new_response_xml);
+
+                if (strcmp(old_fragment, new_response_xml) == 0)
+                {
+                    printf("\n[STAGE3] MATCH - old and new resultset XML are identical\n");
+                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                                 "STAGE3 MATCH - old and new resultset XML identical");
+                }
+                else
+                {
+                    printf("\n[STAGE3] MISMATCH - old and new resultset XML differ\n");
+                    logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                                 "STAGE3 MISMATCH - old and new resultset XML differ");
+                }
+
+                free(old_fragment);
+            }
+        }
+        else
+        {
+            printf("\n[STAGE3] Could not find <resultset> in old buffer\n");
+        }
+
+        free(new_response_xml);
+    }
+    else
+    {
+        printf("\n[STAGE3] response_write_xml returned NULL\n");
+    }
+
+
+
+
+
+
 
     if (!cfg->xml)
         cfg->xml = calloc(1, sizeof(*cfg->xml));

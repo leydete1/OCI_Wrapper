@@ -73,7 +73,7 @@ static int is_regular_file(const char *path)
 /* ------------------------------------------------------------------ */
 /*  main                                                                 */
 /* ------------------------------------------------------------------ */
-int main(int argc, char *argv[])
+int main_19JUL(int argc, char *argv[])
 {
     setvbuf(stdout, NULL, _IONBF, 0);
 
