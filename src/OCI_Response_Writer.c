@@ -13,6 +13,7 @@
 #include "OCI_Response_Writer.h"
 #include "XML_Helper.h"
 #include "OCI_Execute_Query_Module.h"   /* xml_add_blob_field_1() lives here */
+#include "cJSON.h"
 
 char *response_write_xml(oci_context_t *ctx, const resultset_t *rs)
 {
@@ -69,5 +70,93 @@ char *response_write_xml(oci_context_t *ctx, const resultset_t *rs)
     char *result = xml->buffer ? strdup(xml->buffer) : NULL;
     xml_free(xml);
 
+    return result;
+}
+
+char *response_write_json(oci_context_t *ctx, const resultset_t *rs)
+{
+    (void)ctx;   /* signature parity with response_write_xml() / future use */
+
+    if (!rs) return NULL;
+
+    cJSON *root      = cJSON_CreateObject();
+    cJSON *resultset = cJSON_CreateArray();
+    if (!root || !resultset)
+    {
+        cJSON_Delete(root);
+        cJSON_Delete(resultset);
+        return NULL;
+    }
+    cJSON_AddItemToObject(root, "resultset", resultset);
+
+    for (int r = 0; r < rs->record_count; r++)
+    {
+        const resultset_row_t *row = &rs->records[r];
+
+        cJSON *row_obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(row_obj, "row_number", row->record_number);
+
+        cJSON *fields = cJSON_CreateArray();
+        cJSON_AddItemToObject(row_obj, "fields", fields);
+
+        for (int f = 0; f < row->field_count; f++)
+        {
+            const resultset_field_t *fld = &row->fields[f];
+
+            cJSON *field_obj = cJSON_CreateObject();
+            cJSON_AddStringToObject(field_obj, "field_name", fld->field_name);
+
+            if (fld->is_blob)
+            {
+                /* Mirrors xml_add_blob_field_1() exactly: field_value is
+                 * always empty for BLOBs, real data lives in the nested
+                 * blob object. file_url is included only when set - same
+                 * conditional as the XML path.                            */
+                cJSON_AddStringToObject(field_obj, "field_type", "BLOB");
+                cJSON_AddStringToObject(field_obj, "field_value", "");
+
+                cJSON *blob_obj = cJSON_CreateObject();
+                cJSON_AddStringToObject(blob_obj, "file_name",
+                    fld->blob_detail.file_name[0] ? fld->blob_detail.file_name : "N/A");
+                cJSON_AddStringToObject(blob_obj, "file_path",
+                    fld->blob_detail.file_path[0] ? fld->blob_detail.file_path : "N/A");
+
+                if (fld->blob_detail.file_url[0])
+                    cJSON_AddStringToObject(blob_obj, "file_url",
+                        fld->blob_detail.file_url);
+
+                /* file_size kept as a string, same as every other value -
+                 * see the parity note in the header: no field in this
+                 * output is a real JSON number yet, by deliberate choice. */
+                char size_str[32];
+                snprintf(size_str, sizeof(size_str), "%llu",
+                         (unsigned long long)fld->blob_detail.file_size);
+                cJSON_AddStringToObject(blob_obj, "file_size", size_str);
+
+                cJSON_AddStringToObject(blob_obj, "mime_type",
+                    fld->blob_detail.mime_type[0]
+                        ? fld->blob_detail.mime_type
+                        : "application/octet-stream");
+
+                cJSON_AddItemToObject(field_obj, "blob", blob_obj);
+            }
+            else
+            {
+                cJSON_AddStringToObject(field_obj, "field_type", fld->field_type);
+                cJSON_AddStringToObject(field_obj, "field_value", fld->value);
+            }
+
+            cJSON_AddItemToArray(fields, field_obj);
+        }
+
+        cJSON_AddItemToArray(resultset, row_obj);
+    }
+
+    char *result = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    /* cJSON_PrintUnformatted() already returns a malloc'd buffer that the
+     * caller frees directly - no strdup needed, unlike the xml_builder_t
+     * path above which owns its own internal buffer.                     */
     return result;
 }

@@ -58,6 +58,41 @@ extern "C" {
  */
 char *response_write_xml(oci_context_t *ctx, const resultset_t *rs);
 
+/*
+ * response_write_json()
+ *
+ * Renders rs into a heap-allocated JSON document, structurally
+ * equivalent to response_write_xml()'s output for the same data:
+ *
+ *   { "resultset": [
+ *       { "row_number": N, "fields": [
+ *           { "field_name": .., "field_type": .., "field_value": .. },
+ *           ...
+ *           { "field_name": .., "field_type": "BLOB", "field_value": "",
+ *             "blob": { "file_name": .., "file_path": ..,
+ *                       ["file_url": ..,] "file_size": .., "mime_type": .. } }
+ *       ]},
+ *       ...
+ *   ]}
+ *
+ * All scalar values - including NUMBER and DATE typed fields - are
+ * emitted as JSON strings, matching resultset_field_t.value being a
+ * char[4096] regardless of field_type. This is a deliberate parity
+ * choice with response_write_xml(), not an oversight: real JSON typing
+ * (numbers as numbers) is a separate future enhancement, tracked
+ * separately so it can be evaluated - and tested - on its own.
+ *
+ * file_url is included only when blob_detail.file_url[0] is set,
+ * mirroring xml_add_blob_field_1()'s identical conditional exactly.
+ *
+ * ctx is accepted for signature parity with response_write_xml() and
+ * for future logging use - not currently read.
+ *
+ * Returns a malloc'd string (via cJSON_PrintUnformatted) the caller
+ * must free(), or NULL on allocation failure or if rs is NULL.
+ */
+char *response_write_json(oci_context_t *ctx, const resultset_t *rs);
+
 #ifdef __cplusplus
 }
 #endif

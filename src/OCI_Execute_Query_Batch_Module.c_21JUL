@@ -61,7 +61,6 @@
 #include "metrics.h"
 #include "OCI_Resultset_Builder.h"
 #include "OCI_Response_Writer.h";
-#include "cJSON.h"                       /* Stage 3c JSON verification only */
 
 /* ------------------------------------------------------------------ */
 /*  Local OCI error macro - mirrors execute_query style                */
@@ -813,178 +812,6 @@ static void free_batch_ctx(oci_context_t *ctx, batch_ctx_t *bc)
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "free_batch_ctx complete");
-}
-
-
-/* ------------------------------------------------------------------ */
-/*  Stage 3c: verify response_write_json() output (temporary -         */
-/*  verification only)                                                 */
-/*                                                                      */
-/*  Unlike Stage 3's XML check, there's no pre-existing JSON buffer to  */
-/*  diff against - response_write_json() is brand new. So instead this  */
-/*  parses its own output back with cJSON and compares every field      */
-/*  against rs directly, the same struct both writers render from.      */
-/*  This is a stricter check than comparing two rendered strings by     */
-/*  eye: it catches the writer disagreeing with its own source data,    */
-/*  not just disagreeing with the XML writer.                           */
-/*                                                                      */
-/*  Returns 1 on full match, 0 on any mismatch (with a printf/logger    */
-/*  line identifying exactly what didn't match, same MATCH/MISMATCH     */
-/*  pattern as Stage 3).                                                */
-/* ------------------------------------------------------------------ */
-static int verify_response_json_against_resultset(oci_context_t *ctx,
-                                                    const resultset_t *rs,
-                                                    const char *json_str)
-{
-    if (!rs || !json_str) return 0;
-
-    cJSON *root = cJSON_Parse(json_str);
-    if (!root)
-    {
-        printf("\n[STAGE3c] JSON did not parse: %s\n", cJSON_GetErrorPtr());
-        return 0;
-    }
-
-    cJSON *resultset = cJSON_GetObjectItemCaseSensitive(root, "resultset");
-    if (!cJSON_IsArray(resultset))
-    {
-        printf("\n[STAGE3c] MISMATCH - no \"resultset\" array in JSON\n");
-        cJSON_Delete(root);
-        return 0;
-    }
-
-    int json_row_count = cJSON_GetArraySize(resultset);
-    if (json_row_count != rs->record_count)
-    {
-        printf("\n[STAGE3c] MISMATCH - row count: struct=%d json=%d\n",
-               rs->record_count, json_row_count);
-        cJSON_Delete(root);
-        return 0;
-    }
-
-    int ok = 1;
-
-    for (int r = 0; r < rs->record_count && ok; r++)
-    {
-        const resultset_row_t *row      = &rs->records[r];
-        cJSON                 *row_obj  = cJSON_GetArrayItem(resultset, r);
-        cJSON *row_number = cJSON_GetObjectItemCaseSensitive(row_obj, "row_number");
-        cJSON *fields     = cJSON_GetObjectItemCaseSensitive(row_obj, "fields");
-
-        if (!cJSON_IsNumber(row_number) || row_number->valueint != row->record_number)
-        {
-            printf("\n[STAGE3c] MISMATCH - row %d: row_number struct=%d json=%s\n",
-                   r, row->record_number,
-                   row_number ? cJSON_Print(row_number) : "(missing)");
-            ok = 0;
-            break;
-        }
-
-        if (!cJSON_IsArray(fields) || cJSON_GetArraySize(fields) != row->field_count)
-        {
-            printf("\n[STAGE3c] MISMATCH - row %d: field_count struct=%d json=%d\n",
-                   r, row->field_count,
-                   cJSON_IsArray(fields) ? cJSON_GetArraySize(fields) : -1);
-            ok = 0;
-            break;
-        }
-
-        for (int f = 0; f < row->field_count; f++)
-        {
-            const resultset_field_t *fld       = &row->fields[f];
-            cJSON                   *field_obj = cJSON_GetArrayItem(fields, f);
-
-            cJSON *fn = cJSON_GetObjectItemCaseSensitive(field_obj, "field_name");
-            cJSON *ft = cJSON_GetObjectItemCaseSensitive(field_obj, "field_type");
-
-            if (!cJSON_IsString(fn) || strcmp(fn->valuestring, fld->field_name) != 0)
-            {
-                printf("\n[STAGE3c] MISMATCH - row %d field %d: field_name struct=%s json=%s\n",
-                       r, f, fld->field_name,
-                       cJSON_IsString(fn) ? fn->valuestring : "(missing)");
-                ok = 0;
-                break;
-            }
-
-            if (!cJSON_IsString(ft) ||
-                strcmp(ft->valuestring, fld->is_blob ? "BLOB" : fld->field_type) != 0)
-            {
-                printf("\n[STAGE3c] MISMATCH - row %d field %d (%s): field_type struct=%s json=%s\n",
-                       r, f, fld->field_name,
-                       fld->is_blob ? "BLOB" : fld->field_type,
-                       cJSON_IsString(ft) ? ft->valuestring : "(missing)");
-                ok = 0;
-                break;
-            }
-
-            if (fld->is_blob)
-            {
-                cJSON *blob = cJSON_GetObjectItemCaseSensitive(field_obj, "blob");
-                cJSON *bn   = blob ? cJSON_GetObjectItemCaseSensitive(blob, "file_name") : NULL;
-                cJSON *bp   = blob ? cJSON_GetObjectItemCaseSensitive(blob, "file_path") : NULL;
-                cJSON *bs   = blob ? cJSON_GetObjectItemCaseSensitive(blob, "file_size") : NULL;
-                cJSON *bm   = blob ? cJSON_GetObjectItemCaseSensitive(blob, "mime_type") : NULL;
-
-                char size_str[32];
-                snprintf(size_str, sizeof(size_str), "%llu",
-                         (unsigned long long)fld->blob_detail.file_size);
-
-                const char *exp_name = fld->blob_detail.file_name[0] ? fld->blob_detail.file_name : "N/A";
-                const char *exp_path = fld->blob_detail.file_path[0] ? fld->blob_detail.file_path : "N/A";
-                const char *exp_mime = fld->blob_detail.mime_type[0] ? fld->blob_detail.mime_type : "application/octet-stream";
-
-                if (!blob ||
-                    !cJSON_IsString(bn) || strcmp(bn->valuestring, exp_name) != 0 ||
-                    !cJSON_IsString(bp) || strcmp(bp->valuestring, exp_path) != 0 ||
-                    !cJSON_IsString(bs) || strcmp(bs->valuestring, size_str) != 0 ||
-                    !cJSON_IsString(bm) || strcmp(bm->valuestring, exp_mime) != 0)
-                {
-                    printf("\n[STAGE3c] MISMATCH - row %d field %d (%s): blob object differs\n",
-                           r, f, fld->field_name);
-                    ok = 0;
-                    break;
-                }
-
-                /* file_url only expected when set - same conditional as
-                 * the writer itself and Stage 3c stays in sync with it. */
-                if (fld->blob_detail.file_url[0])
-                {
-                    cJSON *bu = cJSON_GetObjectItemCaseSensitive(blob, "file_url");
-                    if (!cJSON_IsString(bu) || strcmp(bu->valuestring, fld->blob_detail.file_url) != 0)
-                    {
-                        printf("\n[STAGE3c] MISMATCH - row %d field %d (%s): file_url differs\n",
-                               r, f, fld->field_name);
-                        ok = 0;
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                cJSON *fv = cJSON_GetObjectItemCaseSensitive(field_obj, "field_value");
-                if (!cJSON_IsString(fv) || strcmp(fv->valuestring, fld->value) != 0)
-                {
-                    printf("\n[STAGE3c] MISMATCH - row %d field %d (%s): field_value struct=%s json=%s\n",
-                           r, f, fld->field_name, fld->value,
-                           cJSON_IsString(fv) ? fv->valuestring : "(missing)");
-                    ok = 0;
-                    break;
-                }
-            }
-        }
-    }
-
-    cJSON_Delete(root);
-
-    if (ok)
-        printf("\n[STAGE3c] MATCH - JSON matches source resultset struct field-for-field (%d rows)\n",
-               rs->record_count);
-
-    logger_write(ctx->select_logger, ok ? LOG_INFO : LOG_WARN, __func__, 0,
-                 ok ? "STAGE3c MATCH - JSON matches resultset struct"
-                    : "STAGE3c MISMATCH - JSON differs from resultset struct");
-
-    return ok;
 }
 
 
@@ -1842,6 +1669,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     }
 
 
+
     /* ---- Stage 3b: verify JSON writer (temporary - verification only) ---- */
     char *new_response_json = response_write_json(ctx, rs);
 
@@ -1851,9 +1679,6 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "STAGE3b response_write_json produced output len=%zu",
                      strlen(new_response_json));
-
-        verify_response_json_against_resultset(ctx, rs, new_response_json);
-
         free(new_response_json);
     }
     else

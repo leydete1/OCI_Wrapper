@@ -84,7 +84,14 @@
 #include <stdio.h>
 #include "session_cache.h"
 #include "OCI_Session_Manager.h"
+#include "OCI_Level1_Parser.h"
+#include "OCI_Level2_Parser.h"
+#include "OCI_Request_Response_Types.h"
+#include "OCI_Execute_Query_Module.h"
 
+static int looks_like_new_request_format(const char *xml, size_t len);
+static int dispatch_select_new(oci_context_t *ctx, const char *filename,
+                                input_c_request_t *request, input_c_operation_t *op);
 
 
 typedef struct {
@@ -208,6 +215,7 @@ static dep_test_case_t test_cases[] = {
     /* sentinel */
     { NULL, NULL, 0 }
 };
+
 
 
 /* ------------------------------------------------------------------ */
@@ -808,6 +816,90 @@ static int process_xml_file(oci_context_t *ctx,
         free(ctx->INPUT_XML);                  /* clear any previous value  */
         ctx->INPUT_XML = strdup(xml);          /* heap copy - ctx owns it   */
     }
+
+
+    /* ---- Try the new format-agnostic pipeline first (SELECT only for
+     * now, per 2026-07-19 decision) - the cheap pre-check means
+     * level1_parse() is only ever called on files that already look
+     * like new-format requests, so its own error logging stays
+     * meaningful rather than firing on every old-format file. Old
+     * dispatch below is untouched and stays the fallback for
+     * everything else, both formats coexisting in xml_input_dir. */
+    if (looks_like_new_request_format(xml, (size_t)len))
+    {
+        input_c_request_t   new_request;
+        operation_status_t  level1_error;
+        memset(&new_request, 0, sizeof(new_request));
+        memset(&level1_error, 0, sizeof(level1_error));
+
+        int level1_rc = level1_parse(ctx, xml, (size_t)len,
+                                      &new_request, &level1_error);
+
+        if (level1_rc != LEVEL1_OK)
+        {
+            logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                         "FAIL [Level1] %s error_code=%s error_text=%s",
+                         filename, level1_error.error_code, level1_error.error_text);
+            free(xml);
+            return -1;
+        }
+
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "File='%s' matched new request format - audit_id=%s "
+                     "operations=%d", filename, new_request.external_audit_id,
+                     new_request.operation_count);
+
+        int level2_rc = level2_validate(ctx, &new_request);
+        int rc = 0;
+
+        if (level2_rc == LEVEL2_OK)
+        {
+            for (int i = 0; i < new_request.operation_count; i++)
+            {
+                input_c_operation_t *op = &new_request.operations[i];
+
+                if (op->type == OP_SELECT)
+                {
+                    rc = dispatch_select_new(ctx, filename, &new_request, op);
+                }
+                else
+                {
+                    /* Every other operation type still runs through the
+                     * old dispatch below for now - not applicable here,
+                     * since a new-format file's body doesn't match what
+                     * the old extract_tag()-based dispatch expects
+                     * anyway. Logged clearly rather than silently
+                     * skipped, so it's obvious in the log why nothing
+                     * happened for this operation.                     */
+                    logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                                 "File='%s' operation[%d] type=%d - new "
+                                 "pipeline only implements SELECT so far, "
+                                 "skipping", filename, i, (int)op->type);
+                }
+            }
+        }
+        else
+        {
+            int failed_op = -1;
+            for (int i = 0; i < new_request.operation_count; i++)
+                if (new_request.operations[i].validation_status.status_code != 0)
+                { failed_op = i; break; }
+
+            if (failed_op >= 0)
+                logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                             "FAIL [Level2] %s operation[%d] error_code=%s error_text=%s",
+                             filename, failed_op,
+                             new_request.operations[failed_op].validation_status.error_code,
+                             new_request.operations[failed_op].validation_status.error_text);
+            rc = -1;
+        }
+
+        level1_free_request(&new_request);
+        free(xml);
+        return rc;
+    }
+
+
 
     char operation[MAX_OPERATION_LEN] = {0};
     if (!extract_tag(xml, "operation", operation, sizeof(operation)))
@@ -1619,6 +1711,11 @@ int main(int argc, char *argv[])
         const char *name = entry->d_name;
         size_t      nlen = strlen(name);
 
+        int is_xml  = (nlen >= 5 && strcasecmp(name + nlen - 4, ".xml")  == 0);
+        int is_json = (nlen >= 6 && strcasecmp(name + nlen - 5, ".json") == 0);
+
+        if (!is_xml && !is_json)
+
         if (nlen < 5 ||
             strcasecmp(name + nlen - 4, ".xml") != 0)
             continue;
@@ -1800,4 +1897,138 @@ void print_limits(void)
     printf("Stack soft = %ld bytes\n", (long)rl.rlim_cur);
     printf("Stack hard = %ld bytes\n", (long)rl.rlim_max);
 }
+
+
+
+
+/*
+ * looks_like_new_request_format()
+ *
+ * Cheap sniff of just the root tag - does NOT call level1_parse().
+ * Only files that pass this go anywhere near the real parser, so
+ * level1_parse()'s existing LOG_ERROR-level diagnostics stay meaningful
+ * (a real error on a file that already looked like a new-format
+ * request) rather than firing on every old-format file just for being
+ * old-format, which would otherwise be normal/expected noise in
+ * error_Data_Manager.log during this transition period.
+ *
+ * Deliberately does not touch or duplicate level1_parse()'s own format
+ * detection (level1_detect_format()) - that function's job is
+ * XML-vs-JSON; this one's job is old-format-vs-new-format, a different
+ * question, answered before level1_parse() is ever invoked at all.
+ */
+
+static int looks_like_new_request_format(const char *xml, size_t len)
+{
+    if (!xml) return 0;
+
+    input_format_t fmt = level1_detect_format(xml, len);
+
+    if (fmt == INPUT_FORMAT_JSON)
+        return 1;   /* old-format files are never JSON - safe to assume new format */
+
+    if (fmt == INPUT_FORMAT_XML)
+    {
+        /* Skip an optional XML declaration before checking the root tag -
+         * e.g. <?xml version="1.0" encoding="UTF-8"?> - every Request_*.xml
+         * fixture has one, and the original version of this check didn't
+         * account for it, so every new-format XML file was incorrectly
+         * treated as old-format.                                         */
+        const char *p = xml;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        if (strncmp(p, "<?xml", 5) == 0)
+        {
+            const char *decl_end = strstr(p, "?>");
+            if (decl_end)
+            {
+                p = decl_end + 2;
+                while (*p && isspace((unsigned char)*p)) p++;
+            }
+        }
+
+        return (strncmp(p, "<request", 8) == 0);
+    }
+
+    return 0;
+}
+
+
+
+
+/* ================================================================== */
+/*  dispatch_select_new                                                 */
+/*  SELECT via the new format-agnostic pipeline (Level 1 already ran,   */
+/*  Level 2 already validated req->sql - this is purely the thin        */
+/*  adapter from select_request_t to execute_config_t, then the same    */
+/*  execute_query_batch() call the old dispatch_select() already uses,  */
+/*  unchanged).                                                          */
+/* ================================================================== */
+static int dispatch_select_new(oci_context_t       *ctx,
+                                const char          *filename,
+                                input_c_request_t   *request,
+                                input_c_operation_t *op)
+{
+    select_request_t *req = (select_request_t *)op->payload;
+
+    if (!req)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [SELECT/new]: %s - no select_request_t payload",
+                     filename);
+        return -1;
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    /* req->sql is already a writable char[4096] buffer, not a pointer
+     * to a literal - safe to point cfg.SQL directly at it. See
+     * OCI_Session_Manager.c's session_reconcile_orphans() design note
+     * for why that distinction matters (trim_sql_inplace() modifies
+     * cfg->SQL in place).                                              */
+    cfg.SQL = req->sql;
+
+    /* 0 means "use the config default" per select_request_t's own doc
+     * comment - Level 1 deliberately left these as 0 rather than
+     * guessing, same as the old dispatch_select() already does.        */
+    cfg.max_rows         = (req->max_rows > 0)
+                            ? req->max_rows
+                            : ctx->ini->query_max_record_count;
+    cfg.fetch_array_size = (req->fetch_batch_size > 0)
+                            ? req->fetch_batch_size
+                            : ctx->ini->query_fetch_batch_size;
+
+    cfg.log_execution_results = 1;
+    cfg.include_column_names  = req->include_column_names;
+    cfg.input_file_name        = (char *)filename;
+
+    int rc = execute_query_batch(ctx, &cfg);
+
+    if (rc == 0)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "PASS [SELECT/new] audit_id=%s: %s",
+                     request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+    }
+    else
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [SELECT/new] audit_id=%s: %s (rc=%d)",
+                     request->external_audit_id, filename, rc);
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+
+    return rc;
+}
+
+
 
