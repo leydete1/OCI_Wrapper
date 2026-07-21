@@ -111,11 +111,6 @@ typedef struct {
     int     ttl_seconds;      /* 0 = use cache default TTL            */
     uint8_t pinned;           /* 1 = never auto-evict this entry      */
 
-    /* Row count for this cached payload, e.g. resultset row count.
-     * 0 = not applicable (e.g. metadata_cache / session_cache entries
-     * that aren't caching a query resultset).                        */
-    uint64_t row_count;
-
     /* Transaction tracing - all optional, may be NULL               */
     const char *client_ip;
     const char *client_host;
@@ -148,8 +143,6 @@ typedef struct cache_entry_t {
     /* ---- Cached payload ---- */
     char       *output_document;    /* heap-allocated XML / JSON / etc */
     size_t      output_length;      /* byte length of output_document  */
-    uint64_t    row_count;          /* rows in the cached resultset,   *
-                                      * 0 for non-resultset caches      */
 
     /* ---- Timestamps ---- */
     time_t      created_ts;

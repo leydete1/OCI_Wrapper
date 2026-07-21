@@ -49,7 +49,6 @@
 #include <ctype.h>
 #include <strings.h>
 #include <stdint.h>
-#include <inttypes.h>                    /* PRIu64 for row_count logging  */
 
 #include "XML_Helper.h"
 #include "OCI_Connection.h"
@@ -1132,8 +1131,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                 metrics.cache_hit = 1;
 
                 logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                             "CACHE HIT key='%.80s' doc_len=%zu rows=%"PRIu64,
-                             cache_key, hit->output_length, hit->row_count);
+                             "CACHE HIT key='%.80s' doc_len=%zu",
+                             cache_key, hit->output_length);
 
                 /* Return cached XML directly - no OCI work needed */
                 if (!cfg->xml)
@@ -1142,15 +1141,11 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                 if (cfg->xml)
                     cfg->xml->OUTPUT_XML = strdup(hit->output_document);
 
-                metrics.rows_affected = hit->row_count;
-
-                uint64_t hit_row_count = hit->row_count;
-
                 resultset_cache_release(ctx->resultset_cache, hit);
 
                 cache_update_exec_stats(ctx->resultset_cache,
                                         0.0, 0.0,
-                                        hit_row_count,  /* rows from cache entry */
+                                        0,     /* rows unknown from cache  */
                                         1,     /* was_cache_hit = 1        */
                                         1);    /* success                  */
                 served_from_cache = 1;
@@ -1888,7 +1883,6 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
          int store_rc = resultset_cache_store(ctx->resultset_cache,
                                                cache_key,
                                                cfg->xml->OUTPUT_XML,
-                                               (uint64_t)abs_rownum,
                                                NULL);   /* default opts */
 
          /*Update ResultSet cache store stats*/

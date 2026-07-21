@@ -180,7 +180,6 @@ static cache_entry_t *alloc_entry(const char         *key,
     /* ---- Payload (cache takes ownership) ---- */
     e->output_document = output_doc;
     e->output_length   = doc_len;
-    e->row_count        = opts ? opts->row_count : 0;
     e->hash_key        = hash_key;
 
     /* ---- Timestamps ---- */
