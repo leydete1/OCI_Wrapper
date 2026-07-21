@@ -1441,21 +1441,21 @@ Cleanup:
 	//printf("DEBUG : ctx->ini->metrics_display_input_file_name=%d\n",ctx->ini->metrics_display_input_file_name);
 	if (ctx->ini && ctx->ini->metrics_display_input_file_name && cfg->input_file_name)
 	    metrics.input_file_name = flatten_for_csv(cfg->input_file_name);
-	//printf("DEBUG : metrics.input_xml=%s\n",metrics.input_xml);
+	//printf("DEBUG : metrics.input_request=%s\n",metrics.input_request);
 
 	//printf("DEBUG : OCI_execute_query)batch.c ctx->INPUT_XML=%s\n",ctx->INPUT_XML);
-	//printf("DEBUG : OCI_execute_query)batch.c  ctx->ini->metrics_display_input_xml=%d\n",ctx->ini->metrics_display_input_xml);
-	if (ctx->ini && ctx->ini->metrics_display_input_xml && ctx->INPUT_XML)
-	    metrics.input_xml = flatten_for_csv3(ctx->INPUT_XML);
-	//printf("DEBUG :  OCI_execute_query)batch.c  metrics.input_xml=%s\n",metrics.input_xml);
+	//printf("DEBUG : OCI_execute_query)batch.c  ctx->ini->metrics_display_input_request=%d\n",ctx->ini->metrics_display_input_request);
+	if (ctx->ini && ctx->ini->metrics_display_input_request && ctx->INPUT_XML)
+	    metrics.input_request = flatten_for_csv3(ctx->INPUT_XML);
+	//printf("DEBUG :  OCI_execute_query)batch.c  metrics.input_request=%s\n",metrics.input_request);
 
 
 	//printf("DEBUG : ctx->OUTPUT_XML=%s\n",ctx->OUTPUT_XML);
-	//printf("DEBUG : ctx->ini->metrics_display_output_xml=%d\n",ctx->ini->metrics_display_output_xml);
-	if (ctx->ini && ctx->ini->metrics_display_output_xml &&
+	//printf("DEBUG : ctx->ini->metrics_display_output_response=%d\n",ctx->ini->metrics_display_output_response);
+	if (ctx->ini && ctx->ini->metrics_display_output_response &&
 	    cfg->xml && cfg->xml->OUTPUT_XML)
-	    metrics.output_xml = flatten_for_csv3(cfg->xml->OUTPUT_XML);
-	//printf("DEBUG : metrics.output_xml=%s\n",metrics.output_xml);
+	    metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	//printf("DEBUG : metrics.output_response=%s\n",metrics.output_response);
 
 
 

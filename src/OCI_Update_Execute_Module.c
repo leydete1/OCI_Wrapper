@@ -1542,13 +1542,13 @@ Cleanup:
 	if (ctx->ini && ctx->ini->metrics_display_input_file_name && cfg->input_file_name)
 	    metrics.input_file_name = flatten_for_csv(cfg->input_file_name);
 
-	if (ctx->ini && ctx->ini->metrics_display_input_xml && ctx->INPUT_XML)
-	    metrics.input_xml = flatten_for_csv3(ctx->INPUT_XML);
+	if (ctx->ini && ctx->ini->metrics_display_input_request && ctx->INPUT_XML)
+	    metrics.input_request = flatten_for_csv3(ctx->INPUT_XML);
 
 
-	if (ctx->ini && ctx->ini->metrics_display_output_xml &&
+	if (ctx->ini && ctx->ini->metrics_display_output_response &&
 	    cfg->xml && cfg->xml->OUTPUT_XML)
-	    metrics.output_xml = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	    metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
 
 
 

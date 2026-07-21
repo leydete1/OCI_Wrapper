@@ -1251,12 +1251,12 @@ int execute_procedure(oci_context_t    *ctx,
  	if (ctx->ini && ctx->ini->metrics_display_input_file_name && cfg->input_file_name)
  	    metrics.input_file_name = strdup(cfg->input_file_name);
 
- 	if (ctx->ini && ctx->ini->metrics_display_input_xml && ctx->INPUT_XML)
- 	    metrics.input_xml = xml_escape_for_csv(ctx->INPUT_XML);
+ 	if (ctx->ini && ctx->ini->metrics_display_input_request && ctx->INPUT_XML)
+ 	    metrics.input_request = xml_escape_for_csv(ctx->INPUT_XML);
 
- 	if (ctx->ini && ctx->ini->metrics_display_output_xml &&
+ 	if (ctx->ini && ctx->ini->metrics_display_output_response &&
  	    cfg->xml && cfg->xml->OUTPUT_XML)
- 	    metrics.output_xml = xml_escape_for_csv(cfg->xml->OUTPUT_XML);
+ 	    metrics.output_response = xml_escape_for_csv(cfg->xml->OUTPUT_XML);
     metrics_finalise(&metrics);
      metrics_write(ctx->metrics_logger, &metrics);
 

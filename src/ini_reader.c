@@ -391,8 +391,8 @@ static ctx_config_map_t ctx_map[] = {
 
 	    /* Metrics */
 	    { "metrics_display_input_file_name",      CFG_INT,    offsetof(app_config_t, metrics_display_input_file_name),      NULL, 0  },
-	    { "metrics_display_input_xml",      CFG_INT,    offsetof(app_config_t, metrics_display_input_xml),      NULL, 0  },
-	    { "metrics_display_output_xml",      CFG_INT,    offsetof(app_config_t, metrics_display_output_xml),      NULL, 0  },
+	    { "metrics_display_input_request",      CFG_INT,    offsetof(app_config_t, metrics_display_input_request),      NULL, 0  },
+	    { "metrics_display_output_response",      CFG_INT,    offsetof(app_config_t, metrics_display_output_response),      NULL, 0  },
 
 
 		/*Session Cache*/

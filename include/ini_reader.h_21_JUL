@@ -389,8 +389,8 @@ typedef struct
      * Metrics parameters
      * ================================================================ */
       int  metrics_display_input_file_name;
-      int  metrics_display_input_request;
-      int  metrics_display_output_response;
+      int  metrics_display_input_xml;
+      int  metrics_display_output_xml;
       
       
     /* ================================================================

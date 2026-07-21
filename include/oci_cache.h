@@ -116,6 +116,14 @@ typedef struct {
      * that aren't caching a query resultset).                        */
     uint64_t row_count;
 
+    /* Optional secondary rendering of the same payload, e.g. a JSON
+     * rendering alongside output_doc's XML, so a cache entry can serve
+     * either format without re-rendering. NULL = not applicable.
+     * Used only by resultset_cache; metadata_cache / session_cache
+     * leave this NULL. Not owned - copied (strdup'd) internally.     */
+    const char *output_document_json;
+    size_t      output_length_json;
+
     /* Transaction tracing - all optional, may be NULL               */
     const char *client_ip;
     const char *client_host;
@@ -150,6 +158,11 @@ typedef struct cache_entry_t {
     size_t      output_length;      /* byte length of output_document  */
     uint64_t    row_count;          /* rows in the cached resultset,   *
                                       * 0 for non-resultset caches      */
+
+    /* ---- Optional secondary rendering (resultset_cache only) ---- */
+    char       *output_document_json; /* e.g. JSON alongside XML above,
+                                        * NULL if not stored            */
+    size_t      output_length_json;
 
     /* ---- Timestamps ---- */
     time_t      created_ts;

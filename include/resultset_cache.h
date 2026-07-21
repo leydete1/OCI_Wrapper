@@ -89,12 +89,17 @@ void resultset_cache_release(cache_t       *cache,
  *   cache          - cache instance
  *   normalised_key - key from resultset_cache_make_key()
  *   output_xml     - OUTPUT_XML string to cache (will be strdup'd)
+ *   output_json    - optional JSON rendering of the same resultset
+ *                     (will be strdup'd); pass NULL if not available.
+ *                     Stored alongside output_xml on the same entry so
+ *                     a later hit can serve either format without
+ *                     re-rendering.
  *   row_count      - number of rows in this resultset, stored on the
  *                     entry so a later cache hit can report an accurate
  *                     row count instead of 0
  *   opts           - optional per-entry options (may be NULL). If
- *                     provided, row_count above takes precedence over
- *                     any row_count set on opts.
+ *                     provided, row_count and output_json above take
+ *                     precedence over any matching fields set on opts.
  *
  * Returns  0  stored successfully
  *         -1  error or cache disabled
@@ -102,6 +107,7 @@ void resultset_cache_release(cache_t       *cache,
 int resultset_cache_store(cache_t            *cache,
                            const char         *normalised_key,
                            const char         *output_xml,
+                           const char         *output_json,
                            uint64_t            row_count,
                            cache_entry_opts_t *opts);
 

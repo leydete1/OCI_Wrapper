@@ -144,6 +144,7 @@ void resultset_cache_release(cache_t       *cache,
 int resultset_cache_store(cache_t            *cache,
                            const char         *normalised_key,
                            const char         *output_xml,
+                           const char         *output_json,
                            uint64_t            row_count,
                            cache_entry_opts_t *opts)
 {
@@ -158,12 +159,18 @@ int resultset_cache_store(cache_t            *cache,
         return -1;
     }
 
-    /* Copy caller's opts (if any) into a local struct so row_count can
-     * be set without mutating memory the caller owns.                */
+    /* Copy caller's opts (if any) into a local struct so row_count and
+     * output_json can be set without mutating memory the caller owns. */
     cache_entry_opts_t local_opts;
     if (opts) local_opts = *opts;
     else      memset(&local_opts, 0, sizeof(local_opts));
     local_opts.row_count = row_count;
+
+    if (output_json)
+    {
+        local_opts.output_document_json = output_json;
+        local_opts.output_length_json   = strlen(output_json);
+    }
 
     int rc = cache_insert(cache, normalised_key, doc,
                           strlen(doc), &local_opts);

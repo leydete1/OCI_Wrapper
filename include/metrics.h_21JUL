@@ -78,22 +78,6 @@ typedef struct metrics_record_s
     uint64_t    start_time_us;
     uint64_t    end_time_us;
     uint64_t    cache_lookup_us;
-
-    /* Parse-stage timings. In the overwhelming majority of requests
-     * these are negligible next to total_us - but on the rare request
-     * where parsing itself is slow (a huge request body, a pathological
-     * SQL string, etc.), total_us alone can't tell you which stage was
-     * responsible. These three make that visible directly.
-     *   level1_parse_us - envelope parsing (level1_parse())
-     *   level2_parse_us - per-operation validation (level2_validate())
-     *   sql_parse_us    - SQL dependency extraction
-     *                     (extract_sql_dependencies())
-     * 0 if that stage wasn't measured for this request (e.g. requests
-     * that don't go through the new-format pipeline at all).           */
-    uint64_t    level1_parse_us;
-    uint64_t    level2_parse_us;
-    uint64_t    sql_parse_us;
-
     uint64_t    execution_us;
     uint64_t    total_us;
 
@@ -122,15 +106,10 @@ typedef struct metrics_record_s
      * All three are heap-allocated strings - caller sets via strdup()
      * when the corresponding ini flag is 1.  metrics_write() frees them
      * after writing so the caller never needs to free manually.
-     * Leave NULL (from metrics_init memset) when flag is 0.
-     *
-     * input_request / output_response hold the request/response body in
-     * whatever format it actually was - XML or JSON - not necessarily
-     * XML despite the "xml" name these used to carry; renamed to match
-     * what they actually store now that both formats exist.            */
+     * Leave NULL (from metrics_init memset) when flag is 0.            */
     char       *input_file_name;   /* source XML filename               */
-    char       *input_request;     /* input request escaped for CSV     */
-    char       *output_response;   /* output response escaped for CSV   */
+    char       *input_xml;         /* input XML escaped for CSV         */
+    char       *output_xml;        /* output XML escaped for CSV        */
 
 } metrics_record_t;
 
@@ -158,9 +137,6 @@ typedef struct metrics_record_s
     "start_time_us,"       \
     "end_time_us,"         \
     "cache_lookup_us,"     \
-    "level1_parse_us,"     \
-    "level2_parse_us,"     \
-    "sql_parse_us,"        \
     "execution_us,"        \
     "total_us,"            \
     "rows_affected,"       \
@@ -176,8 +152,8 @@ typedef struct metrics_record_s
     "connection_create_us,"\
     "connection_acquire_us,"\
     "input_file_name,"     \
-    "input_request,"       \
-    "output_response"
+    "input_xml,"           \
+    "output_xml"
 
 /* ================================================================== */
 /*  Public API                                                          */
@@ -224,7 +200,7 @@ void metrics_finalise(metrics_record_t *m);
  * Writes the header line automatically if the log file is empty.
  * Safe to call with a NULL logger (no-op).
  * String fields containing commas or double-quotes are quoted.
- * After writing, frees m->input_file_name, m->input_request, m->output_response
+ * After writing, frees m->input_file_name, m->input_xml, m->output_xml
  * if set - caller must not free these after metrics_write() returns.
  */
 void metrics_write(logger_t         *metrics_logger,
@@ -235,8 +211,8 @@ void metrics_write(logger_t         *metrics_logger,
  * Escapes an XML string so it is safe to embed as a single CSV field.
  * Replaces: & < > " ' , \n \r with XML entity / numeric references.
  * Returns a heap-allocated string - caller must free() unless the
- * string is assigned to m->input_request or m->output_response, in which
- * case metrics_write() frees it automatically.
+ * string is assigned to m->input_xml or m->output_xml, in which case
+ * metrics_write() frees it automatically.
  * Returns strdup("-") on NULL/empty input or allocation failure.
  */
 char *xml_escape_for_csv(const char *xml);

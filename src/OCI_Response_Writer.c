@@ -160,3 +160,33 @@ char *response_write_json(oci_context_t *ctx, const resultset_t *rs)
      * path above which owns its own internal buffer.                     */
     return result;
 }
+
+int response_writer_cache_store(oci_context_t       *ctx,
+                                 cache_t             *cache,
+                                 const char          *normalised_key,
+                                 const resultset_t   *rs,
+                                 const char          *xml_output,
+                                 uint64_t             row_count,
+                                 cache_entry_opts_t  *opts,
+                                 char               **out_json)
+{
+    if (out_json) *out_json = NULL;
+    if (!rs || !out_json) return -1;
+
+    char *json_str = response_write_json(ctx, rs);
+    if (!json_str) return -1;
+
+    if (cache && normalised_key && xml_output)
+    {
+        int rc = resultset_cache_store(cache, normalised_key,
+                                        xml_output, json_str,
+                                        row_count, opts);
+        if (rc != 0 && ctx)
+            logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                         "response_writer_cache_store: cache store "
+                         "failed key='%.80s'", normalised_key);
+    }
+
+    *out_json = json_str;
+    return 0;
+}

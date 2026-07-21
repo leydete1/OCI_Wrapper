@@ -147,6 +147,7 @@ static size_t entry_memory_size(const cache_entry_t *e)
 
     if (e->normalized_sql)   n += strlen(e->normalized_sql)   + 1;
     if (e->output_document)  n += e->output_length             + 1;
+    if (e->output_document_json) n += e->output_length_json    + 1;
     if (e->client_ip)        n += strlen(e->client_ip)         + 1;
     if (e->client_host)      n += strlen(e->client_host)       + 1;
     if (e->client_id)        n += strlen(e->client_id)         + 1;
@@ -182,6 +183,19 @@ static cache_entry_t *alloc_entry(const char         *key,
     e->output_length   = doc_len;
     e->row_count        = opts ? opts->row_count : 0;
     e->hash_key        = hash_key;
+
+    /* ---- Optional secondary rendering (e.g. JSON alongside XML) ---- */
+    if (opts && opts->output_document_json)
+    {
+        e->output_document_json = strdup(opts->output_document_json);
+        e->output_length_json   = opts->output_length_json;
+        if (!e->output_document_json)
+        {
+            /* Non-fatal: primary payload is still valid without it -
+             * just log and continue with the entry XML/primary-only. */
+            e->output_length_json = 0;
+        }
+    }
 
     /* ---- Timestamps ---- */
     time_t now       = time(NULL);
@@ -223,6 +237,7 @@ static void free_entry(cache_entry_t *e)
 
     free(e->normalized_sql);
     free(e->output_document);
+    free(e->output_document_json);
     free(e->client_ip);
     free(e->client_host);
     free(e->client_id);

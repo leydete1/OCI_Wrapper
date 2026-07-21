@@ -38,6 +38,7 @@
 
 #include "OCI_Connection.h"
 #include "OCI_Resultset_Types.h"
+#include "resultset_cache.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,6 +93,53 @@ char *response_write_xml(oci_context_t *ctx, const resultset_t *rs);
  * must free(), or NULL on allocation failure or if rs is NULL.
  */
 char *response_write_json(oci_context_t *ctx, const resultset_t *rs);
+
+/*
+ * response_writer_cache_store()
+ *
+ * Renders rs to JSON (via response_write_json()) and stores it in the
+ * resultset cache alongside xml_output - the XML rendering the caller
+ * already has for this same resultset - under one cache entry. A
+ * later cache hit, in either format, can then be served directly with
+ * no re-render and no re-execution of the query.
+ *
+ * xml_output is NOT re-rendered here; this project currently produces
+ * its XML via the legacy inline xml_builder buffer in
+ * OCI_Execute_Query_Batch_Module.c, proven byte-identical to
+ * response_write_xml()'s output by the Stage 3 check there - so the
+ * caller's existing string is reused rather than rendering XML twice.
+ *
+ * Parameters
+ *   ctx            - OCI context, passed through to response_write_json()
+ *   cache          - resultset cache instance; pass NULL to render the
+ *                    JSON without storing anything (e.g. caching is
+ *                    disabled, or this was already served from cache,
+ *                    but a JSON response is still needed for this call)
+ *   normalised_key - cache key from resultset_cache_make_key(); ignored
+ *                    if cache is NULL
+ *   rs             - source resultset struct to render to JSON
+ *   xml_output     - the caller's already-rendered XML string for this
+ *                    resultset; ignored if cache is NULL
+ *   row_count      - row count to record on the cache entry
+ *   opts           - optional per-entry cache options (may be NULL)
+ *   out_json       - required out param; receives a malloc'd JSON
+ *                    string the caller owns and must free(). Set to
+ *                    NULL if rendering failed.
+ *
+ * Returns  0  JSON rendered successfully (a cache store failure, when
+ *             cache is non-NULL, is logged but treated as non-fatal -
+ *             the rendered JSON is still valid and returned)
+ *         -1  rendering failed (rs was NULL, or response_write_json()
+ *             returned NULL, or out_json was NULL) - *out_json is NULL
+ */
+int response_writer_cache_store(oci_context_t       *ctx,
+                                 cache_t             *cache,
+                                 const char          *normalised_key,
+                                 const resultset_t   *rs,
+                                 const char          *xml_output,
+                                 uint64_t             row_count,
+                                 cache_entry_opts_t  *opts,
+                                 char               **out_json);
 
 #ifdef __cplusplus
 }

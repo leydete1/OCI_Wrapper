@@ -19,7 +19,6 @@
 #ifndef OCI_CONNECTION_H
 #define OCI_CONNECTION_H
 
-#include <stdint.h>
 #include "logger.h"
 #include "ini_reader.h"
 #include <oci.h>
@@ -105,17 +104,6 @@ typedef struct oci_context_t {
     char *INPUT_XML;            /* Input XML for passing commands  */
     char *OUTPUT_XML;           /* Output XML for passing results  */
 
-    /* ---- Parse-stage timing, bridged through to metrics ----
-     * Set by whichever dispatcher calls level1_parse() / level2_
-     * validate() (currently Test_XML_Runner.c) immediately around each
-     * call. metrics_set_context() reads these into the metrics record
-     * further downstream, once execution reaches an execute module -
-     * same bridging pattern already used for active_session_id /
-     * active_client_ip above. 0 if that stage wasn't measured for this
-     * request (e.g. old-format dispatch path, which doesn't call
-     * level1_parse()/level2_validate() at all).                        */
-    uint64_t level1_parse_us;
-    uint64_t level2_parse_us;
 
 } oci_context_t;
 

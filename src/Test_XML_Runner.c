@@ -832,8 +832,10 @@ static int process_xml_file(oci_context_t *ctx,
         memset(&new_request, 0, sizeof(new_request));
         memset(&level1_error, 0, sizeof(level1_error));
 
+        uint64_t level1_start = metrics_now_us();
         int level1_rc = level1_parse(ctx, xml, (size_t)len,
                                       &new_request, &level1_error);
+        ctx->level1_parse_us = metrics_now_us() - level1_start;
 
         if (level1_rc != LEVEL1_OK)
         {
@@ -849,7 +851,9 @@ static int process_xml_file(oci_context_t *ctx,
                      "operations=%d", filename, new_request.external_audit_id,
                      new_request.operation_count);
 
+        uint64_t level2_start = metrics_now_us();
         int level2_rc = level2_validate(ctx, &new_request);
+        ctx->level2_parse_us = metrics_now_us() - level2_start;
         int rc = 0;
 
         if (level2_rc == LEVEL2_OK)

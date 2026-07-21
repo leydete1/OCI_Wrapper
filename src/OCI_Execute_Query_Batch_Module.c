@@ -1075,7 +1075,11 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 0: Parsing SQL dependencies");
 
-    if (extract_sql_dependencies(cfg->SQL, &deps, ctx) != 0)
+    uint64_t sql_parse_start = metrics_now_us();
+    int sql_parse_rc = extract_sql_dependencies(cfg->SQL, &deps, ctx);
+    metrics.sql_parse_us = metrics_now_us() - sql_parse_start;
+
+    if (sql_parse_rc != 0)
     {
 
         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
@@ -1129,33 +1133,63 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
             if (hit)
             {
-                metrics.cache_hit = 1;
+                int want_json = (cfg->ReturnFormat &&
+                                 strcasecmp(cfg->ReturnFormat, "JSON") == 0);
 
-                logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                             "CACHE HIT key='%.80s' doc_len=%zu rows=%"PRIu64,
-                             cache_key, hit->output_length, hit->row_count);
+                if (want_json && !hit->output_document_json)
+                {
+                    /* This entry predates JSON caching (or JSON
+                     * rendering failed at store time) - do not serve
+                     * XML to a JSON request. Treat as a miss and fall
+                     * through to normal execution below rather than
+                     * goto Cleanup, so this becomes a genuine store
+                     * with JSON included.                              */
+                    logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                                 "CACHE HIT key='%.80s' but no cached JSON "
+                                 "for a JSON request - treating as miss",
+                                 cache_key);
+                    metrics.cache_hit = 0;
+                    resultset_cache_release(ctx->resultset_cache, hit);
+                }
+                else
+                {
+                    metrics.cache_hit = 1;
 
-                /* Return cached XML directly - no OCI work needed */
-                if (!cfg->xml)
-                    cfg->xml = calloc(1, sizeof(*cfg->xml));
+                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                                 "CACHE HIT key='%.80s' doc_len=%zu rows=%"PRIu64
+                                 " format=%s",
+                                 cache_key, hit->output_length, hit->row_count,
+                                 want_json ? "JSON" : "XML");
 
-                if (cfg->xml)
-                    cfg->xml->OUTPUT_XML = strdup(hit->output_document);
+                    /* Return cached content directly - no OCI work needed */
+                    if (want_json)
+                    {
+                        cfg->OUTPUT_JSON = strdup(hit->output_document_json);
+                    }
+                    else
+                    {
+                        if (!cfg->xml)
+                            cfg->xml = calloc(1, sizeof(*cfg->xml));
 
-                metrics.rows_affected = hit->row_count;
+                        if (cfg->xml)
+                            cfg->xml->OUTPUT_XML = strdup(hit->output_document);
+                    }
 
-                uint64_t hit_row_count = hit->row_count;
+                    metrics.rows_affected = hit->row_count;
 
-                resultset_cache_release(ctx->resultset_cache, hit);
+                    uint64_t hit_row_count = hit->row_count;
 
-                cache_update_exec_stats(ctx->resultset_cache,
-                                        0.0, 0.0,
-                                        hit_row_count,  /* rows from cache entry */
-                                        1,     /* was_cache_hit = 1        */
-                                        1);    /* success                  */
-                served_from_cache = 1;
-                rc = 0;
-                goto Cleanup;
+                    resultset_cache_release(ctx->resultset_cache, hit);
+
+                    cache_update_exec_stats(ctx->resultset_cache,
+                                            0.0, 0.0,
+                                            hit_row_count,  /* rows from cache entry */
+                                            1,     /* was_cache_hit = 1        */
+                                            1);    /* success                  */
+                    served_from_cache = 1;
+                    rc = 0;
+                    goto Cleanup;
+                }
             }
             else
             {
@@ -1881,33 +1915,66 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "execute_query_batch complete rows=%u elapsed=%.6f",
                  abs_rownum, elapsed);
-    /* ---- Store result in cache on success ---- */
-     if (ctx->resultset_cache && !served_from_cache &&
-         cfg->xml && cfg->xml->OUTPUT_XML && cache_key[0])
-     {
-         int store_rc = resultset_cache_store(ctx->resultset_cache,
-                                               cache_key,
-                                               cfg->xml->OUTPUT_XML,
-                                               (uint64_t)abs_rownum,
-                                               NULL);   /* default opts */
 
-         /*Update ResultSet cache store stats*/
-         if (store_rc == 0)
-             logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                          "Stored result in cache key='%.80s' rows=%u",
-                          cache_key, abs_rownum);
-         else
-             logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
-                          "Cache store failed (non-fatal) key='%.80s'",
-                          cache_key);
+    /* ---- Render JSON once, store both formats in cache ----
+     * response_writer_cache_store() renders JSON from rs and, when
+     * caching is enabled, stores it alongside the XML string above on
+     * one cache entry - so a later hit, in either format, is served
+     * directly with no re-render and no re-execution.
+     *
+     * This is also the actual fix for JSON requests never receiving a
+     * JSON response: previously nothing populated a JSON output field
+     * at all, cached or not, regardless of ReturnFormat.               */
+    char *json_output = NULL;
+    int   json_rc = response_writer_cache_store(
+                        ctx,
+                        (ctx->resultset_cache && !served_from_cache && cache_key[0])
+                            ? ctx->resultset_cache : NULL,
+                        cache_key,
+                        rs,
+                        cfg->xml->OUTPUT_XML,
+                        (uint64_t)abs_rownum,
+                        NULL,
+                        &json_output);
 
-         cache_update_exec_stats(ctx->resultset_cache,
-                                 elapsed * 1000.0,  /* execution_ms    */
-                                 0.0,               /* fetch_ms        */
-                                 (uint64_t)abs_rownum,
-                                 0,                 /* was_cache_hit   */
-                                 1);                /* success         */
-     }
+    if (json_rc == 0 && json_output)
+    {
+        if (cfg->ReturnFormat && strcasecmp(cfg->ReturnFormat, "JSON") == 0)
+            cfg->OUTPUT_JSON = json_output;   /* ownership transferred to cfg */
+        else
+            free(json_output);                /* not requested this call     */
+    }
+    else
+    {
+        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                     "JSON rendering failed key='%.80s' - a JSON request "
+                     "this call would not receive a response body",
+                     cache_key);
+    }
+
+    /* ---- Update cache exec stats on success ----
+     * The actual cache_insert (both formats) already happened above via
+     * response_writer_cache_store(); this block only records execution
+     * stats, matching the miss-path timing previously recorded here.  */
+    if (ctx->resultset_cache && !served_from_cache &&
+        cfg->xml && cfg->xml->OUTPUT_XML && cache_key[0])
+    {
+        if (json_rc == 0)
+            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                         "Stored result in cache key='%.80s' rows=%u "
+                         "(xml+json)", cache_key, abs_rownum);
+        else
+            logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                         "Cache store incomplete (JSON render failed, "
+                         "non-fatal) key='%.80s'", cache_key);
+
+        cache_update_exec_stats(ctx->resultset_cache,
+                                elapsed * 1000.0,  /* execution_ms    */
+                                0.0,               /* fetch_ms        */
+                                (uint64_t)abs_rownum,
+                                0,                 /* was_cache_hit   */
+                                1);                /* success         */
+    }
 
      /* ================================================================== */
      /*  WRITE BLOCK - place at the end of Stage 6 (after xml_finalize)    */
@@ -1964,13 +2031,13 @@ Cleanup:
 	if (ctx->ini && ctx->ini->metrics_display_input_file_name && cfg->input_file_name)
 	    metrics.input_file_name = flatten_for_csv(cfg->input_file_name);
 
-	if (ctx->ini && ctx->ini->metrics_display_input_xml && ctx->INPUT_XML)
-	    metrics.input_xml = flatten_for_csv3(ctx->INPUT_XML);
+	if (ctx->ini && ctx->ini->metrics_display_input_request && ctx->INPUT_XML)
+	    metrics.input_request = flatten_for_csv3(ctx->INPUT_XML);
 
 
-	if (ctx->ini && ctx->ini->metrics_display_output_xml &&
+	if (ctx->ini && ctx->ini->metrics_display_output_response &&
 	    cfg->xml && cfg->xml->OUTPUT_XML)
-	    metrics.output_xml = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	    metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
 
 	metrics_finalise(&metrics);
 	metrics_write(ctx->metrics_logger, &metrics);

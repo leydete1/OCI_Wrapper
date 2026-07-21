@@ -165,8 +165,8 @@ void metrics_init(metrics_record_t *m)
     /* Numeric fields default to 0                                     */
     /* Optional display pointers start NULL - set by caller if needed  */
     m->input_file_name = NULL;
-    m->input_xml       = NULL;
-    m->output_xml      = NULL;
+    m->input_request   = NULL;
+    m->output_response = NULL;
 }
 
 /* ================================================================== */
@@ -244,6 +244,12 @@ void metrics_set_context(metrics_record_t *m,
 
     /* Default Oracle port */
     m->server_port = 1521;
+
+    /* Parse-stage timing, if this request went through the pipeline
+     * that measures it (see oci_context_t's level1_parse_us /
+     * level2_parse_us for what sets these and when they're 0).         */
+    m->level1_parse_us = ctx->level1_parse_us;
+    m->level2_parse_us = ctx->level2_parse_us;
 
     /* Session context - populated once session_create() has attached a
      * session to this ctx (mirrors ctx->active_tx for transaction_id).
@@ -402,6 +408,9 @@ void metrics_write(logger_t         *metrics_logger,
             "%s,"       /* start_time_us        */
             "%s,"       /* end_time_us          */
             "%llu,"     /* cache_lookup_us      */
+            "%llu,"     /* level1_parse_us      */
+            "%llu,"     /* level2_parse_us      */
+            "%llu,"     /* sql_parse_us         */
             "%llu,"     /* execution_us         */
             "%llu,"     /* total_us             */
             "%llu,"     /* rows_affected        */
@@ -417,8 +426,8 @@ void metrics_write(logger_t         *metrics_logger,
             "%llu,"     /* connection_create_us  */
             "%llu,"     /* connection_acquire_us */
             "%s,"       /* input_file_name       */
-            "%s,"       /* input_xml             */
-            "%s"        /* output_xml            */
+            "%s,"       /* input_request         */
+            "%s"        /* output_response       */
             "\n",
             f_session_id,
             f_transaction_id,
@@ -440,6 +449,9 @@ void metrics_write(logger_t         *metrics_logger,
             start_ts,
             end_ts,
             (unsigned long long)m->cache_lookup_us,
+            (unsigned long long)m->level1_parse_us,
+            (unsigned long long)m->level2_parse_us,
+            (unsigned long long)m->sql_parse_us,
             (unsigned long long)m->execution_us,
             (unsigned long long)m->total_us,
             (unsigned long long)m->rows_affected,
@@ -455,8 +467,8 @@ void metrics_write(logger_t         *metrics_logger,
             (unsigned long long)m->connection_create_us,
             (unsigned long long)m->connection_acquire_us,
             m->input_file_name ? m->input_file_name : "-",
-            m->input_xml       ? m->input_xml       : "-",
-            m->output_xml      ? m->output_xml      : "-"
+            m->input_request   ? m->input_request   : "-",
+            m->output_response ? m->output_response : "-"
         );
 
         fflush(metrics_logger->file);
@@ -464,8 +476,8 @@ void metrics_write(logger_t         *metrics_logger,
 
     /* ---- Free optional heap fields ---- */
     free(m->input_file_name);  m->input_file_name = NULL;
-    free(m->input_xml);        m->input_xml       = NULL;
-    free(m->output_xml);       m->output_xml      = NULL;
+    free(m->input_request);    m->input_request   = NULL;
+    free(m->output_response);  m->output_response  = NULL;
 }
 
 
