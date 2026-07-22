@@ -1,0 +1,17 @@
+Hello Cluade
+
+Somehow I deleted the long conversation we had re refactoring OCI_Execute_Query_Batch_Module.c from using just .xml format to use both xml and json input.   We completed the core as you will see in refreshed code I have added to the Data Manager project.   Could you take a look and advise on the next stages which are small compared to the refactor we completed.
+
+1: Metrics accruacy for cache hit.   This could be fixed by adding a row count field to cached record when inserting it.
+
+2: Metrics input_xml and output_xml need to be changed to input_request and output_response.  Both of these columns store the request / response in correct format,  not specificly xml.
+
+3:Metrics for 3 parse levels to be added,  level 1, level 2 and sql parse.   The total time is perfect for each of the metrics.  While in 99.99 percent of time this will be negligable, there could actually be a scenarion where it does take time.  This will point to it clearly.
+u
+4: The resultsetcache now needs to store the c stuct resultset as this is required to return as it goes straight to cleanup once it finds a match in the cache.
+
+4: When complete above we will mark all lines or sections in code to be removed and maybe comment them.
+
+5: Once 4 is done,  lets take a snapshot of logs,  remove the code and run again.  Hopefully snapshots will be the same.
+
+small cThank you Claude.  I think we can start work on this one tomorrow.  Nearly there now with select

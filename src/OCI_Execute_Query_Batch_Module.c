@@ -2035,9 +2035,20 @@ Cleanup:
 	    metrics.input_request = flatten_for_csv3(ctx->INPUT_XML);
 
 
-	if (ctx->ini && ctx->ini->metrics_display_output_response &&
-	    cfg->xml && cfg->xml->OUTPUT_XML)
-	    metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	if (ctx->ini && ctx->ini->metrics_display_output_response)
+	{
+	    /* Serve whichever format was actually returned to the caller -
+	     * this used to always read cfg->xml->OUTPUT_XML regardless of
+	     * ReturnFormat, so a JSON request's metrics row showed the XML
+	     * rendering instead of the JSON it actually got back.          */
+	    int is_json = (cfg->ReturnFormat &&
+	                   strcasecmp(cfg->ReturnFormat, "JSON") == 0);
+
+	    if (is_json && cfg->OUTPUT_JSON)
+	        metrics.output_response = flatten_for_csv3(cfg->OUTPUT_JSON);
+	    else if (cfg->xml && cfg->xml->OUTPUT_XML)
+	        metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	}
 
 	metrics_finalise(&metrics);
 	metrics_write(ctx->metrics_logger, &metrics);

@@ -1452,9 +1452,19 @@ Cleanup:
 
 	//printf("DEBUG : ctx->OUTPUT_XML=%s\n",ctx->OUTPUT_XML);
 	//printf("DEBUG : ctx->ini->metrics_display_output_response=%d\n",ctx->ini->metrics_display_output_response);
-	if (ctx->ini && ctx->ini->metrics_display_output_response &&
-	    cfg->xml && cfg->xml->OUTPUT_XML)
-	    metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	if (ctx->ini && ctx->ini->metrics_display_output_response)
+	{
+	    /* INSERT doesn't render a JSON response yet (only the SELECT
+	     * batch path does) - this is a no-op fallback to XML until it
+	     * does, kept consistent with the other execute modules.       */
+	    int is_json = (cfg->ReturnFormat &&
+	                   strcasecmp(cfg->ReturnFormat, "JSON") == 0);
+
+	    if (is_json && cfg->OUTPUT_JSON)
+	        metrics.output_response = flatten_for_csv3(cfg->OUTPUT_JSON);
+	    else if (cfg->xml && cfg->xml->OUTPUT_XML)
+	        metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
+	}
 	//printf("DEBUG : metrics.output_response=%s\n",metrics.output_response);
 
 

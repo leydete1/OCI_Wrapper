@@ -2007,6 +2007,16 @@ static int dispatch_select_new(oci_context_t       *ctx,
     cfg.include_column_names  = req->include_column_names;
     cfg.input_file_name        = (char *)filename;
 
+    /* This is the actual fix for JSON requests never getting a JSON
+     * response (and, downstream of that, metrics always showing XML
+     * in output_response): ReturnFormat existed on execute_config_t
+     * but nothing ever set it, so every format-aware check added later
+     * (cache hit serving, response_writer_cache_store(), the metrics
+     * output_response fix) always evaluated as "not JSON" regardless
+     * of what was actually requested.                                  */
+    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
+                        ? "JSON" : "XML";
+
     int rc = execute_query_batch(ctx, &cfg);
 
     if (rc == 0)
@@ -2017,6 +2027,9 @@ static int dispatch_select_new(oci_context_t       *ctx,
         if (cfg.xml && cfg.xml->OUTPUT_XML)
             logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
@@ -2030,6 +2043,11 @@ static int dispatch_select_new(oci_context_t       *ctx,
         if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
         free(cfg.xml);
     }
+
+    /* Now that ReturnFormat is actually set above, cfg.OUTPUT_JSON can
+     * really be populated by execute_query_batch() - free it here or
+     * this becomes a genuine leak on every JSON request.               */
+    if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
 
     return rc;
 }

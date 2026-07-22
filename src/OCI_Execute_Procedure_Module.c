@@ -1254,9 +1254,19 @@ int execute_procedure(oci_context_t    *ctx,
  	if (ctx->ini && ctx->ini->metrics_display_input_request && ctx->INPUT_XML)
  	    metrics.input_request = xml_escape_for_csv(ctx->INPUT_XML);
 
- 	if (ctx->ini && ctx->ini->metrics_display_output_response &&
- 	    cfg->xml && cfg->xml->OUTPUT_XML)
- 	    metrics.output_response = xml_escape_for_csv(cfg->xml->OUTPUT_XML);
+ 	if (ctx->ini && ctx->ini->metrics_display_output_response)
+ 	{
+ 	    /* PROCEDURE doesn't render a JSON response yet (only the SELECT
+ 	     * batch path does) - this is a no-op fallback to XML until it
+ 	     * does, kept consistent with the other execute modules.       */
+ 	    int is_json = (cfg->ReturnFormat &&
+ 	                   strcasecmp(cfg->ReturnFormat, "JSON") == 0);
+
+ 	    if (is_json && cfg->OUTPUT_JSON)
+ 	        metrics.output_response = xml_escape_for_csv(cfg->OUTPUT_JSON);
+ 	    else if (cfg->xml && cfg->xml->OUTPUT_XML)
+ 	        metrics.output_response = xml_escape_for_csv(cfg->xml->OUTPUT_XML);
+ 	}
     metrics_finalise(&metrics);
      metrics_write(ctx->metrics_logger, &metrics);
 
