@@ -10,5 +10,4 @@ if ! git diff --cached --quiet; then
     git push
 fi
 
-#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
 
