@@ -53,7 +53,11 @@
 
 #include "XML_Helper.h"
 #include "OCI_Connection.h"
-#include "OCI_Execute_Query_Module.h"
+#include "OCI_Execute_Query_Batch_Module.h"
+#include <string_utils.h>               /* trim_sql_inplace()                         */
+#include "OCI_Blob_Utils.h"              /* lookup_blob_index(), write_blob_to_file(),
+                                            build_filename_with_timestamp() - relocated
+                                            from the now-removed OCI_Execute_Query_Module */
 #include "OCI_Table_Metadata_Module.h"   /* get_multi_metadata() get_select_metadata() */
 #include "sql_dependency_extractor.h"    /* extract_sql_dependencies()                 */
 #include "logger.h"
@@ -225,7 +229,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
     {
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "CLOB col=%u is NULL, emitting empty field", col_idx);
-        xml_add_field(xml, bc->col_names[col_idx], "CLOB", "");
+        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
         (*CLOB_index_ptr)++;
         return 0;
@@ -248,7 +252,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
     {
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "CLOB col=%u is empty, emitting empty field", col_idx);
-        xml_add_field(xml, bc->col_names[col_idx], "CLOB", "");
+        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
         (*CLOB_index_ptr)++;
         return 0;
@@ -339,7 +343,7 @@ static int handle_clob_column_batch(oci_context_t *ctx,
         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                      "Failed to open CLOB output file: %s - "
                      "emitting inline content", clob_filepath);
-        xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_buf);
+        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_buf); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_buf);   /* ADD */
         free(clob_buf);
         (*CLOB_index_ptr)++;
@@ -368,8 +372,8 @@ static int handle_clob_column_batch(oci_context_t *ctx,
         snprintf(clob_url, sizeof(clob_url), "%s", clob_filepath);
     }
 
-    /* Emit XML field: value is the URL/path to the written file */
-    xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_url);
+    /* Emit field: value is the URL/path to the written file */
+    /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_url); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
     resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_url);   /* ADD */
 
     (*CLOB_index_ptr)++;
@@ -423,7 +427,7 @@ static int handle_blob_column_batch(oci_context_t *ctx,
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "BLOB col=%u row=%u is NULL, emitting empty field",
                      col_idx, row_in_batch);
-        xml_add_field(xml, bc->col_names[col_idx], "BLOB", "");
+        /* xml_add_field(xml, bc->col_names[col_idx], "BLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");
      (*BLOB_index_ptr)++;
         return 0;
@@ -462,7 +466,7 @@ static int handle_blob_column_batch(oci_context_t *ctx,
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "BLOB col=%u row=%u is empty, emitting empty field",
                      col_idx, row_in_batch);
-        xml_add_field(xml, bc->col_names[col_idx], "BLOB", "");
+        /* xml_add_field(xml, bc->col_names[col_idx], "BLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");   /* ADD */
         (*BLOB_index_ptr)++;
         return 0;
@@ -587,9 +591,7 @@ static int handle_blob_column_batch(oci_context_t *ctx,
                  "Calling write_blob_to_file");
     write_blob_to_file(item, ctx->ini->BLOB_output_dir, ctx);
 
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling xml_add_blob_field_1");
-    xml_add_blob_field_1(xml, item, ctx);
+    /* xml_add_blob_field_1(xml, item, ctx); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
     resultset_set_blob_field(rs_row, field_index, item->column_name,
                               item->file_name,
                               item->output_file_destination,
@@ -628,8 +630,7 @@ static int build_row_xml_batch(oci_context_t *ctx,
                  "Entering row_in_batch=%u abs_rownum=%u",
                  row_in_batch, abs_rownum);
 
-    xml_add_row_start(xml, abs_rownum);
-    /*18-JUL 19:45 : New code added to test the new c struct implementation*/
+    /* xml_add_row_start(xml, abs_rownum); */ /* Unused: row wrapper now built by response_write_xml(ctx, rs) via new parsing layer */
     resultset_row_t *rs_row = resultset_get_row(rs, abs_rownum);
 
 
@@ -704,19 +705,14 @@ static int build_row_xml_batch(oci_context_t *ctx,
             if (bc->indicators[i][row_in_batch] == -1)
                 value = "";
 
-            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                         "Calling xml_add_field col=%s",
-                         bc->col_names[i]);
+            /* xml_add_field(xml, bc->col_names[i], type_str, value); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
 
-            xml_add_field(xml, bc->col_names[i], type_str, value);
-
-            /*18-JUL 19:50 : New code to test new struct for non xml implementation */
             resultset_set_field(rs_row, (int)i, bc->col_names[i], type_str, value);   /* ADD THIS LINE */
 
         }
     }
 
-    xml_add_row_end(xml);
+    /* xml_add_row_end(xml); */ /* Unused: row wrapper now built by response_write_xml(ctx, rs) via new parsing layer */
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "build_row_xml_batch complete abs_rownum=%u", abs_rownum);
@@ -1674,7 +1670,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     xml_start_execution(xml);
     xml_append(xml, "<sql_query>%s</sql_query>\n", cfg->SQL);
     xml_end_execution(xml);
-    xml_start_resultset(xml);
+    /* xml_start_resultset(xml); */ /* Unused: resultset body now built by response_write_xml(ctx, rs) via new parsing layer, after the fetch loop populates rs */
 
     /* ================================================================
      *  Stage 5 - Batch fetch loop
@@ -1760,7 +1756,21 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 6: Finalise XML");
 
-    xml_end_resultset(xml);
+    /* xml_end_resultset(xml); */ /* Unused: replaced below - resultset body now comes from response_write_xml(ctx, rs), the new parsing-layer writer that supports both XML and JSON from the same resultset_t */
+    {
+        char *resultset_xml = response_write_xml(ctx, rs);
+        if (resultset_xml)
+        {
+            xml_append_raw(xml, resultset_xml);
+            free(resultset_xml);
+        }
+        else
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "response_write_xml returned NULL - resultset "
+                         "section will be missing from OUTPUT_XML");
+        }
+    }
 
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
     double elapsed =
@@ -1810,7 +1820,14 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 	*/
 
 
-    /* ---- Stage 3: compare old and new resultset XML (temporary - verification only) ---- */
+    /* ---- Stage 3: compare old and new resultset XML (temporary - verification only) ----
+     * Unused/dead: this block existed to verify response_write_xml(ctx, rs)
+     * produced the same <resultset> fragment as the old manually-built
+     * xml->buffer. Now that xml->buffer's resultset section IS
+     * response_write_xml(ctx, rs)'s output (spliced in above), there is no
+     * separate "old" implementation left to diff against - this would only
+     * ever compare the new output to itself. */
+#if 0
     char *new_response_xml = response_write_xml(ctx, rs);
 
     if (new_response_xml)
@@ -1879,6 +1896,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     {
         printf("\n[STAGE3] response_write_xml returned NULL\n");
     }
+#endif
 
 
     /* ---- Stage 3b: verify JSON writer (temporary - verification only) ---- */

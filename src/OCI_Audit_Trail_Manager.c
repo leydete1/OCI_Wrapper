@@ -75,7 +75,7 @@
 
 #include "OCI_Audit_Trail_Manager.h"
 #include "OCI_Insert_Execute_Module.h"
-#include "OCI_Execute_Query_Module.h"
+#include "OCI_Execute_Query_Batch_Module.h"
 #include "OCI_Transaction_Manager.h"
 #include "OCI_Table_Metadata_Module.h"   /* col_metadata_t, field_value_t */
 #include "logger.h"

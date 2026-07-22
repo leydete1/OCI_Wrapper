@@ -87,7 +87,7 @@
 #include "OCI_Level1_Parser.h"
 #include "OCI_Level2_Parser.h"
 #include "OCI_Request_Response_Types.h"
-#include "OCI_Execute_Query_Module.h"
+#include "OCI_Execute_Query_Batch_Module.h"
 
 static int looks_like_new_request_format(const char *xml, size_t len);
 static int dispatch_select_new(oci_context_t *ctx, const char *filename,

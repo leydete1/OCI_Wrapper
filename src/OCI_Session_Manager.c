@@ -24,8 +24,7 @@
 #include "OCI_Session_Manager.h"
 #include "OCI_Transaction_Manager.h"     /* tx_generate_uuid()          */
 #include "OCI_Insert_Execute_Module.h"
-#include "OCI_Update_Execute_Module.h"
-#include "OCI_Execute_Query_Module.h"    /* execute_query_batch()       */
+#include "OCI_Execute_Query_Batch_Module.h"    /* execute_query_batch()       */
 #include "XML_Helper.h"
 #include "logger.h"
 
@@ -592,7 +591,7 @@ int session_end(oci_context_t    *ctx,
     memset(&cfg, 0, sizeof(cfg));
     cfg.input_file_name = (char *)"OCI_Session_Manager:session_end";
 
-    int rc = execute_update_batch(ctx, template_xml->buffer, &cfg);
+    int rc = execute_insert_batch(ctx, template_xml->buffer, &cfg);
 
     xml_free(template_xml);
     if (cfg.xml)

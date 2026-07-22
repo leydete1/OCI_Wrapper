@@ -48,14 +48,15 @@
 #include <time.h>
 
 #include "OCI_Execute_Procedure_Module.h"
-#include "OCI_Execute_Query_Module.h"   /* trim_sql_inplace, lob helpers */
 #include "OCI_Connection.h"
+#include "OCI_Execute_Query_Batch_Module.h"
 #include "XML_Helper.h"
 #include "logger.h"
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
+#include "OCI_Blob_Utils.h"
 
-/* ------------------------------------------------------------------ */
+/* --2---------------------------------------------------------------- */
 /*  OCI error macro - same pattern as the rest of the project          */
 /* ------------------------------------------------------------------ */
 #define CHECK_OCI_PROC(errhp, status, ctx, label)                       \

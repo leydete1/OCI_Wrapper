@@ -5,7 +5,7 @@
 #include <oci.h>
 #include <stddef.h>
 #include <OCI_Connection.h>
-#include <OCI_Execute_Query_Module.h>
+#include <OCI_Execute_Query_Batch_Module.h>
 
 typedef struct xml_builder_t{
     char *buffer;
@@ -34,6 +34,7 @@ void xml_add_field(xml_builder_t *xml,
                    const char *value);
 
 void xml_append(xml_builder_t *xml, const char *fmt, ...);
+void xml_append_raw(xml_builder_t *xml, const char *str);
 char* xml_escape(const char *input);
 
 void xml_add_blob_field(
@@ -46,6 +47,9 @@ void xml_add_blob_field(
 
 const char* get_mime_type(const char *filename);
 void xml_add_blob_field_1(xml_builder_t *xml, const lob_item_t *item, oci_context_t *ctx);
-
+void xml_add_blob_field_1(xml_builder_t *xml,
+                                   const lob_item_t *item,
+                                   oci_context_t *ctx);
+   
 #endif
 

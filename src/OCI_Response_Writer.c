@@ -12,7 +12,6 @@
 
 #include "OCI_Response_Writer.h"
 #include "XML_Helper.h"
-#include "OCI_Execute_Query_Module.h"   /* xml_add_blob_field_1() lives here */
 #include "cJSON.h"
 
 char *response_write_xml(oci_context_t *ctx, const resultset_t *rs)

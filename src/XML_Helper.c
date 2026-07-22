@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include "OCI_Connection.h"   /* oci_context_t, lob_item_t - needed by xml_add_blob_field_1() */
+#include "logger.h"
 
 static void ensure_capacity(xml_builder_t *xml, size_t extra)
 {
@@ -46,6 +48,32 @@ void xml_append(xml_builder_t *xml, const char *fmt, ...)
     ensure_capacity(xml, written);
     memcpy(xml->buffer + xml->size, temp, written);
     xml->size += written;
+    xml->buffer[xml->size] = '\0';
+}
+
+/*
+ * xml_append_raw()
+ *
+ * Appends an already-built string verbatim, with no printf-style
+ * formatting. xml_append() formats into a fixed 8192-byte stack
+ * buffer, then trusts vsnprintf's *would-have-been* return length
+ * when copying out of it - safe for the small per-field/per-tag calls
+ * it was designed for, but a stack over-read if a caller ever passes
+ * a single string longer than that buffer via "%s" (as splicing in a
+ * whole multi-row response_write_xml() fragment does for any
+ * resultset over ~8KB). Use this instead whenever the string being
+ * appended is already fully formatted and could be arbitrarily long.
+ */
+void xml_append_raw(xml_builder_t *xml, const char *str)
+{
+    if (!str) return;
+
+    size_t len = strlen(str);
+    if (len == 0) return;
+
+    ensure_capacity(xml, len);
+    memcpy(xml->buffer + xml->size, str, len);
+    xml->size += len;
     xml->buffer[xml->size] = '\0';
 }
 
@@ -211,6 +239,59 @@ void xml_add_blob_field(
     free(e_name);
 }
 
+
+
+/*
+ * xml_add_blob_field_1()
+ *
+ * Relocated from OCI_Execute_Query_Module.c when that module was removed
+ * (execute_query() was dead, but this helper is still called by
+ * execute_query_batch(), OCI_Execute_Procedure_Module.c, and
+ * OCI_Response_Writer.c's response_write_xml()). Behaviour unchanged,
+ * including its logger call - takes ctx for that reason alone, same as
+ * before.
+ */
+void xml_add_blob_field_1(xml_builder_t *xml, const lob_item_t *item, oci_context_t *ctx)
+{
+    /* Use the column name or fallback to "UNKNOWN" */
+    char *e_name = xml_escape(item->column_name ? item->column_name : "UNKNOWN");
+    char *e_file = xml_escape(item->file_name ? item->file_name : "N/A");
+    char *e_path = xml_escape(item->output_file_destination ? item->output_file_destination : "N/A");
+
+    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "In xml_add_blob_field_1");
+    /* Only escape and add URL if it's set */
+    char *e_url = item->output_file_url ? xml_escape(item->output_file_url) : NULL;
+
+    xml_append(xml,
+        "<field>"
+        "<field_name>%s</field_name>"
+        "<field_type>BLOB</field_type>"
+        "<field_value/>"
+        "<blob>"
+        "<file_name>%s</file_name>"
+        "<file_path>%s</file_path>",
+        e_name, e_file, e_path
+    );
+
+    if (e_url) {
+        xml_append(xml, "<file_url>%s</file_url>", e_url);
+        free(e_url);
+    }
+
+    xml_append(xml,
+        "<file_size>%llu</file_size>"
+        "<mime_type>%s</mime_type>"
+        "</blob>"
+        "</field>\n",
+        (unsigned long long)item->blob_size,
+        item->mime_type ? item->mime_type : "application/octet-stream"
+    );
+
+    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "Freeing escaped strings");
+    free(e_name);
+    free(e_file);
+    free(e_path);
+}
 
 
 const char* get_mime_type(const char *filename)

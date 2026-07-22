@@ -106,7 +106,7 @@
 
 #include "OCI_Connection.h"
 #include "OCI_Table_Metadata_Module.h"
-#include "OCI_Execute_Query_Module.h"
+#include "OCI_Execute_Query_Batch_Module.h"
 #include "logger.h"
 
 #ifdef __cplusplus
