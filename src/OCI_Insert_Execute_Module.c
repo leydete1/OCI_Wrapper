@@ -3,13 +3,27 @@
  *
  * Stage 3 - Insert Execute Module
  * --------------------------------
- * Executes a bulk INSERT from a validated <Insert_Template> XML.
+ * Executes a bulk INSERT from an already-validated insert_request_t
+ * (built by Level 1, or by OCI_Audit_Trail_Manager.c directly for the
+ * internal audit-trail insert - both paths converge here).
+ *
+ * level2_validate_insert() is called internally as this function's own
+ * first step, not just trusted to have already run in the caller - so
+ * both the client-facing business insert AND the internal audit-trail
+ * insert get the exact same validation for free, with zero extra code
+ * needed in the audit module. See level2_validate_insert()'s own doc
+ * comment in OCI_Level2_Parser.h for the full check list.
+ *
  * Mirrors execute_query_batch in reverse - same conventions,
  * same logging discipline, same error handling pattern.
  *
  * Internal structure
  * ------------------
- *   parse_insert_xml()        - parse XML into row/field arrays
+ *   build_insert_ctx_from_request() - populate insert_ctx_t from
+ *                                      insert_request_t (replaces the
+ *                                      old parse_insert_xml() - no XML
+ *                                      parsing happens in this file at
+ *                                      all anymore)
  *   build_insert_sql()        - build INSERT INTO ... VALUES (?,?...)
  *   setup_scalar_binds()      - OCIBindByPos + OCIBindArrayOfStruct
  *   handle_blob_insert()      - allocate locator, write file chunked
@@ -32,6 +46,8 @@
 #include "metadata_cache_meta.h"
 #include "OCI_Insert_Execute_Module.h"
 #include "OCI_Insert_Validate_Module.h"
+#include "OCI_Level2_Parser.h"          /* level2_validate_insert()      */
+#include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
 #include "OCI_Transaction_Manager.h"
 #include "XML_Helper.h"
 #include "logger.h"
@@ -71,11 +87,58 @@
 
 /* ------------------------------------------------------------------ */
 /*  Per-field value for one row                                         */
+/*  Named insert_col_value_t (not field_value_t) - this is purely       */
+/*  internal to this file's old XML-string parsing/binding pipeline     */
+/*  (parse_insert_xml/build_insert_sql/setup_scalar_binds), a different */
+/*  shape entirely from the new shared field_value_t in                */
+/*  OCI_Request_Response_Types.h (field_name+value, used by             */
+/*  insert_request_t). The two collided by name once this file's        */
+/*  header started pulling in the new one - renamed rather than         */
+/*  touching the new shared struct, since this one is private to this   */
+/*  file and the new one is shared with Level 1/Level 2/UPDATE.         */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    char value[MAX_COL_VALUE_SIZE];
-    int  is_empty;                   /* 1 = insert_value was empty     */
-} field_value_t;
+    char  value[MAX_COL_VALUE_SIZE];
+    char *large_value;               /* NULL unless value didn't fit -
+                                       * mirrors field_value_t's own
+                                       * large_value in
+                                       * OCI_Request_Response_Types.h,
+                                       * one layer down. Only the CLOB
+                                       * write path (handle_clob_insert)
+                                       * can ever need this - scalar
+                                       * columns are already bounded by
+                                       * their real Oracle column length
+                                       * via level2_validate_insert(),
+                                       * long before this struct exists,
+                                       * and BLOB values arrive as a
+                                       * file path string, never inline
+                                       * content, so neither can
+                                       * realistically exceed
+                                       * MAX_COL_VALUE_SIZE.             */
+    int   is_empty;                   /* 1 = insert_value was empty     */
+} insert_col_value_t;
+
+/* Real value for one insert_col_value_t - see its own large_value
+ * comment above. Mirrors field_value_get() in
+ * OCI_Request_Response_Types.h exactly, one layer down.               */
+static const char *insert_col_value_get(const insert_col_value_t *v)
+{
+    return v->large_value ? v->large_value : v->value;
+}
+
+/* Frees every entry's large_value (a calloc'd array's untouched
+ * entries are already NULL - safe no-ops) before the caller frees
+ * values itself. Needed at every free(ic->values) site now that any
+ * entry - reached or not, on an early-exit path partway through the
+ * row loop - might carry a heap allocation.                           */
+static void free_insert_ctx_values(insert_col_value_t *values,
+                                    int row_count, int col_count)
+{
+    if (!values) return;
+    for (int i = 0; i < row_count * col_count; i++)
+        free(values[i].large_value);
+    free(values);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Parsed insert context - all rows and fields from XML               */
@@ -88,116 +151,59 @@ typedef struct {
     /* col_names[col] */
     char          col_names [MAX_INSERT_COLS][128];
     /* values[row][col] - heap allocated after row/col counts known   */
-    field_value_t *values;   /* [row * MAX_INSERT_COLS + col]         */
+    insert_col_value_t *values;   /* [row * MAX_INSERT_COLS + col]         */
 } insert_ctx_t;
 
 /* ------------------------------------------------------------------ */
-/*  Static helpers                                                      */
+/*  build_insert_ctx_from_request                                       */
+/*  Populates insert_ctx_t directly from an already-parsed              */
+/*  insert_request_t - replaces the old parse_insert_xml(); no XML      */
+/*  parsing happens in this file at all anymore.                        */
+/*                                                                       */
+/*  Column list/order is taken from row 0 - level2_validate_insert()'s   */
+/*  Check 1b already guarantees every row sets the same SET of columns   */
+/*  before this is ever called, but not necessarily in the same ORDER,   */
+/*  so every row's fields are looked up BY NAME against row 0's column   */
+/*  list (not by position) when filling ic->values. This is more         */
+/*  lenient than the old XML-string parser, which assumed position i in  */
+/*  every row's <field> list was the same column - a client sending the  */
+/*  same columns in a different order per row is equally valid now.      */
 /* ------------------------------------------------------------------ */
-static void trim_ins(char *s)
-{
-    if (!s) return;
-    char *p = s;
-    while (*p && isspace((unsigned char)*p)) p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    int len = (int)strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1]))
-    { s[len - 1] = '\0'; len--; }
-}
-
-/* Extract text between <tag> and </tag> - returns 1 on success */
-static int extract_tag_ins(const char *src, const char *tag,
-                            char *dest, size_t dest_max)
-{
-    if (!src || !tag || !dest) return 0;
-    char open [132], close[132];
-    snprintf(open,  sizeof(open),  "<%s>",  tag);
-    snprintf(close, sizeof(close), "</%s>", tag);
-    const char *s = strstr(src, open);
-    if (!s) return 0;
-    s += strlen(open);
-    const char *e = strstr(s, close);
-    if (!e) return 0;
-    size_t len = (size_t)(e - s);
-    if (len >= dest_max) len = dest_max - 1;
-    memcpy(dest, s, len);
-    dest[len] = '\0';
-    trim_ins(dest);
-    return 1;
-}
-
-/* ================================================================== */
-/* ================================================================== */
-/*  parse_insert_xml                                                    */
-/*  Two-pass parse: pass 1 counts rows/cols, allocates exact memory,   */
-/*  pass 2 extracts all values. This avoids the MAX_ROWS*MAX_COLS*32KB  */
-/*  upfront allocation that would require ~163GB.                       */
-/* ================================================================== */
-static int parse_insert_xml(oci_context_t *ctx,
-                              const char    *xml,
-                              insert_ctx_t  *ic)
+static int build_insert_ctx_from_request(oci_context_t          *ctx,
+                                          const insert_request_t *req,
+                                          insert_ctx_t           *ic)
 {
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "Entering parse_insert_xml");
+                 "Entering build_insert_ctx_from_request");
 
     memset(ic, 0, sizeof(*ic));
 
-    /* ---- Table name and owner ---- */
-    if (!extract_tag_ins(xml, "table_name",
-                         ic->table_name, sizeof(ic->table_name)))
+    strncpy(ic->table_name, req->table_name, sizeof(ic->table_name) - 1);
+    strncpy(ic->owner,      req->owner,      sizeof(ic->owner) - 1);
+
+    if (req->row_count <= 0 || !req->rows)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "Missing <table_name> in template XML");
+                     "insert_request_t has no rows");
         return -1;
     }
-    extract_tag_ins(xml, "owner", ic->owner, sizeof(ic->owner));
-
-    logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "table='%s' owner='%s'", ic->table_name, ic->owner);
-
-    /* ================================================================
-     *  Pass 1: Count rows and columns
-     * ================================================================ */
-    int      row_count = 0;
-    int      col_count = 0;
-    const char *cursor = xml;
-
-    while ((cursor = strstr(cursor, "<row ")) != NULL)
-    {
-        if (row_count >= MAX_INSERT_ROWS)
-        {
-            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "Row count exceeds MAX_INSERT_ROWS=%d",
-                         MAX_INSERT_ROWS);
-            return -1;
-        }
-
-        const char *row_end = strstr(cursor, "</row>");
-        if (!row_end) break;
-
-        /* Count fields in first row only */
-        if (row_count == 0)
-        {
-            const char *fp = cursor;
-            while ((fp = strstr(fp, "<field>")) != NULL &&
-                   fp < row_end)
-            {
-                col_count++;
-                fp += 7;
-            }
-        }
-
-        row_count++;
-        cursor = row_end + 6;
-    }
-
-    if (row_count == 0 || col_count == 0)
+    if (req->row_count > MAX_INSERT_ROWS)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "No rows or columns found in template XML");
+                     "row_count=%d exceeds MAX_INSERT_ROWS=%d",
+                     req->row_count, MAX_INSERT_ROWS);
         return -1;
     }
 
+    const insert_row_t *row0 = &req->rows[0];
+    int col_count = row0->field_count;
+
+    if (col_count <= 0)
+    {
+        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                     "Row 1 has no fields");
+        return -1;
+    }
     if (col_count > MAX_INSERT_COLS)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
@@ -206,103 +212,98 @@ static int parse_insert_xml(oci_context_t *ctx,
         return -1;
     }
 
-    logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "Pass 1 complete: rows=%d cols=%d", row_count, col_count);
+    ic->row_count = req->row_count;
+    ic->col_count = col_count;
 
-    /* ================================================================
-     *  Allocate exact memory: rows * cols * sizeof(field_value_t)
-     * ================================================================ */
-    ic->values = calloc((size_t)row_count * col_count,
-                        sizeof(field_value_t));
+    for (int c = 0; c < col_count; c++)
+        strncpy(ic->col_names[c], row0->fields[c].field_name,
+                sizeof(ic->col_names[c]) - 1);
+
+    ic->values = calloc((size_t)ic->row_count * col_count,
+                         sizeof(insert_col_value_t));
     if (!ic->values)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
                      "calloc failed for values array (%d x %d x %zu bytes)",
-                     row_count, col_count, sizeof(field_value_t));
+                     ic->row_count, col_count, sizeof(insert_col_value_t));
         return -1;
     }
 
-    ic->row_count = row_count;
-    ic->col_count = col_count;
-
-    /* ================================================================
-     *  Pass 2: Extract col_names and all insert_value fields
-     * ================================================================ */
-    cursor = xml;
-    int row_idx = 0;
-
-    while ((cursor = strstr(cursor, "<row ")) != NULL)
+    for (int r = 0; r < req->row_count; r++)
     {
-        const char *row_end = strstr(cursor, "</row>");
-        if (!row_end) break;
+        const insert_row_t *row = &req->rows[r];
 
-        size_t row_len = (size_t)(row_end - cursor) + 6;
-        char  *row_buf = malloc(row_len + 1);
-        if (!row_buf)
+        if (row->field_count != col_count)
         {
-            free(ic->values); ic->values = NULL;
-            return -1;
-        }
-        memcpy(row_buf, cursor, row_len);
-        row_buf[row_len] = '\0';
-
-        const char *fp        = row_buf;
-        int         col_idx   = 0;
-
-        while ((fp = strstr(fp, "<field>")) != NULL)
-        {
-            const char *fe = strstr(fp, "</field>");
-            if (!fe || col_idx >= col_count) break;
-
-            size_t flen = (size_t)(fe - fp) + 8;
-            char  *fbuf = malloc(flen + 1);
-            if (!fbuf) { free(row_buf); free(ic->values); ic->values = NULL; return -1; }
-            memcpy(fbuf, fp, flen);
-            fbuf[flen] = '\0';
-
-            /* Extract col_name from first row only */
-            if (row_idx == 0)
-                extract_tag_ins(fbuf, "field_name",
-                                ic->col_names[col_idx],
-                                sizeof(ic->col_names[col_idx]));
-
-            /* Extract insert_value into flat array */
-            field_value_t *fv = &ic->values[row_idx * col_count + col_idx];
-            memset(fv, 0, sizeof(*fv));
-
-            if (!extract_tag_ins(fbuf, "insert_value",
-                                 fv->value, sizeof(fv->value)))
-                fv->value[0] = '\0';
-
-            fv->is_empty = (strlen(fv->value) == 0);
-
-            free(fbuf);
-            col_idx++;
-            fp = fe + 8;
-        }
-
-        if (col_idx != col_count)
-        {
+            /* level2_validate_insert()'s Check 1b should already have
+             * caught this - defense-in-depth, same reasoning as the
+             * row_count/max_bulk_inserts guard right after this
+             * function's caller.                                       */
             logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "Row %d has %d fields, expected %d",
-                         row_idx + 1, col_idx, col_count);
-            free(row_buf);
-            free(ic->values); ic->values = NULL;
+                         "Row %d has %d fields, expected %d (row 1's count) - "
+                         "level2_validate_insert() should have caught this",
+                         r + 1, row->field_count, col_count);
+            free_insert_ctx_values(ic->values, ic->row_count, col_count); ic->values = NULL;
             return -1;
         }
 
-        free(row_buf);
-        row_idx++;
-        cursor = row_end + 6;
+        for (int c = 0; c < col_count; c++)
+        {
+            /* Look up this row's field BY NAME against row 0's column
+             * list - not by position. See this function's own doc
+             * comment for why.                                         */
+            const field_value_t *fv = NULL;
+            for (int f = 0; f < row->field_count; f++)
+            {
+                if (strcasecmp(row->fields[f].field_name, ic->col_names[c]) == 0)
+                {
+                    fv = &row->fields[f];
+                    break;
+                }
+            }
+
+            if (!fv)
+            {
+                /* Same defense-in-depth note as above - Check 1b already
+                 * guarantees this can't happen if Level 2 ran first.    */
+                logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                             "Row %d has no value for column '%s' - "
+                             "level2_validate_insert() should have caught this",
+                             r + 1, ic->col_names[c]);
+                free_insert_ctx_values(ic->values, ic->row_count, col_count); ic->values = NULL;
+                return -1;
+            }
+
+            insert_col_value_t *dest = &ic->values[r * col_count + c];
+            const char *real_value = field_value_get(fv);
+            size_t real_len = strlen(real_value);
+
+            if (real_len < sizeof(dest->value))
+            {
+                strncpy(dest->value, real_value, sizeof(dest->value) - 1);
+                dest->large_value = NULL;
+            }
+            else
+            {
+                /* Doesn't fit even MAX_COL_VALUE_SIZE - mirror
+                 * field_value_t's own overflow handling, one layer
+                 * down. See insert_col_value_t's doc comment.          */
+                dest->large_value = malloc(real_len + 1);
+                if (dest->large_value)
+                    memcpy(dest->large_value, real_value, real_len + 1);
+                strncpy(dest->value, real_value, sizeof(dest->value) - 1);
+                dest->value[sizeof(dest->value) - 1] = '\0';
+            }
+            dest->is_empty = (real_len == 0);
+        }
     }
 
-    /* Fix all flat index accesses to use ic->col_count */
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "parse_insert_xml OK: rows=%d cols=%d "
+                 "build_insert_ctx_from_request OK: rows=%d cols=%d "
                  "allocated=%zu bytes",
                  ic->row_count, ic->col_count,
                  (size_t)ic->row_count * ic->col_count *
-                 sizeof(field_value_t));
+                 sizeof(insert_col_value_t));
     return 0;
 }
 
@@ -312,6 +313,7 @@ static int parse_insert_xml(oci_context_t *ctx,
 /*  functions so Oracle converts the string with the correct format     */
 /*  rather than relying on NLS session settings (avoids ORA-01861).    */
 /* ================================================================== */
+
 
 /* Return SQL conversion wrapper for a given Oracle type.
  * %s will be replaced with the bind placeholder e.g. :1              */
@@ -798,7 +800,7 @@ Cleanup:
 /*  Main Stage-3 entry point. Orchestrates all stages.                 */
 /* ================================================================== */
 int execute_insert_batch(oci_context_t    *ctx,
-                          const char       *template_xml,
+                          insert_request_t *req,
                           execute_config_t *cfg)
 {
     int            rc          = 0;
@@ -819,10 +821,10 @@ int execute_insert_batch(oci_context_t    *ctx,
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "Entering execute_insert_batch");
 
-    if (!ctx || !template_xml || !cfg)
+    if (!ctx || !req || !cfg)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "Invalid arguments: ctx, template_xml or cfg is NULL");
+                     "Invalid arguments: ctx, req or cfg is NULL");
         return -1;
     }
 
@@ -831,7 +833,7 @@ int execute_insert_batch(oci_context_t    *ctx,
     metrics_init(&metrics);
     metrics.start_time_us = metrics_now_us();
     strncpy(metrics.operation, "INSERT", sizeof(metrics.operation) - 1);
-    /* object_name filled after parse_insert_xml() succeeds */
+    /* object_name filled after build_insert_ctx_from_request() succeeds */
     /* Set transaction_id immediately so every write path carries it  */
       if (ctx->active_tx)
           strncpy(metrics.transaction_id,
@@ -842,30 +844,61 @@ int execute_insert_batch(oci_context_t    *ctx,
                   sizeof(metrics.transaction_id) - 1);
       metrics_set_context(&metrics, ctx);
 
+      /* metrics_set_context() unconditionally copies ctx->level1_parse_us/
+       * level2_parse_us - correct for a client-driven request (Test_XML_
+       * Runner.c's dispatcher sets those once per file, timing its own
+       * level1_parse()/level2_validate() calls), but wrong here: if
+       * audit_trail_in_progress is ALREADY 1 when this call begins, this
+       * is OCI_Audit_Trail_Manager.c's own nested execute_insert_batch()
+       * call for the AUDIT_TRAIL row itself - built directly as a C
+       * struct, never touching Level 1/2 at all. Without this, the
+       * audit row's own metrics line reports the OUTER business
+       * insert's parse timing as if it were its own (confirmed via a
+       * real run - every AUDIT_TRAIL metrics row showed identical
+       * level1_parse_us/level2_parse_us to the business insert right
+       * next to it). Doesn't affect correctness of the actual insert or
+       * audit row - only this metrics attribution.                     */
+      if (audit_trail_in_progress)
+      {
+          metrics.level1_parse_us = 0;
+          metrics.level2_parse_us = 0;
+      }
+
 
     /* ================================================================
      *  Stage 1 - Validate all rows
      *  Any validation failure -> abort before touching the database.
+     *  Called internally rather than trusted to have already run in
+     *  the caller - see this file's own top-of-file doc comment for
+     *  why: both the client-facing business insert and the internal
+     *  audit-trail insert (OCI_Audit_Trail_Manager.c) get the exact
+     *  same validation this way, with zero extra code needed there.
      * ================================================================ */
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "Stage 1: Validating all rows");
 
-    char val_error[512] = {0};
-    if (validate_insert_template(ctx, template_xml,
-                                  val_error, sizeof(val_error)) != 0)
+    input_c_operation_t validate_op;
+    memset(&validate_op, 0, sizeof(validate_op));
+    validate_op.type    = OP_INSERT;
+    validate_op.payload = (void *)req;
+
+    operation_status_t val_status;
+    memset(&val_status, 0, sizeof(val_status));
+
+    if (level2_validate_insert(ctx, &validate_op, &val_status) != LEVEL2_OK)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "Stage 1 validation failed: %s", val_error);
+                     "Stage 1 validation failed: %s", val_status.error_text);
         return -1;
     }
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "Stage 1 validation passed");
 
     /* ================================================================
-     *  Stage 2 - Parse XML and prepare statement
+     *  Stage 2 - Build insert context and prepare statement
      * ================================================================ */
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "Stage 2: Parsing XML and preparing statement");
+                 "Stage 2: Building insert context and preparing statement");
 
     ic = calloc(1, sizeof(insert_ctx_t));
     if (!ic)
@@ -876,10 +909,10 @@ int execute_insert_batch(oci_context_t    *ctx,
         goto Cleanup;
     }
 
-    if (parse_insert_xml(ctx, template_xml, ic) != 0)
+    if (build_insert_ctx_from_request(ctx, req, ic) != 0)
     {
         logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "parse_insert_xml failed");
+                     "build_insert_ctx_from_request failed");
         rc = -1;
         goto Cleanup;
     }
@@ -888,7 +921,10 @@ int execute_insert_batch(oci_context_t    *ctx,
             sizeof(metrics.object_name) - 1);
 
 
-    /* ---- Cap row count at max_bulk_inserts ---- */
+    /* ---- Cap row count at max_bulk_inserts ----
+     * Also checked in level2_validate_insert()'s Check 1 above - kept
+     * here too as defense-in-depth, same reasoning as that check's own
+     * doc comment in OCI_Level2_Parser.h.                              */
     int max_batch = ctx->ini->max_bulk_inserts;
     if (max_batch < 1) max_batch = 1;
     if (ic->row_count > max_batch)
@@ -1112,7 +1148,7 @@ int execute_insert_batch(oci_context_t    *ctx,
             for (int r = 0; r < batch_rows; r++)
             {
                 int row_idx = row_base + r;
-                const field_value_t *fv = &ic->values[row_idx * ic->col_count + c];
+                const insert_col_value_t *fv = &ic->values[row_idx * ic->col_count + c];
                 char *slot = scalar_bufs[c] + ((size_t)r * buf_size);
                 int   ind_idx = r;
 
@@ -1230,7 +1266,7 @@ int execute_insert_batch(oci_context_t    *ctx,
                                        ic->col_names[bc]) == 0)
                         { btype = cols[m].data_type; break; }
 
-                    const field_value_t *fv =
+                    const insert_col_value_t *fv =
                         &ic->values[row_base * ic->col_count + bc];
                     if (fv->is_empty) continue;
 
@@ -1255,7 +1291,7 @@ int execute_insert_batch(oci_context_t    *ctx,
                     {
                         if (handle_clob_insert(ctx, ic->col_names[bc],
                                                btype, tbl_fq, rowid_str,
-                                               fv->value, 0,
+                                               insert_col_value_get(fv), 0,
                                                &clob_bytes) != 0)
                         {
                             logger_write(ctx->insert_logger, LOG_ERROR,
@@ -1366,30 +1402,70 @@ int execute_insert_batch(oci_context_t    *ctx,
     }
 
     /* ================================================================
-     *  Stage 5 - Build result XML
+     *  Stage 5 - Build result response
+     *  Uses response_write_dml_xml()/response_write_dml_json() -
+     *  OCI_Response_Writer.c's first writers for anything other than a
+     *  SELECT resultset, added as part of this refactor. This closes
+     *  the "INSERT doesn't render a JSON response yet" gap that used
+     *  to sit in this function's Cleanup block - cfg->OUTPUT_JSON is
+     *  now genuinely populated when requested, not a silent XML
+     *  fallback.
      * ================================================================ */
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "Stage 5: Building result XML");
+                 "Stage 5: Building result response");
 
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
     double elapsed =
         (ts_end.tv_sec  - ts_start.tv_sec) +
         (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
 
+    dml_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    strncpy(resp.table_name, ic->table_name, sizeof(resp.table_name) - 1);
+    strncpy(resp.owner,      ic->owner,      sizeof(resp.owner) - 1);
+    resp.rows_affected          = rows_inserted;
+    resp.lobs_written           = lob_count;
+    resp.execution_time_seconds = elapsed;
+    /* sql_query / resultset_xml_fragment stay NULL - SELECT-only per
+     * dml_response_t's own doc comment.                                */
+
+    char *dml_xml_fragment = response_write_dml_xml(ctx, OP_INSERT, &resp);
+    if (!dml_xml_fragment)
+    {
+        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                     "response_write_dml_xml returned NULL");
+        rc = -1;
+        goto Cleanup;
+    }
+
     xml = xml_create(4096);
-    if (!xml) { rc = -1; goto Cleanup; }
+    if (!xml) { free(dml_xml_fragment); rc = -1; goto Cleanup; }
 
     xml_start_document(xml);
     xml_start_execution(xml);
-    xml_append(xml, "<operation>INSERT</operation>\n");
-    xml_append(xml, "<table_name>%s</table_name>\n", ic->table_name);
-    xml_append(xml, "<owner>%s</owner>\n",           ic->owner);
-    xml_append(xml, "<rows_inserted>%d</rows_inserted>\n", rows_inserted);
-    xml_append(xml, "<lobs_written>%d</lobs_written>\n",   lob_count);
-    xml_append(xml, "<execution_time>%.6f</execution_time>\n", elapsed);
-    xml_append(xml, "<execute_batch_size>%d</execute_batch_size>\n",execute_count);
+    /* xml_append_raw(), not xml_append(xml,"%s",...) - the latter
+     * formats into a fixed 8192-byte stack buffer and silently
+     * corrupts anything longer (see the 2026-07-22 fix in
+     * OCI_Execute_Query_Batch_Module.c for the exact failure mode).
+     * This fragment is small today, but there's no reason to
+     * reintroduce that risk here for the sake of consistency.         */
+    xml_append_raw(xml, dml_xml_fragment);
     xml_end_execution(xml);
     xml_finalize(xml);
+    free(dml_xml_fragment);
+
+    /* cfg->OUTPUT_JSON's own doc comment in OCI_Connection.h: "set
+     * only when ReturnFormat is JSON. NULL otherwise." - only render
+     * JSON when actually requested, not unconditionally.               */
+    if (cfg->ReturnFormat && strcasecmp(cfg->ReturnFormat, "JSON") == 0)
+    {
+        cfg->OUTPUT_JSON = response_write_dml_json(ctx, OP_INSERT, &resp);
+        if (!cfg->OUTPUT_JSON)
+            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                         "response_write_dml_json returned NULL - "
+                         "OUTPUT_JSON will be missing for this JSON-format request");
+    }
+
     metrics.end_time_us      = metrics_now_us();
     metrics.status_code      = 0;
     metrics.rows_affected    = ic->row_count;
@@ -1454,9 +1530,13 @@ Cleanup:
 	//printf("DEBUG : ctx->ini->metrics_display_output_response=%d\n",ctx->ini->metrics_display_output_response);
 	if (ctx->ini && ctx->ini->metrics_display_output_response)
 	{
-	    /* INSERT doesn't render a JSON response yet (only the SELECT
-	     * batch path does) - this is a no-op fallback to XML until it
-	     * does, kept consistent with the other execute modules.       */
+	    /* INSERT now renders a real JSON response too (Stage 5 above,
+	     * via response_write_dml_json()) when cfg->ReturnFormat is
+	     * JSON - cfg->OUTPUT_JSON is genuinely populated in that case,
+	     * not a placeholder. This check's own logic didn't need to
+	     * change - it already preferred OUTPUT_JSON when present and
+	     * fell back to XML otherwise; it was only ever falling back
+	     * because OUTPUT_JSON was never actually set before now.       */
 	    int is_json = (cfg->ReturnFormat &&
 	                   strcasecmp(cfg->ReturnFormat, "JSON") == 0);
 
@@ -1538,7 +1618,7 @@ Cleanup:
     if (bind_hdls)  { free(bind_hdls);  bind_hdls  = NULL; }
     if (ic)
     {
-        if (ic->values) { free(ic->values); ic->values = NULL; }
+        if (ic->values) { free_insert_ctx_values(ic->values, ic->row_count, ic->col_count); ic->values = NULL; }
         free(ic);
         ic = NULL;
     }

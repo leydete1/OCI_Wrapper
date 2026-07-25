@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 6 - Validation failure
+ VARCHAR2_COL value exceeds the column's actual length (100).
+ Level 2 validation must catch this BEFORE any OCI call, resolving the
+ real column metadata itself via metadata_cache - the client no longer
+ sends field_length/field_nullable/etc. on the request at all (see
+ field_value_t design note in Data_Manager_Request_Definitions.docx).
+ Watch log for the Level 2 validation failure - no OCI calls after.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_6</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>999</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>
+                THIS VALUE IS DELIBERATELY TOO LONG -
+                AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+                </value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

@@ -13,6 +13,11 @@
 #include <ctype.h>
 
 #include "OCI_Level1_Parser.h"
+#include "OCI_Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
+#include "OCI_Update_Execute_Module.h"   /* update_request_t - where_key_t/
+                                            field_value_t come via
+                                            OCI_Request_Response_Types.h,
+                                            already pulled in above       */
 #include "logger.h"
 
 #include <libxml/parser.h>
@@ -91,17 +96,57 @@ static void trim_inplace(char *s)
 }
 
 /*
+ * set_field_value()
+ *
+ * Sets fv->value (and fv->large_value if needed) from a NUL-terminated
+ * source string of any length - see field_value_t's own doc comment in
+ * OCI_Request_Response_Types.h for why this exists: CLOB values,
+ * client-supplied or otherwise, routinely exceed value[]'s 4096 bytes.
+ * src should already be trimmed by the caller if trimming applies
+ * (XML text nodes; JSON string values need no such trimming).
+ */
+static void set_field_value(field_value_t *fv, const char *src)
+{
+    size_t len = strlen(src);
+
+    if (len < sizeof(fv->value))
+    {
+        strncpy(fv->value, src, sizeof(fv->value) - 1);
+        fv->value[sizeof(fv->value) - 1] = '\0';
+        fv->large_value = NULL;
+        return;
+    }
+
+    fv->large_value = malloc(len + 1);
+    if (fv->large_value)
+    {
+        memcpy(fv->large_value, src, len + 1);
+    }
+    /* value[] holds a truncated preview either way - the real value
+     * for anything downstream is field_value_get(fv), which falls
+     * back to value[] if the malloc above failed rather than losing
+     * the field entirely.                                              */
+    strncpy(fv->value, src, sizeof(fv->value) - 1);
+    fv->value[sizeof(fv->value) - 1] = '\0';
+}
+
+/*
  * build_payload_xml() / build_payload_json()
  *
  * Builds the concrete per-operation payload struct for operation types
- * Level 1 knows how to extract today. Only OP_SELECT is implemented -
- * everything else returns NULL (payload stays unset) until Level 1 is
- * extended for that operation type, same as before this change.
+ * Level 1 knows how to extract today. OP_SELECT and OP_INSERT are
+ * implemented; everything else returns NULL (payload stays unset)
+ * until Level 1 is extended for that operation type.
  *
  * max_rows/fetch_batch_size are left 0 deliberately - select_request_t's
  * own doc comment says 0 means "use ctx->ini->query_max_record_count /
  * query_fetch_batch_size", so Level 2 (or execute_query_batch() itself)
  * resolves the real default rather than Level 1 guessing at one.
+ *
+ * insert_request_t.row_count is intentionally NOT capped against
+ * ctx->ini->max_bulk_inserts here - Level 1 only extracts what's on the
+ * wire; the cap is Level 2's job to check and reject early, per
+ * Data_Manager_Request_Definitions.docx.
  */
 static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
 {
@@ -132,6 +177,269 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
             req->include_column_names  = 1;
             return req;
         }
+        case OP_INSERT:
+        {
+            insert_request_t *req = calloc(1, sizeof(insert_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"table_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->table_name, (const char *)content, sizeof(req->table_name) - 1);
+                        trim_inplace(req->table_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+            }
+
+            /* Count <row> elements first so we allocate exactly once -
+             * same two-pass approach used for <transaction>'s <operation>
+             * count above.                                                */
+            int row_count = 0;
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+                if (child->type == XML_ELEMENT_NODE &&
+                    xmlStrcmp(child->name, (const xmlChar *)"row") == 0)
+                    row_count++;
+
+            if (row_count > 0)
+            {
+                req->rows = calloc((size_t)row_count, sizeof(insert_row_t));
+                if (!req->rows) { free(req); return NULL; }
+            }
+            req->row_count = row_count;
+
+            int row_idx = 0;
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE ||
+                    xmlStrcmp(child->name, (const xmlChar *)"row") != 0)
+                    continue;
+
+                insert_row_t *row = &req->rows[row_idx++];
+
+                /* row number="N" attribute is human-readable only - rows
+                 * are processed in document order, matching insert_row_t's
+                 * own doc comment.                                        */
+
+                int field_count = 0;
+                for (xmlNodePtr f = child->children; f; f = f->next)
+                    if (f->type == XML_ELEMENT_NODE &&
+                        xmlStrcmp(f->name, (const xmlChar *)"field") == 0)
+                        field_count++;
+
+                if (field_count > 0)
+                {
+                    row->fields = calloc((size_t)field_count, sizeof(field_value_t));
+                    if (!row->fields) continue;   /* leaves this row empty; Level 2 will reject */
+                }
+                row->field_count = field_count;
+
+                int field_idx = 0;
+                for (xmlNodePtr f = child->children; f; f = f->next)
+                {
+                    if (f->type != XML_ELEMENT_NODE ||
+                        xmlStrcmp(f->name, (const xmlChar *)"field") != 0)
+                        continue;
+
+                    field_value_t *fv = &row->fields[field_idx++];
+
+                    for (xmlNodePtr fc = f->children; fc; fc = fc->next)
+                    {
+                        if (fc->type != XML_ELEMENT_NODE) continue;
+
+                        if (xmlStrcmp(fc->name, (const xmlChar *)"field_name") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                strncpy(fv->field_name, (const char *)content, sizeof(fv->field_name) - 1);
+                                trim_inplace(fv->field_name);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(fc->name, (const xmlChar *)"value") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                trim_inplace((char *)content);
+                                set_field_value(fv, (const char *)content);
+                            }
+                            xmlFree(content);
+                        }
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_UPDATE:
+        {
+            update_request_t *req = calloc(1, sizeof(update_request_t));
+            if (!req) return NULL;
+
+            xmlNodePtr where_node = NULL;
+            xmlNodePtr set_node   = NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"table_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->table_name, (const char *)content, sizeof(req->table_name) - 1);
+                        trim_inplace(req->table_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"where") == 0)
+                    where_node = child;
+                else if (xmlStrcmp(child->name, (const xmlChar *)"set") == 0)
+                    set_node = child;
+            }
+
+            /* ---- <where><key>...</key></where> - AND'd together ---- */
+            if (where_node)
+            {
+                int key_count = 0;
+                for (xmlNodePtr k = where_node->children; k; k = k->next)
+                    if (k->type == XML_ELEMENT_NODE &&
+                        xmlStrcmp(k->name, (const xmlChar *)"key") == 0)
+                        key_count++;
+
+                if (key_count > 0)
+                {
+                    req->keys = calloc((size_t)key_count, sizeof(where_key_t));
+                    if (!req->keys) { free(req); return NULL; }
+                }
+                req->key_count = key_count;
+
+                int key_idx = 0;
+                for (xmlNodePtr k = where_node->children; k; k = k->next)
+                {
+                    if (k->type != XML_ELEMENT_NODE ||
+                        xmlStrcmp(k->name, (const xmlChar *)"key") != 0)
+                        continue;
+
+                    where_key_t *wk = &req->keys[key_idx++];
+
+                    for (xmlNodePtr kc = k->children; kc; kc = kc->next)
+                    {
+                        if (kc->type != XML_ELEMENT_NODE) continue;
+
+                        if (xmlStrcmp(kc->name, (const xmlChar *)"field_name") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->field_name, (const char *)content, sizeof(wk->field_name) - 1);
+                                trim_inplace(wk->field_name);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(kc->name, (const xmlChar *)"key_value") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->key_value, (const char *)content, sizeof(wk->key_value) - 1);
+                                trim_inplace(wk->key_value);
+                            }
+                            xmlFree(content);
+                        }
+                    }
+                }
+            }
+
+            /* ---- <set><field>...</field></set> - no per-row concept,
+             * a single flat SET list applied to however many rows the
+             * WHERE clause matches. Same <field><field_name>/<value>
+             * shape as INSERT's rows[].fields[], reusing field_value_t
+             * directly - see update_request_t's own doc comment in
+             * OCI_Update_Execute_Module.h.                              */
+            if (set_node)
+            {
+                int field_count = 0;
+                for (xmlNodePtr f = set_node->children; f; f = f->next)
+                    if (f->type == XML_ELEMENT_NODE &&
+                        xmlStrcmp(f->name, (const xmlChar *)"field") == 0)
+                        field_count++;
+
+                if (field_count > 0)
+                {
+                    req->fields = calloc((size_t)field_count, sizeof(field_value_t));
+                    if (!req->fields) { free(req->keys); free(req); return NULL; }
+                }
+                req->field_count = field_count;
+
+                int field_idx = 0;
+                for (xmlNodePtr f = set_node->children; f; f = f->next)
+                {
+                    if (f->type != XML_ELEMENT_NODE ||
+                        xmlStrcmp(f->name, (const xmlChar *)"field") != 0)
+                        continue;
+
+                    field_value_t *fv = &req->fields[field_idx++];
+
+                    for (xmlNodePtr fc = f->children; fc; fc = fc->next)
+                    {
+                        if (fc->type != XML_ELEMENT_NODE) continue;
+
+                        if (xmlStrcmp(fc->name, (const xmlChar *)"field_name") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                strncpy(fv->field_name, (const char *)content, sizeof(fv->field_name) - 1);
+                                trim_inplace(fv->field_name);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(fc->name, (const xmlChar *)"value") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                trim_inplace((char *)content);
+                                set_field_value(fv, (const char *)content);
+                            }
+                            xmlFree(content);
+                        }
+                    }
+                }
+            }
+
+            return req;
+        }
         default:
             return NULL;
     }
@@ -158,14 +466,135 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
             req->include_column_names  = 1;
             return req;
         }
+        case OP_INSERT:
+        {
+            insert_request_t *req = calloc(1, sizeof(insert_request_t));
+            if (!req) return NULL;
+
+            cJSON *table_name = cJSON_GetObjectItemCaseSensitive(op_json, "table_name");
+            if (cJSON_IsString(table_name) && table_name->valuestring)
+                strncpy(req->table_name, table_name->valuestring, sizeof(req->table_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *rows = cJSON_GetObjectItemCaseSensitive(op_json, "rows");
+            int row_count = cJSON_IsArray(rows) ? cJSON_GetArraySize(rows) : 0;
+
+            if (row_count > 0)
+            {
+                req->rows = calloc((size_t)row_count, sizeof(insert_row_t));
+                if (!req->rows) { free(req); return NULL; }
+            }
+            req->row_count = row_count;
+
+            for (int r = 0; r < row_count; r++)
+            {
+                cJSON *row_json = cJSON_GetArrayItem(rows, r);
+                insert_row_t *row = &req->rows[r];
+
+                /* row_number key (if present) is human-readable only,
+                 * same as the XML "number" attribute - rows are processed
+                 * in array order.                                        */
+
+                cJSON *fields = cJSON_GetObjectItemCaseSensitive(row_json, "fields");
+                int field_count = cJSON_IsArray(fields) ? cJSON_GetArraySize(fields) : 0;
+
+                if (field_count > 0)
+                {
+                    row->fields = calloc((size_t)field_count, sizeof(field_value_t));
+                    if (!row->fields) continue;   /* leaves this row empty; Level 2 will reject */
+                }
+                row->field_count = field_count;
+
+                for (int f = 0; f < field_count; f++)
+                {
+                    cJSON *field_json = cJSON_GetArrayItem(fields, f);
+                    field_value_t *fv = &row->fields[f];
+
+                    cJSON *fname = cJSON_GetObjectItemCaseSensitive(field_json, "field_name");
+                    if (cJSON_IsString(fname) && fname->valuestring)
+                        strncpy(fv->field_name, fname->valuestring, sizeof(fv->field_name) - 1);
+
+                    cJSON *fvalue = cJSON_GetObjectItemCaseSensitive(field_json, "value");
+                    if (cJSON_IsString(fvalue) && fvalue->valuestring)
+                        set_field_value(fv, fvalue->valuestring);
+                }
+            }
+
+            return req;
+        }
+        case OP_UPDATE:
+        {
+            update_request_t *req = calloc(1, sizeof(update_request_t));
+            if (!req) return NULL;
+
+            cJSON *table_name = cJSON_GetObjectItemCaseSensitive(op_json, "table_name");
+            if (cJSON_IsString(table_name) && table_name->valuestring)
+                strncpy(req->table_name, table_name->valuestring, sizeof(req->table_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            /* ---- "where": [ {field_name, key_value}, ... ] ---- */
+            cJSON *where = cJSON_GetObjectItemCaseSensitive(op_json, "where");
+            int key_count = cJSON_IsArray(where) ? cJSON_GetArraySize(where) : 0;
+
+            if (key_count > 0)
+            {
+                req->keys = calloc((size_t)key_count, sizeof(where_key_t));
+                if (!req->keys) { free(req); return NULL; }
+            }
+            req->key_count = key_count;
+
+            for (int k = 0; k < key_count; k++)
+            {
+                cJSON *key_json = cJSON_GetArrayItem(where, k);
+                where_key_t *wk = &req->keys[k];
+
+                cJSON *fname = cJSON_GetObjectItemCaseSensitive(key_json, "field_name");
+                if (cJSON_IsString(fname) && fname->valuestring)
+                    strncpy(wk->field_name, fname->valuestring, sizeof(wk->field_name) - 1);
+
+                cJSON *kvalue = cJSON_GetObjectItemCaseSensitive(key_json, "key_value");
+                if (cJSON_IsString(kvalue) && kvalue->valuestring)
+                    strncpy(wk->key_value, kvalue->valuestring, sizeof(wk->key_value) - 1);
+            }
+
+            /* ---- "set": [ {field_name, value}, ... ] - no per-row
+             * concept, same field_value_t shape as INSERT's fields[].  */
+            cJSON *set = cJSON_GetObjectItemCaseSensitive(op_json, "set");
+            int field_count = cJSON_IsArray(set) ? cJSON_GetArraySize(set) : 0;
+
+            if (field_count > 0)
+            {
+                req->fields = calloc((size_t)field_count, sizeof(field_value_t));
+                if (!req->fields) { free(req->keys); free(req); return NULL; }
+            }
+            req->field_count = field_count;
+
+            for (int f = 0; f < field_count; f++)
+            {
+                cJSON *field_json = cJSON_GetArrayItem(set, f);
+                field_value_t *fv = &req->fields[f];
+
+                cJSON *fname = cJSON_GetObjectItemCaseSensitive(field_json, "field_name");
+                if (cJSON_IsString(fname) && fname->valuestring)
+                    strncpy(fv->field_name, fname->valuestring, sizeof(fv->field_name) - 1);
+
+                cJSON *fvalue = cJSON_GetObjectItemCaseSensitive(field_json, "value");
+                if (cJSON_IsString(fvalue) && fvalue->valuestring)
+                    set_field_value(fv, fvalue->valuestring);
+            }
+
+            return req;
+        }
         default:
             return NULL;
     }
 }
-
-/* ------------------------------------------------------------------ */
-/*  XML path                                                             */
-/* ------------------------------------------------------------------ */
 static int parse_xml(oci_context_t *ctx, const char *buf, size_t len,
                       input_c_request_t *out, operation_status_t *error_detail)
 {
@@ -469,13 +898,54 @@ void level1_free_request(input_c_request_t *request)
 
     for (int i = 0; i < request->operation_count; i++)
     {
-        /* select_request_t has no nested allocations - a flat free() is
-         * correct today. Types with nested arrays (insert_request_t's
-         * rows, update_request_t's keys/fields, etc.) will need their
-         * own type-aware free logic here once Level 1 builds those
-         * payloads too - a flat free() would leak the nested
-         * allocations for those.                                        */
-        free(request->operations[i].payload);
+        input_c_operation_t *op = &request->operations[i];
+
+        switch (op->type)
+        {
+            case OP_INSERT:
+            {
+                insert_request_t *req = (insert_request_t *)op->payload;
+                if (req)
+                {
+                    for (int r = 0; r < req->row_count; r++)
+                    {
+                        /* Free each field's large_value overflow, if
+                         * any, before freeing the fields array itself -
+                         * see field_value_t's own doc comment in
+                         * OCI_Request_Response_Types.h.                 */
+                        for (int f = 0; f < req->rows[r].field_count; f++)
+                            free(req->rows[r].fields[f].large_value);
+                        free(req->rows[r].fields);
+                    }
+                    free(req->rows);
+                }
+                free(req);
+                break;
+            }
+
+            case OP_UPDATE:
+            {
+                update_request_t *req = (update_request_t *)op->payload;
+                if (req)
+                {
+                    /* fields[] is a flat SET list (no per-row nesting,
+                     * unlike INSERT's rows[].fields[]) - same large_value
+                     * overflow freeing, one level shallower.             */
+                    for (int f = 0; f < req->field_count; f++)
+                        free(req->fields[f].large_value);
+                    free(req->fields);
+                    free(req->keys);
+                }
+                free(req);
+                break;
+            }
+
+            default:
+                /* select_request_t, and any other type with no nested
+                 * allocations, is correctly freed by a flat free().        */
+                free(op->payload);
+                break;
+        }
     }
 
     free(request->operations);

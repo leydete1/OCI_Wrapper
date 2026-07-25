@@ -39,6 +39,7 @@
 #include "OCI_Connection.h"
 #include "OCI_Resultset_Types.h"
 #include "resultset_cache.h"
+#include "OCI_Request_Response_Types.h"   /* dml_response_t, operation_type_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -140,6 +141,65 @@ int response_writer_cache_store(oci_context_t       *ctx,
                                  uint64_t             row_count,
                                  cache_entry_opts_t  *opts,
                                  char               **out_json);
+
+/*
+ * response_write_dml_xml() / response_write_dml_json()
+ *
+ * Renders a dml_response_t (see OCI_Request_Response_Types.h) into a
+ * heap-allocated XML/JSON string - the first response writers for
+ * anything other than a SELECT resultset, added as part of Stage 3's
+ * execute_insert_batch() refactor. UPDATE/DELETE will use the exact
+ * same two functions once their own Stage 3 work reaches this point -
+ * that's the whole reason dml_response_t is one shared struct rather
+ * than three near-duplicates (see its own doc comment).
+ *
+ * op_type selects the tag/key name used for resp->rows_affected, per
+ * dml_response_t's own doc comment: the field is generic, but the
+ * wire name differs by operation, matching what execute_query_batch()
+ * /execute_insert_batch() have always emitted (rows_inserted/
+ * rows_updated/rows_deleted) rather than introducing a new generic
+ * name that would break compatibility with existing consumers of
+ * these XML documents:
+ *   OP_SELECT -> not applicable (SELECT's response is its own
+ *                <resultset> shape via response_write_xml/json above,
+ *                not dml_response_t - passing OP_SELECT here is a
+ *                caller error, not a supported case)
+ *   OP_INSERT -> rows_inserted
+ *   OP_UPDATE -> rows_updated
+ *   OP_DELETE -> rows_deleted
+ *
+ * resp->sql_query / resp->resultset_xml_fragment are ignored - those
+ * two fields are SELECT-only per dml_response_t's doc comment, and
+ * SELECT doesn't render through this writer at all (see above).
+ *
+ * Output shape (XML):
+ *   <operation>INSERT</operation>
+ *   <table_name>...</table_name>
+ *   <owner>...</owner>
+ *   <rows_inserted>N</rows_inserted>
+ *   <lobs_written>N</lobs_written>
+ *   <execution_time>%.6f</execution_time>
+ *
+ * Output shape (JSON) - same fields, snake_case keys, rows_affected/
+ * lobs_written/execution_time as real JSON numbers (unlike resultset
+ * field values, these are operation metadata/counts, not opaque
+ * database column values needing exact-string preservation, so there's
+ * no equivalent reason to keep them as strings):
+ *   { "operation": "INSERT", "table_name": "...", "owner": "...",
+ *     "rows_inserted": N, "lobs_written": N, "execution_time": %.6f }
+ *
+ * Deliberately does NOT include execute_batch_size (an old, execute-
+ * insert-batch-internal implementation detail present in the old
+ * inline XML) - not part of dml_response_t, and not part of the
+ * client-facing contract going forward.
+ *
+ * Returns a malloc'd string the caller must free(), or NULL if resp is
+ * NULL or op_type is OP_SELECT.
+ */
+char *response_write_dml_xml (oci_context_t *ctx, operation_type_t op_type,
+                               const dml_response_t *resp);
+char *response_write_dml_json(oci_context_t *ctx, operation_type_t op_type,
+                               const dml_response_t *resp);
 
 #ifdef __cplusplus
 }

@@ -189,3 +189,82 @@ int response_writer_cache_store(oci_context_t       *ctx,
     *out_json = json_str;
     return 0;
 }
+
+/* rows_affected's wire tag/key name differs by operation - see this
+ * pair's own doc comment in OCI_Response_Writer.h for why. Returns
+ * NULL for OP_SELECT (not a supported case for this writer) or any
+ * other unrecognised type, which the two functions below both treat
+ * as "refuse to render" rather than guessing at a name.               */
+static const char *rows_affected_tag_name(operation_type_t op_type)
+{
+    switch (op_type)
+    {
+        case OP_INSERT: return "rows_inserted";
+        case OP_UPDATE: return "rows_updated";
+        case OP_DELETE: return "rows_deleted";
+        default:        return NULL;
+    }
+}
+
+char *response_write_dml_xml(oci_context_t *ctx, operation_type_t op_type,
+                              const dml_response_t *resp)
+{
+    (void)ctx;   /* signature parity with response_write_xml() / future use */
+
+    if (!resp) return NULL;
+
+    const char *rows_tag = rows_affected_tag_name(op_type);
+    if (!rows_tag) return NULL;
+
+    xml_builder_t *xml = xml_create(1024);
+    if (!xml) return NULL;
+
+    const char *op_name =
+        op_type == OP_INSERT ? "INSERT" :
+        op_type == OP_UPDATE ? "UPDATE" :
+        op_type == OP_DELETE ? "DELETE" : "?";
+
+    xml_append(xml, "<operation>%s</operation>\n", op_name);
+    xml_append(xml, "<table_name>%s</table_name>\n", resp->table_name);
+    xml_append(xml, "<owner>%s</owner>\n", resp->owner);
+    xml_append(xml, "<%s>%d</%s>\n", rows_tag, resp->rows_affected, rows_tag);
+    xml_append(xml, "<lobs_written>%d</lobs_written>\n", resp->lobs_written);
+    xml_append(xml, "<execution_time>%.6f</execution_time>\n",
+               resp->execution_time_seconds);
+
+    char *result = xml->buffer ? strdup(xml->buffer) : NULL;
+    xml_free(xml);
+
+    return result;
+}
+
+char *response_write_dml_json(oci_context_t *ctx, operation_type_t op_type,
+                               const dml_response_t *resp)
+{
+    (void)ctx;   /* signature parity with response_write_json() / future use */
+
+    if (!resp) return NULL;
+
+    const char *rows_key = rows_affected_tag_name(op_type);
+    if (!rows_key) return NULL;
+
+    const char *op_name =
+        op_type == OP_INSERT ? "INSERT" :
+        op_type == OP_UPDATE ? "UPDATE" :
+        op_type == OP_DELETE ? "DELETE" : "?";
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+
+    cJSON_AddStringToObject(root, "operation",   op_name);
+    cJSON_AddStringToObject(root, "table_name",  resp->table_name);
+    cJSON_AddStringToObject(root, "owner",       resp->owner);
+    cJSON_AddNumberToObject(root, rows_key,      resp->rows_affected);
+    cJSON_AddNumberToObject(root, "lobs_written", resp->lobs_written);
+    cJSON_AddNumberToObject(root, "execution_time", resp->execution_time_seconds);
+
+    char *result = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    return result;
+}

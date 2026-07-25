@@ -4,21 +4,27 @@
  *
  * Stage 3 - Update Execute Module
  * --------------------------------
- * Executes a bulk UPDATE from a validated <Update_Template> XML.
- * Mirrors OCI_Insert_Execute_Module in structure and conventions.
+ * Executes a bulk UPDATE from an already-validated update_request_t
+ * (built by Level 1). Mirrors OCI_Insert_Execute_Module in structure
+ * and conventions.
+ *
+ * level2_validate_update() is called internally as this function's own
+ * first step, not just trusted to have already run in the caller -
+ * same reasoning as execute_insert_batch(), see its own doc comment in
+ * OCI_Insert_Execute_Module.h.
  *
  * Key differences from insert:
- *   - XML contains a <where> block with <key_field> entries.
- *   - SET columns  = <row> fields (the update values).
- *   - WHERE columns = <where> key_fields (identify rows to update).
+ *   - update_request_t.keys[] (where_key_t) identifies rows to update;
+ *     update_request_t.fields[] (field_value_t) is the SET clause - no
+ *     per-row concept, unlike INSERT's rows[].
  *   - SQL: UPDATE owner.table SET col=:1,... WHERE key=:N,...
  *   - BLOB/CLOB in SET: same EMPTY_BLOB()/EMPTY_CLOB() +
  *     SELECT FOR UPDATE pattern as insert.
  *   - WHERE key columns always bind as SQLT_STR scalars.
  *
  * Reuses:
- *   - OCI_Insert_Validate_Module  (Stage 2 validation unchanged)
- *   - OCI_Table_Metadata_Module   (get_request_metadata)
+ *   - OCI_Insert_Validate_Module  (validate_field() - same type rules)
+ *   - OCI_Table_Metadata_Module   (metadata_cache_get_or_fetch)
  *   - handle_blob_update / handle_clob_update (identical logic to
  *     insert counterparts, renamed for clarity)
  */
@@ -40,6 +46,8 @@
 
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Insert_Validate_Module.h"
+#include "OCI_Level2_Parser.h"          /* level2_validate_update()      */
+#include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
 #include "OCI_Audit_Trail_Manager.h"
 #include "XML_Helper.h"
 #include "logger.h"
@@ -78,11 +86,26 @@
 
 /* ------------------------------------------------------------------ */
 /*  Per-field value                                                     */
+/*  large_value mirrors field_value_t's own overflow handling in         */
+/*  OCI_Request_Response_Types.h, one layer down - only the CLOB SET     */
+/*  write path (handle_clob_update) can ever need this; scalar columns   */
+/*  are already bounded by their real Oracle column length via           */
+/*  level2_validate_update(), and BLOB values arrive as a file path      */
+/*  string, never inline content, so neither can realistically exceed    */
+/*  MAX_COL_VALUE_SIZE. See upd_field_value_get() below.                  */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    char value[MAX_COL_VALUE_SIZE];
-    int  is_empty;
+    char  value[MAX_COL_VALUE_SIZE];
+    char *large_value;
+    int   is_empty;
 } upd_field_value_t;
+
+/* Real value for one upd_field_value_t - see its own large_value        */
+/* comment above.                                                        */
+static const char *upd_field_value_get(const upd_field_value_t *v)
+{
+    return v->large_value ? v->large_value : v->value;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Parsed WHERE key field                                              */
@@ -107,258 +130,123 @@ typedef struct {
     upd_key_field_t   keys[MAX_UPD_KEY_COLS];
 } update_ctx_t;
 
-/* ------------------------------------------------------------------ */
-/*  Static helpers                                                      */
-/* ------------------------------------------------------------------ */
-static void trim_upd(char *s)
+/* Frees every entry's large_value (a calloc'd array's untouched
+ * entries are already NULL - safe no-ops) before the caller frees
+ * values itself - same reasoning as free_insert_ctx_values() in
+ * OCI_Insert_Execute_Module.c.                                        */
+static void free_update_ctx_values(upd_field_value_t *values, int count)
 {
-    if (!s) return;
-    char *p = s;
-    while (*p && isspace((unsigned char)*p)) p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    int len = (int)strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1]))
-    { s[len - 1] = '\0'; len--; }
+    if (!values) return;
+    for (int i = 0; i < count; i++)
+        free(values[i].large_value);
+    free(values);
 }
 
-static int extract_tag_upd(const char *src, const char *tag,
-                             char *dest, size_t dest_max)
-{
-    char open[132], close[132];
-    snprintf(open,  sizeof(open),  "<%s>",  tag);
-    snprintf(close, sizeof(close), "</%s>", tag);
-    const char *s = strstr(src, open);
-    if (!s) return 0;
-    s += strlen(open);
-    const char *e = strstr(s, close);
-    if (!e) return 0;
-    size_t len = (size_t)(e - s);
-    if (len >= dest_max) len = dest_max - 1;
-    memcpy(dest, s, len);
-    dest[len] = '\0';
-    trim_upd(dest);
-    return 1;
-}
-
-/* ================================================================== */
-/*  parse_update_xml                                                    */
-/*  Two-pass parse: count rows/cols, allocate, then extract values.   */
-/*  Also parses <where> key fields.                                    */
-/* ================================================================== */
-static int parse_update_xml(oci_context_t *ctx,
-                              const char    *xml,
-                              update_ctx_t  *uc)
+/* ------------------------------------------------------------------ */
+/*  build_update_ctx_from_request                                       */
+/*  Populates update_ctx_t directly from an already-parsed               */
+/*  update_request_t - replaces the old parse_update_xml(); no XML       */
+/*  parsing happens in this file at all any more.                        */
+/*                                                                         */
+/*  Always exactly one logical "row" of SET values (uc->row_count = 1) -  */
+/*  matches the old XML template's own convention (borrowed from          */
+/*  INSERT's per-row shape, but an UPDATE only ever has one flat SET      */
+/*  list applied to however many rows the WHERE clause matches at         */
+/*  execute time - see update_request_t's own doc comment in              */
+/*  OCI_Update_Execute_Module.h).                                         */
+/* ------------------------------------------------------------------ */
+static int build_update_ctx_from_request(oci_context_t          *ctx,
+                                          const update_request_t *req,
+                                          update_ctx_t           *uc)
 {
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "Entering parse_update_xml");
+                 "Entering build_update_ctx_from_request");
 
     memset(uc, 0, sizeof(*uc));
 
-    if (!extract_tag_upd(xml, "table_name",
-                          uc->table_name, sizeof(uc->table_name)))
+    strncpy(uc->table_name, req->table_name, sizeof(uc->table_name) - 1);
+    strncpy(uc->owner,      req->owner,      sizeof(uc->owner) - 1);
+
+    /* ---- WHERE keys ---- */
+    if (req->key_count <= 0 || req->key_count > MAX_UPD_KEY_COLS)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "Missing <table_name> in update XML");
+                     "key_count=%d out of range (1..%d) - "
+                     "level2_validate_update() should have caught this",
+                     req->key_count, MAX_UPD_KEY_COLS);
         return -1;
     }
-    extract_tag_upd(xml, "owner", uc->owner, sizeof(uc->owner));
+    uc->key_count = req->key_count;
+    for (int k = 0; k < req->key_count; k++)
+    {
+        strncpy(uc->keys[k].field_name, req->keys[k].field_name,
+                sizeof(uc->keys[k].field_name) - 1);
+        strncpy(uc->keys[k].key_value, req->keys[k].key_value,
+                sizeof(uc->keys[k].key_value) - 1);
+        /* field_type left empty - build_update_sql() resolves the real
+         * type itself from cols[] metadata, not from this struct.      */
+    }
 
-    logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "table='%s' owner='%s'", uc->table_name, uc->owner);
-
-    /* ---- Parse <where> key fields ---- */
-    const char *where_start = strstr(xml, "<where>");
-    const char *where_end   = strstr(xml, "</where>");
-
-    if (!where_start || !where_end)
+    /* ---- SET fields - always exactly one logical row (see this
+     * function's own doc comment).                                     */
+    if (req->field_count <= 0 || req->field_count > MAX_UPD_COLS)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "Missing <where> block in update XML");
+                     "field_count=%d out of range (1..%d) - "
+                     "level2_validate_update() should have caught this",
+                     req->field_count, MAX_UPD_COLS);
         return -1;
     }
+    uc->col_count = req->field_count;
+    uc->row_count = 1;
 
-    size_t where_len = (size_t)(where_end - where_start) + 8;
-    char  *where_buf = malloc(where_len + 1);
-    if (!where_buf) return -1;
-    memcpy(where_buf, where_start, where_len);
-    where_buf[where_len] = '\0';
+    for (int c = 0; c < req->field_count; c++)
+        strncpy(uc->col_names[c], req->fields[c].field_name,
+                sizeof(uc->col_names[c]) - 1);
 
-    const char *kp = where_buf;
-    while ((kp = strstr(kp, "<key_field>")) != NULL)
-    {
-        const char *ke = strstr(kp, "</key_field>");
-        if (!ke || uc->key_count >= MAX_UPD_KEY_COLS) break;
-
-        size_t klen = (size_t)(ke - kp) + 12;
-        char  *kbuf = malloc(klen + 1);
-        if (!kbuf) { free(where_buf); return -1; }
-        memcpy(kbuf, kp, klen);
-        kbuf[klen] = '\0';
-
-        upd_key_field_t *kf = &uc->keys[uc->key_count];
-        extract_tag_upd(kbuf, "field_name", kf->field_name,
-                         sizeof(kf->field_name));
-        extract_tag_upd(kbuf, "field_type", kf->field_type,
-                         sizeof(kf->field_type));
-        extract_tag_upd(kbuf, "key_value",  kf->key_value,
-                         sizeof(kf->key_value));
-
-        logger_write(ctx->update_logger, LOG_DEBUG, __func__, 0,
-                     "Key field %d: name='%s' type='%s' value='%s'",
-                     uc->key_count + 1,
-                     kf->field_name, kf->field_type, kf->key_value);
-
-        free(kbuf);
-        uc->key_count++;
-        kp = ke + 12;
-    }
-    free(where_buf);
-
-    if (uc->key_count == 0)
-    {
-        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "No <key_field> entries found in <where> block");
-        return -1;
-    }
-
-    /* ---- Pass 1: count rows and cols ---- */
-    int      row_count = 0;
-    int      col_count = 0;
-    const char *cursor = xml;
-
-    while ((cursor = strstr(cursor, "<row ")) != NULL)
-    {
-        if (row_count >= MAX_UPD_ROWS)
-        {
-            logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                         "Row count exceeds MAX_UPD_ROWS=%d", MAX_UPD_ROWS);
-            return -1;
-        }
-        const char *row_end = strstr(cursor, "</row>");
-        if (!row_end) break;
-
-        if (row_count == 0)
-        {
-            const char *fp = cursor;
-            while ((fp = strstr(fp, "<field>")) != NULL && fp < row_end)
-            { col_count++; fp += 7; }
-        }
-        row_count++;
-        cursor = row_end + 6;
-    }
-
-    if (row_count == 0 || col_count == 0)
-    {
-        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "No rows or columns found in update XML");
-        return -1;
-    }
-
-    if (col_count > MAX_UPD_COLS)
-    {
-        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "Column count %d exceeds MAX_UPD_COLS=%d",
-                     col_count, MAX_UPD_COLS);
-        return -1;
-    }
-
-    logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "Pass 1: rows=%d cols=%d keys=%d",
-                 row_count, col_count, uc->key_count);
-
-    /* ---- Allocate values array ---- */
-    uc->values = calloc((size_t)row_count * col_count,
-                        sizeof(upd_field_value_t));
+    uc->values = calloc((size_t)uc->col_count, sizeof(upd_field_value_t));
     if (!uc->values)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "calloc failed for values array (%d x %d)",
-                     row_count, col_count);
+                     "calloc failed for values array (%d cols x %zu bytes)",
+                     uc->col_count, sizeof(upd_field_value_t));
         return -1;
     }
 
-    uc->row_count = row_count;
-    uc->col_count = col_count;
-
-    /* ---- Pass 2: extract col names and update_value fields ---- */
-    cursor = xml;
-    int row_idx = 0;
-
-    while ((cursor = strstr(cursor, "<row ")) != NULL)
+    for (int c = 0; c < req->field_count; c++)
     {
-        const char *row_end = strstr(cursor, "</row>");
-        if (!row_end) break;
+        const char *real_value = field_value_get(&req->fields[c]);
+        size_t      real_len   = strlen(real_value);
 
-        size_t row_len = (size_t)(row_end - cursor) + 6;
-        char  *row_buf = malloc(row_len + 1);
-        if (!row_buf) { free(uc->values); uc->values = NULL; return -1; }
-        memcpy(row_buf, cursor, row_len);
-        row_buf[row_len] = '\0';
+        upd_field_value_t *dest = &uc->values[c];
 
-        const char *fp      = row_buf;
-        int         col_idx = 0;
-
-        while ((fp = strstr(fp, "<field>")) != NULL)
+        if (real_len < sizeof(dest->value))
         {
-            const char *fe = strstr(fp, "</field>");
-            if (!fe || col_idx >= col_count) break;
-
-            size_t flen = (size_t)(fe - fp) + 8;
-            char  *fbuf = malloc(flen + 1);
-            if (!fbuf)
-            {
-                free(row_buf);
-                free(uc->values); uc->values = NULL;
-                return -1;
-            }
-            memcpy(fbuf, fp, flen);
-            fbuf[flen] = '\0';
-
-            if (row_idx == 0)
-                extract_tag_upd(fbuf, "field_name",
-                                uc->col_names[col_idx],
-                                sizeof(uc->col_names[col_idx]));
-
-            upd_field_value_t *fv =
-                &uc->values[row_idx * col_count + col_idx];
-            memset(fv, 0, sizeof(*fv));
-
-            /* Try <update_value> first, fall back to <insert_value> */
-            if (!extract_tag_upd(fbuf, "update_value",
-                                  fv->value, sizeof(fv->value)))
-                extract_tag_upd(fbuf, "insert_value",
-                                fv->value, sizeof(fv->value));
-
-            fv->is_empty = (strlen(fv->value) == 0);
-
-            free(fbuf);
-            col_idx++;
-            fp = fe + 8;
+            strncpy(dest->value, real_value, sizeof(dest->value) - 1);
+            dest->large_value = NULL;
         }
-
-        if (col_idx != col_count)
+        else
         {
-            logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                         "Row %d has %d fields, expected %d",
-                         row_idx + 1, col_idx, col_count);
-            free(row_buf);
-            free(uc->values); uc->values = NULL;
-            return -1;
+            /* Doesn't fit even MAX_COL_VALUE_SIZE - mirror
+             * field_value_t's own overflow handling. See
+             * upd_field_value_t's doc comment.                         */
+            dest->large_value = malloc(real_len + 1);
+            if (dest->large_value)
+                memcpy(dest->large_value, real_value, real_len + 1);
+            strncpy(dest->value, real_value, sizeof(dest->value) - 1);
+            dest->value[sizeof(dest->value) - 1] = '\0';
         }
-
-        free(row_buf);
-        row_idx++;
-        cursor = row_end + 6;
+        dest->is_empty = (real_len == 0);
     }
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "parse_update_xml OK: rows=%d cols=%d keys=%d "
+                 "build_update_ctx_from_request OK: keys=%d cols=%d "
                  "allocated=%zu bytes",
-                 uc->row_count, uc->col_count, uc->key_count,
-                 (size_t)uc->row_count * uc->col_count *
-                 sizeof(upd_field_value_t));
+                 uc->key_count, uc->col_count,
+                 (size_t)uc->col_count * sizeof(upd_field_value_t));
     return 0;
 }
+
 
 /* ================================================================== */
 /*  get_upd_bind_wrapper                                                */
@@ -813,9 +701,9 @@ Cleanup:
 /* ================================================================== */
 /*  execute_update_batch - main entry point                            */
 /* ================================================================== */
-int execute_update_batch(oci_context_t    *ctx,
-                          const char       *template_xml,
-                          execute_config_t *cfg)
+int execute_update_batch(oci_context_t     *ctx,
+                          update_request_t  *req,
+                          execute_config_t  *cfg)
 {
     int            rc           = 0;
     OCIStmt       *stmt         = NULL;
@@ -836,7 +724,7 @@ int execute_update_batch(oci_context_t    *ctx,
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "Entering execute_update_batch");
 
-    if (!ctx || !template_xml || !cfg)
+    if (!ctx || !req || !cfg)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
                      "Invalid arguments");
@@ -861,28 +749,34 @@ int execute_update_batch(oci_context_t    *ctx,
 
     /* ================================================================
      *  Stage 1 - Validate
-     *  Reuses validate_insert_template - it validates field types and
-     *  values regardless of operation.
+     *  Called internally rather than trusted to have already run in
+     *  the caller - see this file's own top-of-file doc comment.
      * ================================================================ */
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "Stage 1: Validating all rows");
+                 "Stage 1: Validating request");
 
-    char val_error[512] = {0};
-    if (validate_insert_template(ctx, template_xml,
-                                  val_error, sizeof(val_error)) != 0)
+    input_c_operation_t validate_op;
+    memset(&validate_op, 0, sizeof(validate_op));
+    validate_op.type    = OP_UPDATE;
+    validate_op.payload = (void *)req;
+
+    operation_status_t val_status;
+    memset(&val_status, 0, sizeof(val_status));
+
+    if (level2_validate_update(ctx, &validate_op, &val_status) != LEVEL2_OK)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "Stage 1 validation failed: %s", val_error);
+                     "Stage 1 validation failed: %s", val_status.error_text);
         return -1;
     }
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "Stage 1 validation passed");
 
     /* ================================================================
-     *  Stage 2 - Parse XML and prepare statement
+     *  Stage 2 - Build update context and prepare statement
      * ================================================================ */
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
-                 "Stage 2: Parsing XML and preparing statement");
+                 "Stage 2: Building update context and preparing statement");
 
     uc = calloc(1, sizeof(update_ctx_t));
     if (!uc)
@@ -893,28 +787,20 @@ int execute_update_batch(oci_context_t    *ctx,
         goto Cleanup;
     }
 
-    if (parse_update_xml(ctx, template_xml, uc) != 0)
+    if (build_update_ctx_from_request(ctx, req, uc) != 0)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "parse_update_xml failed");
+                     "build_update_ctx_from_request failed");
         rc = -1;
         goto Cleanup;
     }
     strncpy(metrics.object_name, uc->table_name,
              sizeof(metrics.object_name) - 1);
 
-
-    /* Cap at max_bulk_inserts (reuse same ini setting) */
-    int max_batch = ctx->ini->max_bulk_inserts;
-    if (max_batch < 1) max_batch = 1;
-    if (uc->row_count > max_batch)
-    {
-        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "row_count=%d exceeds max_bulk_inserts=%d",
-                     uc->row_count, max_batch);
-        rc = -1;
-        goto Cleanup;
-    }
+    /* No row_count cap here any more - uc->row_count is always exactly
+     * 1 for UPDATE now (one flat SET list; see build_update_ctx_from_
+     * request()'s own doc comment), not a client-supplied number that
+     * needs bounding the way INSERT's row_count does.                  */
 
     /* Load column metadata for type mapping */
     col_metadata_t     cols[MAX_UPD_COLS];
@@ -1354,7 +1240,7 @@ int execute_update_batch(oci_context_t    *ctx,
                         if (handle_clob_update(ctx,
                                                uc->col_names[bc],
                                                btype, tbl_fq, rid_str,
-                                               fv->value, 0,
+                                               upd_field_value_get(fv), 0,
                                                &clob_bytes) != 0)
                         { rc = -1; goto Cleanup; }
                         lob_count++;
@@ -1474,28 +1360,62 @@ int execute_update_batch(oci_context_t    *ctx,
 
 
     /* ================================================================
-     *  Stage 5 - Build result XML
+     *  Stage 5 - Build result response
+     *  Uses response_write_dml_xml()/response_write_dml_json() - same
+     *  writers built for INSERT, reused unchanged here (that's the
+     *  whole reason dml_response_t is one shared struct rather than
+     *  three near-duplicates - see its own doc comment in
+     *  OCI_Request_Response_Types.h).
      * ================================================================ */
+    logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
+                 "Stage 5: Building result response");
+
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
     double elapsed =
         (ts_end.tv_sec  - ts_start.tv_sec) +
         (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
 
+    dml_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    strncpy(resp.table_name, uc->table_name, sizeof(resp.table_name) - 1);
+    strncpy(resp.owner,      uc->owner,      sizeof(resp.owner) - 1);
+    resp.rows_affected          = rows_updated;
+    resp.lobs_written           = lob_count;
+    resp.execution_time_seconds = elapsed;
+
+    char *dml_xml_fragment = response_write_dml_xml(ctx, OP_UPDATE, &resp);
+    if (!dml_xml_fragment)
+    {
+        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                     "response_write_dml_xml returned NULL");
+        rc = -1;
+        goto Cleanup;
+    }
+
     xml = xml_create(4096);
-    if (!xml) { rc = -1; goto Cleanup; }
+    if (!xml) { free(dml_xml_fragment); rc = -1; goto Cleanup; }
 
     xml_start_document(xml);
     xml_start_execution(xml);
-    xml_append(xml, "<operation>UPDATE</operation>\n");
-    xml_append(xml, "<table_name>%s</table_name>\n", uc->table_name);
-    xml_append(xml, "<owner>%s</owner>\n",            uc->owner);
-    xml_append(xml, "<rows_updated>%d</rows_updated>\n",   rows_updated);
-    xml_append(xml, "<lobs_written>%d</lobs_written>\n",   lob_count);
-    xml_append(xml, "<execution_time>%.6f</execution_time>\n", elapsed);
-    xml_append(xml, "<execute_batch_size>%d</execute_batch_size>\n",
-               execute_count);
+    /* xml_append_raw(), not xml_append(xml,"%s",...) - see the
+     * 2026-07-22 fix in OCI_Execute_Query_Batch_Module.c for why:
+     * the latter formats into a fixed 8192-byte stack buffer and
+     * silently corrupts anything longer.                               */
+    xml_append_raw(xml, dml_xml_fragment);
     xml_end_execution(xml);
     xml_finalize(xml);
+    free(dml_xml_fragment);
+
+    /* cfg->OUTPUT_JSON's own doc comment in OCI_Connection.h: "set
+     * only when ReturnFormat is JSON. NULL otherwise."                  */
+    if (cfg->ReturnFormat && strcasecmp(cfg->ReturnFormat, "JSON") == 0)
+    {
+        cfg->OUTPUT_JSON = response_write_dml_json(ctx, OP_UPDATE, &resp);
+        if (!cfg->OUTPUT_JSON)
+            logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                         "response_write_dml_json returned NULL - "
+                         "OUTPUT_JSON will be missing for this JSON-format request");
+    }
 
     metrics.end_time_us      = metrics_now_us();
      metrics.status_code     = 0;
@@ -1595,7 +1515,7 @@ Cleanup:
 
     if (uc)
     {
-        if (uc->values) free(uc->values);
+        if (uc->values) free_update_ctx_values(uc->values, uc->col_count);
         free(uc);
     }
 

@@ -92,6 +92,10 @@
 static int looks_like_new_request_format(const char *xml, size_t len);
 static int dispatch_select_new(oci_context_t *ctx, const char *filename,
                                 input_c_request_t *request, input_c_operation_t *op);
+static int dispatch_insert_new(oci_context_t *ctx, const char *filename,
+                                input_c_request_t *request, input_c_operation_t *op);
+static int dispatch_update_new(oci_context_t *ctx, const char *filename,
+                                input_c_request_t *request, input_c_operation_t *op);
 
 
 typedef struct {
@@ -478,42 +482,15 @@ static void upper(char *s)
 }
 
 /* ================================================================== */
-/*  dispatch_insert                                                     */
-/* ================================================================== */
-static int dispatch_insert(oci_context_t *ctx,
-                            const char    *filename,
-                            const char    *xml)
-{
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                 "Dispatching INSERT: %s", filename);
-
-    execute_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.input_file_name = (char *)filename;   /* points to caller's string, no alloc needed */
-
-    int rc = execute_insert_batch(ctx, xml, &cfg);
-
-    if (rc == 0)
-    {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                     "PASS [INSERT]: %s", filename);
-        if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
-    }
-    else
-    {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
-                     "FAIL [INSERT]: %s (rc=%d)", filename, rc);
-    }
-
-    if (cfg.xml)
-    {
-        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
-        free(cfg.xml);
-    }
-    return rc;
-}
+/* dispatch_insert (legacy, flat-XML <operation>INSERT</operation>
+ * format) removed - unlike SELECT, where execute_query_batch()'s
+ * signature never changed so the old and new dispatchers could keep
+ * coexisting unchanged, execute_insert_batch()'s signature changed
+ * from a raw XML string to insert_request_t* as part of this
+ * refactor. The old flat format is retired for INSERT specifically;
+ * see dispatch_insert_new() below for the new-pipeline replacement,
+ * wired into the new-format branch the same way dispatch_select_new()
+ * is. */
 
 /* ================================================================== */
 /*  dispatch_select                                                     */
@@ -684,36 +661,12 @@ static int dispatch_select(oci_context_t *ctx,
     }
 
 
-/* ================================================================== */
-/*  dispatch_update                                                     */
-/* ================================================================== */
-static int dispatch_update(oci_context_t *ctx,
-                            const char    *filename,
-                            const char    *xml)
-{
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                 "Dispatching UPDATE: %s", filename);
-
-    execute_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.input_file_name = (char *)filename;   /* points to caller's string, no alloc needed */
-
-    int rc = execute_update_batch(ctx, xml, &cfg);
-
-    if (rc == 0)
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                     "PASS [UPDATE]: %s", filename);
-    else
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
-                     "FAIL [UPDATE]: %s (rc=%d)", filename, rc);
-
-    if (cfg.xml)
-    {
-        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
-        free(cfg.xml);
-    }
-    return rc;
-}
+/* dispatch_update (legacy, flat-XML <operation>UPDATE</operation>
+ * format) removed - same reasoning as dispatch_insert's removal:
+ * execute_update_batch()'s signature changed from a raw XML string to
+ * update_request_t* as part of this refactor, so the old flat format
+ * is retired for UPDATE too. See dispatch_update_new() below for the
+ * new-pipeline replacement. */
 
 /* ================================================================== */
 /*  dispatch_delete                                                     */
@@ -866,6 +819,14 @@ static int process_xml_file(oci_context_t *ctx,
                 {
                     rc = dispatch_select_new(ctx, filename, &new_request, op);
                 }
+                else if (op->type == OP_INSERT)
+                {
+                    rc = dispatch_insert_new(ctx, filename, &new_request, op);
+                }
+                else if (op->type == OP_UPDATE)
+                {
+                    rc = dispatch_update_new(ctx, filename, &new_request, op);
+                }
                 else
                 {
                     /* Every other operation type still runs through the
@@ -877,8 +838,8 @@ static int process_xml_file(oci_context_t *ctx,
                      * happened for this operation.                     */
                     logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
                                  "File='%s' operation[%d] type=%d - new "
-                                 "pipeline only implements SELECT so far, "
-                                 "skipping", filename, i, (int)op->type);
+                                 "pipeline only implements SELECT/INSERT/"
+                                 "UPDATE so far, skipping", filename, i, (int)op->type);
                 }
             }
         }
@@ -922,11 +883,27 @@ static int process_xml_file(oci_context_t *ctx,
     int rc = 0;
 
     if      (strcmp(operation, "INSERT") == 0)
-        rc = dispatch_insert(ctx, filename, xml);
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "File='%s' is old flat-XML INSERT format - no longer "
+                     "supported (execute_insert_batch() now requires "
+                     "insert_request_t via the new pipeline). Convert this "
+                     "fixture to the new <request version=\"1.0\">...<operation "
+                     "type=\"INSERT\"> format.", filename);
+        rc = -1;
+    }
     else if (strcmp(operation, "SELECT") == 0)
         rc = dispatch_select(ctx, filename, xml);
     else if (strcmp(operation, "UPDATE") == 0)
-        rc = dispatch_update(ctx, filename, xml);
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "File='%s' is old flat-XML UPDATE format - no longer "
+                     "supported (execute_update_batch() now requires "
+                     "update_request_t via the new pipeline). Convert this "
+                     "fixture to the new <request version=\"1.0\">...<operation "
+                     "type=\"UPDATE\"> format.", filename);
+        rc = -1;
+    }
     else if (strcmp(operation, "DELETE") == 0)
         rc = dispatch_delete(ctx, filename, xml);
     else if (strcmp(operation, "EXECUTE_PROCEDURE") == 0)
@@ -2047,6 +2024,134 @@ static int dispatch_select_new(oci_context_t       *ctx,
     /* Now that ReturnFormat is actually set above, cfg.OUTPUT_JSON can
      * really be populated by execute_query_batch() - free it here or
      * this becomes a genuine leak on every JSON request.               */
+    if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
+
+    return rc;
+}
+
+/* ================================================================== */
+/*  dispatch_insert_new                                                 */
+/*  INSERT via the new format-agnostic pipeline (Level 1 already ran,   */
+/*  Level 2 already validated req - level2_validate_insert() also runs  */
+/*  again internally as execute_insert_batch()'s own first step, so     */
+/*  this is genuinely just the thin adapter from insert_request_t to    */
+/*  execute_config_t, mirroring dispatch_select_new() exactly).         */
+/* ================================================================== */
+static int dispatch_insert_new(oci_context_t       *ctx,
+                                const char          *filename,
+                                input_c_request_t   *request,
+                                input_c_operation_t *op)
+{
+    insert_request_t *req = (insert_request_t *)op->payload;
+
+    if (!req)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [INSERT/new]: %s - no insert_request_t payload",
+                     filename);
+        return -1;
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)filename;
+
+    /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
+     * without this, JSON-format INSERT requests would silently only
+     * ever get an XML response back.                                  */
+    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
+                        ? "JSON" : "XML";
+
+    int rc = execute_insert_batch(ctx, req, &cfg);
+
+    if (rc == 0)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "PASS [INSERT/new] audit_id=%s: %s",
+                     request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
+    }
+    else
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [INSERT/new] audit_id=%s: %s (rc=%d)",
+                     request->external_audit_id, filename, rc);
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+    if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
+
+    return rc;
+}
+
+/* ================================================================== */
+/*  dispatch_update_new                                                 */
+/*  UPDATE via the new format-agnostic pipeline - mirrors               */
+/*  dispatch_insert_new() exactly. level2_validate_update() also runs   */
+/*  again internally as execute_update_batch()'s own first step, so     */
+/*  this is genuinely just the thin adapter from update_request_t to    */
+/*  execute_config_t.                                                    */
+/* ================================================================== */
+static int dispatch_update_new(oci_context_t       *ctx,
+                                const char          *filename,
+                                input_c_request_t   *request,
+                                input_c_operation_t *op)
+{
+    update_request_t *req = (update_request_t *)op->payload;
+
+    if (!req)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [UPDATE/new]: %s - no update_request_t payload",
+                     filename);
+        return -1;
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)filename;
+
+    /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
+     * without this, JSON-format UPDATE requests would silently only
+     * ever get an XML response back.                                  */
+    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
+                        ? "JSON" : "XML";
+
+    int rc = execute_update_batch(ctx, req, &cfg);
+
+    if (rc == 0)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "PASS [UPDATE/new] audit_id=%s: %s",
+                     request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
+    }
+    else
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [UPDATE/new] audit_id=%s: %s (rc=%d)",
+                     request->external_audit_id, filename, rc);
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
     if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
 
     return rc;

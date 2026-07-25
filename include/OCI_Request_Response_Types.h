@@ -160,11 +160,48 @@ typedef struct {
 /*  server actually has. The actual client -> server request just needs */
 /*  field_name + value; Level 2 validation resolves the real metadata   */
 /*  itself via metadata_cache before executing.                         */
+/*                                                                        */
+/*  value[4096] covers the overwhelming majority of real field values    */
+/*  cheaply - important since insert_request_t can hold hundreds of      */
+/*  rows x dozens of columns, and a much larger fixed buffer per field   */
+/*  would multiply that memory footprint for every bulk insert whether   */
+/*  it needs it or not (500 rows x 20 cols x 32KB =~320MB vs ~40MB       */
+/*  today, for example).                                                 */
+/*                                                                        */
+/*  large_value is the escape hatch for the real exception: CLOB values  */
+/*  (client-supplied, or OCI_Audit_Trail_Manager.c's own NEW_VALUE row   */
+/*  snapshot, which serialises every column of the business row and can  */
+/*  trivially exceed 4096 bytes on its own). NULL in the common case.    */
+/*  When non-NULL, it - not value[] - is the real value; value[] then    */
+/*  holds only a truncated preview for debug/log readability, not the    */
+/*  authoritative content. Always use field_value_get() below to read    */
+/*  the real value rather than touching value[] directly, so there's     */
+/*  exactly one place that decision is made.                             */
+/*                                                                        */
+/*  Ownership: whoever sets large_value (Level 1's parsers, or           */
+/*  OCI_Audit_Trail_Manager.c building a snapshot row directly) owns the  */
+/*  allocation; level1_free_request() frees it as part of freeing the    */
+/*  enclosing insert_row_t.                                              */
 /* ------------------------------------------------------------------ */
 typedef struct {
-    char field_name[128];
-    char value      [4096];
+    char  field_name[128];
+    char  value      [4096];
+    char *large_value;    /* NULL unless value[] didn't fit - see above */
 } field_value_t;
+
+/*
+ * field_value_get()
+ *
+ * Returns the real value for fv - large_value if set, value[]
+ * otherwise. Every reader of a field_value_t's content (Level 2
+ * validation, build_insert_ctx_from_request(), anywhere else a value
+ * is actually used rather than just previewed in a log line) should
+ * go through this rather than touching value[]/large_value directly.
+ */
+static inline const char *field_value_get(const field_value_t *fv)
+{
+    return fv->large_value ? fv->large_value : fv->value;
+}
 
 /* ------------------------------------------------------------------ */
 /*  First concrete sketch: INSERT / UPDATE request shapes               */
@@ -173,31 +210,27 @@ typedef struct {
 /*  below), included here just to anchor field_value_t against          */
 /*  something real.                                                     */
 /* ------------------------------------------------------------------ */
-typedef struct {
-    int            field_count;
-    field_value_t *fields;      /* one row's worth of field_name/value */
-} insert_row_t;
-
-typedef struct {
-    char table_name[128];
-    char owner[128];
-    int  row_count;
-    insert_row_t *rows;         /* bulk insert - multiple rows per request */
-} insert_request_t;
+/* ------------------------------------------------------------------ */
+/*  insert_row_t / insert_request_t                                    */
+/*  Moved to OCI_Insert_Execute_Module.h - Insert is now being          */
+/*  refactored, which is exactly the trigger this section originally    */
+/*  said to watch for ("belong in their own module headers once         */
+/*  Insert/Update are actually refactored").                            */
+/*                                                                        */
+/*  update_request_t has moved the same way, to                         */
+/*  OCI_Update_Execute_Module.h, now that Update is being refactored     */
+/*  too. where_key_t stays here - it's shared between UPDATE and         */
+/*  DELETE (delete_request_t below still needs it), and DELETE hasn't    */
+/*  been refactored yet. Same reasoning as field_value_t staying here    */
+/*  rather than moving into OCI_Insert_Execute_Module.h - a type shared   */
+/*  by two request kinds belongs wherever the LAST of those two to be     */
+/*  refactored can still reach it, not in the first one's own header.     */
+/* ------------------------------------------------------------------ */
 
 typedef struct {
     char field_name[128];
     char key_value  [4096];
 } where_key_t;
-
-typedef struct {
-    char table_name[128];
-    char owner[128];
-    int  key_count;
-    where_key_t   *keys;        /* WHERE clause - AND'd together        */
-    int            field_count;
-    field_value_t *fields;      /* SET clause                            */
-} update_request_t;
 
 typedef struct {
     char table_name[128];

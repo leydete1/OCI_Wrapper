@@ -42,23 +42,66 @@
 #include "OCI_Connection.h"
 #include "XML_Helper.h"
 #include "logger.h"
+#include "OCI_Request_Response_Types.h"   /* field_value_t - shared with UPDATE */
+
+/* ------------------------------------------------------------------ */
+/*  insert_request_t                                                    */
+/*  Format-agnostic INSERT request payload - built by Level 1           */
+/*  (build_payload_xml()/build_payload_json() in OCI_Level1_Parser.c)   */
+/*  and consumed by Level 2 validation, then execute_insert_batch().    */
+/*  Moved here from OCI_Request_Response_Types.h now that Insert is     */
+/*  actually being refactored, per that header's own convention note.   */
+/*                                                                       */
+/*  Deliberately no row_number field on insert_row_t - the <row         */
+/*  number="N"> attribute (XML) / row_number key (JSON) on the wire is  */
+/*  purely for human readability; rows are processed in document/array  */
+/*  order, same as the wire examples in                                 */
+/*  Data_Manager_Request_Definitions.docx.                              */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    int            field_count;
+    field_value_t *fields;      /* one row's worth of field_name/value */
+} insert_row_t;
+
+typedef struct {
+    char table_name[128];
+    char owner[128];
+    int  row_count;
+    insert_row_t *rows;         /* bulk insert - multiple rows per request.
+                                  * row_count capped by ctx->ini->max_bulk_inserts
+                                  * - Level 2's job to check and reject early,
+                                  * not Level 1's.                              */
+} insert_request_t;
 
 /*
  * execute_insert_batch()
  *
- * Main Stage-3 entry point.
+ * Main Stage-3 entry point. Calls level2_validate_insert() internally
+ * as its own first step (not just trusted to have already run in the
+ * caller) - so both the client-facing business insert AND the internal
+ * audit-trail insert (OCI_Audit_Trail_Manager.c calls this directly,
+ * bypassing the client-facing dispatcher entirely since there's no
+ * client request behind it) get the exact same validation for free,
+ * with zero extra code needed in the audit module itself.
  *
  * Parameters
- *   ctx          - OCI context (connection + logger)
- *   template_xml - validated <Insert_Template> XML string
- *   cfg          - execute_config_t; OUTPUT_XML set on success
+ *   ctx  - OCI context (connection + logger)
+ *   req  - already-parsed insert_request_t - from Level 1 for a
+ *          client-facing request, or built directly by
+ *          OCI_Audit_Trail_Manager.c for the internal audit insert.
+ *          Not modified - only read.
+ *   cfg  - execute_config_t; cfg->xml->OUTPUT_XML always set on
+ *          success; cfg->OUTPUT_JSON additionally set when
+ *          cfg->ReturnFormat is "JSON" (NULL otherwise, per that
+ *          field's own doc comment in OCI_Connection.h)
  *
  * Returns
- *    0  success  - all rows inserted, cfg->xml->OUTPUT_XML set
+ *    0  success  - all rows inserted, cfg->xml->OUTPUT_XML set (and
+ *                  cfg->OUTPUT_JSON too, if requested)
  *   -1  error    - logged, no partial commit (rolled back)
  */
 int execute_insert_batch(oci_context_t    *ctx,
-                         const char       *template_xml,
+                         insert_request_t *req,
                          execute_config_t *cfg);
 
 #endif /* OCI_INSERT_EXECUTE_MODULE_H */

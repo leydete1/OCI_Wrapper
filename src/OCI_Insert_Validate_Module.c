@@ -25,20 +25,10 @@
 #include "OCI_Insert_Validate_Module.h"
 #include "logger.h"
 
-/* ------------------------------------------------------------------ */
-/*  Internal field descriptor (parsed from one <field> block)          */
-/* ------------------------------------------------------------------ */
-typedef struct {
-    int  field_number;
-    char field_name    [128];
-    char field_type    [128];
-    int  field_length;
-    int  field_precision;
-    int  field_scale;
-    char field_nullable[4];
-    char field_default [512];
-    char insert_value  [1024];
-} parsed_field_t;
+/* parsed_field_t is now declared in OCI_Insert_Validate_Module.h -
+ * exposed there so level2_validate_insert() can build one from
+ * insert_request_t + metadata_cache and reuse validate_field()
+ * directly, rather than this being a private detail of this file. */
 
 /* ------------------------------------------------------------------ */
 /*  Static helpers                                                      */
@@ -446,8 +436,11 @@ validate_rowid(const parsed_field_t *f, char *msg, size_t msg_max)
 
 /* ------------------------------------------------------------------ */
 /*  Dispatch: validate one parsed_field_t                              */
+/*  No longer static - declared in OCI_Insert_Validate_Module.h so      */
+/*  level2_validate_insert() (OCI_Level2_Parser.c) can call this        */
+/*  directly and reuse the exact same rules.                            */
 /* ------------------------------------------------------------------ */
-static field_validation_result_t
+field_validation_result_t
 validate_field(oci_context_t        *ctx,
                const parsed_field_t *f,
                char                 *msg,

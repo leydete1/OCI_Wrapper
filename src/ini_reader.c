@@ -516,6 +516,22 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
     FILE *fp = fopen(filename, "r");
     if (!fp) return -1;
 
+    /* ---- Memory-safety guard tracking ----
+     * Records every CFG_STRING field whose maxlen never gets set by a
+     * real "else if (!strcmp(m->name, ...)) maxlen=sizeof(config->...)"
+     * branch below - exactly the bug class that caused the
+     * 2026-07-24 stack-buffer-overflow (three *_cache_hash_algorithm
+     * fields silently fell through to an old unsafe 256-byte default,
+     * then strncpy() zero-padded up to that length regardless of the
+     * value's real length, blowing straight through their real,
+     * smaller destination fields). This turns any FUTURE instance of
+     * the same bug class - e.g. a new CFG_STRING field added to the
+     * ctx_map below without its own maxlen branch - into a loud,
+     * fail-closed startup error instead of a silent, possibly
+     * unnoticed-for-months memory corruption.                          */
+    char unguarded_names[32][128];
+    int  unguarded_count = 0;
+
     ini_file_t ini;
     size_t capacity = 16;
     ini.entries = malloc(capacity * sizeof(ini_entry_t));
@@ -598,8 +614,14 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
             case CFG_STRING: {
                 const char *val = ini_get_str(&ini, m->name, m->default_str);
                 if (val) {
-                    /* ---- Determine correct field size ---- */
-                    size_t maxlen = 256; /* safe fallback */
+                    /* ---- Determine correct field size ----
+                     * 0 is a sentinel, not a real default: no
+                     * sizeof(config->anything) is ever 0 for a
+                     * char[N] field, so maxlen still being 0 after the
+                     * whole chain below reliably means no branch
+                     * matched this field's name - see the memory-
+                     * safety guard check right after this chain.       */
+                    size_t maxlen = 0;
 
                     /* Logging */
                     if      (!strcmp(m->name,"log_file_name"))              maxlen=sizeof(config->log_file_name);
@@ -634,6 +656,12 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
 					else if (!strcmp(m->name,"connection_log_level"))                  maxlen=sizeof(config->connection_log_level);
 					else if      (!strcmp(m->name,"connectionpool_log_file_name"))              maxlen=sizeof(config->connectionpool_log_file_name);
 					else if (!strcmp(m->name,"connectionpool_log_level"))                  maxlen=sizeof(config->connectionpool_log_level);
+					else if (!strcmp(m->name,"resultset_cache_hash_algorithm"))
+					         maxlen=sizeof(config->resultset_cache_hash_algorithm);
+					else if (!strcmp(m->name,"metadata_cache_hash_algorithm"))
+					         maxlen=sizeof(config->metadata_cache_hash_algorithm);
+					else if (!strcmp(m->name,"statement_cache_hash_algorithm"))
+					         maxlen=sizeof(config->statement_cache_hash_algorithm);
 					else if (!strcmp(m->name,"session_cache_hash_algorithm"))
 					         maxlen=sizeof(config->session_cache_hash_algorithm);
 
@@ -723,8 +751,26 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                     else if (!strcmp(m->name,"nls_characterset"))             maxlen=sizeof(config->nls_characterset);
                     else if (!strcmp(m->name,"nls_session_timezone"))         maxlen=sizeof(config->nls_session_timezone);
 
-                    strncpy(field_ptr, val, maxlen - 1);
-                    field_ptr[maxlen - 1] = '\0';
+                    if (maxlen == 0)
+                    {
+                        /* No branch above matched - the real destination
+                         * size for this field is unknown, so there is
+                         * no safe number of bytes to write. Record it
+                         * and skip - reported, and load_ini() FAILS,
+                         * once every field has been checked. Leaving
+                         * config's field at its calloc'd zero (empty
+                         * string) is safe; guessing a byte count is
+                         * not.                                         */
+                        if (unguarded_count < 32)
+                            strncpy(unguarded_names[unguarded_count], m->name,
+                                    sizeof(unguarded_names[0]) - 1);
+                        unguarded_count++;
+                    }
+                    else
+                    {
+                        strncpy(field_ptr, val, maxlen - 1);
+                        field_ptr[maxlen - 1] = '\0';
+                    }
                 }
                 break;
             }
@@ -788,6 +834,39 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                 printf("  UNKNOWN: %s = %s\n",
                        ini.entries[i].name, ini.entries[i].value);
         printf("----------------------------------------------------------------\n\n");
+    }
+
+    /* ---------- Memory-safety guard: fail closed on any unguarded field ----------
+     * Unlike the unrecognised-keys warning above (informational only -
+     * an unrecognised key just gets ignored, nothing unsafe happens),
+     * this one is a hard failure: an unguarded field means load_ini()
+     * was about to trust an unverified byte count for a real struct
+     * field, exactly the bug class that caused the 2026-07-24 stack-
+     * buffer-overflow. Nip it in the bud here rather than let the
+     * caller run with a config it doesn't know is unsafe.              */
+    if (unguarded_count > 0)
+    {
+        printf("\n");
+        printf("================================================================\n");
+        printf("CONFIG FAILURE: %d CFG_STRING field(s) in load_ini()'s ctx_map "
+               "have no maxlen guard branch - their real destination size in "
+               "app_config_t is unverified, so the safe byte count to write is "
+               "unknown. This is exactly the bug class that caused the "
+               "2026-07-24 stack-buffer-overflow (missing maxlen branches for "
+               "*_cache_hash_algorithm silently defaulted to an unsafe 256-byte "
+               "fallback). Add a\n"
+               "  else if (!strcmp(m->name,\"<name>\")) maxlen=sizeof(config-><field>);\n"
+               "branch for each field below before this config can be trusted:\n",
+               unguarded_count);
+        for (int i = 0; i < unguarded_count && i < 32; i++)
+            printf("  UNGUARDED: %s\n", unguarded_names[i]);
+        if (unguarded_count > 32)
+            printf("  ...and %d more (only the first 32 are listed)\n",
+                   unguarded_count - 32);
+        printf("================================================================\n\n");
+
+        ini_free(&ini);
+        return -1;
     }
 
     /* Dump loaded values */

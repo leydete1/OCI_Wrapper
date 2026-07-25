@@ -24,6 +24,9 @@
 #include "OCI_Session_Manager.h"
 #include "OCI_Transaction_Manager.h"     /* tx_generate_uuid()          */
 #include "OCI_Insert_Execute_Module.h"
+#include "OCI_Update_Execute_Module.h"   /* execute_update_batch(), update_request_t -
+                                            session_end() builds one directly now,
+                                            no XML involved at all any more        */
 #include "OCI_Execute_Query_Batch_Module.h"    /* execute_query_batch()       */
 #include "XML_Helper.h"
 #include "logger.h"
@@ -402,15 +405,64 @@ int session_create(oci_context_t            *ctx,
                  rec.session_id, rec.client_id[0] ? rec.client_id : "-",
                  rec.ttl_seconds);
 
-    xml_builder_t *template_xml = build_session_insert_template(ctx, &rec);
-    if (!template_xml)
-        return SESSION_ERR_ALLOC;
+    /* ================================================================
+     *  Build the OCI_SESSION insert_request_t directly - no XML any
+     *  more, mirroring the same conversion done in
+     *  OCI_Audit_Trail_Manager.c. TRANSACTION_ID/CLOSED_TS/CLOSE_REASON
+     *  are omitted entirely (all nullable, all always empty at create
+     *  time) rather than sent as explicit empty values - same "client
+     *  only sends the columns it actually wants to set" design used
+     *  throughout this project; this module isn't a client, but the
+     *  same reasoning applies.
+     * ================================================================ */
+    char ttl_str[16];
+    snprintf(ttl_str, sizeof(ttl_str), "%d", rec.ttl_seconds);
+
+    char created_str[32], last_act_str[32];
+    format_timestamp(rec.created_ts,       created_str,  sizeof(created_str));
+    format_timestamp(rec.last_activity_ts, last_act_str, sizeof(last_act_str));
+
+    field_value_t session_fields[9];
+    memset(session_fields, 0, sizeof(session_fields));
+    int nf = 0;
+
+#define SESSION_SET(name_, val_)                                            \
+    do {                                                                    \
+        strncpy(session_fields[nf].field_name, (name_),                    \
+                sizeof(session_fields[nf].field_name) - 1);                 \
+        strncpy(session_fields[nf].value, (val_),                          \
+                sizeof(session_fields[nf].value) - 1);                     \
+        nf++;                                                               \
+    } while (0)
+
+    SESSION_SET("SESSION_ID",       rec.session_id);
+    SESSION_SET("STATUS",           session_status_str(rec.status));
+    SESSION_SET("TTL_SECONDS",      ttl_str);
+    if (rec.client_id[0])        SESSION_SET("CLIENT_ID",        rec.client_id);
+    if (rec.client_ip[0])        SESSION_SET("CLIENT_IP",        rec.client_ip);
+    if (rec.client_host[0])      SESSION_SET("CLIENT_HOST",      rec.client_host);
+    if (rec.application_name[0]) SESSION_SET("APPLICATION_NAME", rec.application_name);
+    SESSION_SET("CREATED_TS",       created_str);
+    SESSION_SET("LAST_ACTIVITY_TS", last_act_str);
+
+#undef SESSION_SET
+
+    insert_row_t row;
+    row.field_count = nf;
+    row.fields = session_fields;
+
+    insert_request_t insert_req;
+    memset(&insert_req, 0, sizeof(insert_req));
+    strncpy(insert_req.table_name, SESSION_TABLE_NAME, sizeof(insert_req.table_name) - 1);
+    strncpy(insert_req.owner,      ctx->ini->username,  sizeof(insert_req.owner) - 1);
+    insert_req.row_count = 1;
+    insert_req.rows = &row;
 
     execute_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.input_file_name = (char *)"OCI_Session_Manager:session_create";
 
-    int rc = execute_insert_batch(ctx, template_xml->buffer, &cfg);
+    int rc = execute_insert_batch(ctx, &insert_req, &cfg);
 
     if (rc != 0)
     {
@@ -418,21 +470,21 @@ int session_create(oci_context_t            *ctx,
                      "session_create FAILED for session_id=%s (rc=%d) - "
                      "permanent record not written, session not cached",
                      rec.session_id, rc);
-        xml_free(template_xml);
         if (cfg.xml)
         {
             if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
             free(cfg.xml);
         }
+        free(cfg.OUTPUT_JSON);
         return SESSION_ERR_DB_FAILURE;
     }
 
-    xml_free(template_xml);
     if (cfg.xml)
     {
         if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
         free(cfg.xml);
     }
+    free(cfg.OUTPUT_JSON);
 
     if (session_cache_store(ctx->session_cache, &rec) != 0)
     {
@@ -457,9 +509,8 @@ int session_create(oci_context_t            *ctx,
             sizeof(ctx->active_client_ip) - 1);
     ctx->active_client_ip[sizeof(ctx->active_client_ip) - 1] = '\0';
 
-    char created_str[32];
-    format_timestamp(rec.created_ts, created_str, sizeof(created_str));
-
+    /* created_str already computed above for the insert_request_t build -
+     * same value, still in scope, no need to recompute.                 */
     if (result_xml)
     {
         char *buf = malloc(512);
@@ -582,23 +633,67 @@ int session_end(oci_context_t    *ctx,
                  session_id, session_status_str(status),
                  reason ? reason : "-");
 
-    xml_builder_t *template_xml =
-        build_session_update_template(ctx, session_id, status, reason);
-    if (!template_xml)
-        return SESSION_ERR_ALLOC;
+    /* ================================================================
+     *  Build the OCI_SESSION update_request_t directly - no XML any
+     *  more, mirroring the same conversion done in session_create()
+     *  and OCI_Audit_Trail_Manager.c. This also fixes a genuine
+     *  pre-existing bug: this call previously passed
+     *  build_session_update_template()'s output (an <Update_Template>
+     *  using <update_value> tags) into execute_insert_batch(), which
+     *  only ever looked for <insert_value> - every field parsed as
+     *  empty, and since STATUS/LAST_ACTIVITY_TS are NOT NULL, Stage 1
+     *  validation rejected every single call. That bug disappears
+     *  entirely here, not because it was patched, but because this
+     *  path no longer goes through any XML-based validator that could
+     *  have that tag-name mismatch in the first place.
+     * ================================================================ */
+    char now_str[32];
+    format_timestamp(time(NULL), now_str, sizeof(now_str));
+
+    where_key_t where_key;
+    memset(&where_key, 0, sizeof(where_key));
+    strncpy(where_key.field_name, "SESSION_ID", sizeof(where_key.field_name) - 1);
+    strncpy(where_key.key_value,  session_id,   sizeof(where_key.key_value) - 1);
+
+    field_value_t set_fields[4];
+    memset(set_fields, 0, sizeof(set_fields));
+
+#define SESSION_END_SET(idx_, name_, val_)                                   \
+    do {                                                                     \
+        strncpy(set_fields[idx_].field_name, (name_),                      \
+                sizeof(set_fields[idx_].field_name) - 1);                   \
+        strncpy(set_fields[idx_].value, (val_),                            \
+                sizeof(set_fields[idx_].value) - 1);                       \
+    } while (0)
+
+    SESSION_END_SET(0, "STATUS",           session_status_str(status));
+    SESSION_END_SET(1, "CLOSED_TS",        now_str);
+    SESSION_END_SET(2, "CLOSE_REASON",     reason ? reason : "-");
+    SESSION_END_SET(3, "LAST_ACTIVITY_TS", now_str);
+
+#undef SESSION_END_SET
+
+    update_request_t update_req;
+    memset(&update_req, 0, sizeof(update_req));
+    strncpy(update_req.table_name, SESSION_TABLE_NAME, sizeof(update_req.table_name) - 1);
+    strncpy(update_req.owner,      ctx->ini->username,  sizeof(update_req.owner) - 1);
+    update_req.key_count   = 1;
+    update_req.keys        = &where_key;
+    update_req.field_count = 4;
+    update_req.fields      = set_fields;
 
     execute_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.input_file_name = (char *)"OCI_Session_Manager:session_end";
 
-    int rc = execute_insert_batch(ctx, template_xml->buffer, &cfg);
+    int rc = execute_update_batch(ctx, &update_req, &cfg);
 
-    xml_free(template_xml);
     if (cfg.xml)
     {
         if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
         free(cfg.xml);
     }
+    free(cfg.OUTPUT_JSON);
 
     if (rc != 0)
     {

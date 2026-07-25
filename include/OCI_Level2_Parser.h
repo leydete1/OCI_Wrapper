@@ -10,8 +10,8 @@
  * not touch a live database connection either - see the design note
  * below on why the row-count guard specifically does NOT live here.
  *
- * Currently implemented: SELECT only.
- * ------------------------------------
+ * Currently implemented: SELECT, INSERT.
+ * ---------------------------------------
  * level2_validate_select() runs extract_sql_dependencies() against the
  * SQL Level 1 already extracted into select_request_t.sql - pure
  * syntax/structure analysis, no connection needed. This is the entire
@@ -23,7 +23,18 @@
  * exactly where it already lives, inside execute_query_batch()'s own
  * Stage 1.
  *
- * Every other operation type (INSERT/UPDATE/DELETE/GET_TEMPLATE/
+ * level2_validate_insert() resolves the target table's real column
+ * metadata via ctx->metadata_cache (never anything the client sent -
+ * field_value_t deliberately carries no metadata of its own) and
+ * reuses validate_field() from OCI_Insert_Validate_Module.h - the same
+ * per-type validation rules that module has always enforced, just
+ * re-anchored to metadata_cache instead of client-echoed metadata.
+ * Unlike SELECT's row-count guard, this DOES touch ctx->metadata_cache
+ * (and, on a cache miss, the database) - the "case-by-case, not a
+ * blanket rule" carve-out below cuts the other way here, since the
+ * metadata cache makes this cheap and safe on the common path.
+ *
+ * Every other operation type (UPDATE/DELETE/GET_TEMPLATE/
  * EXECUTE_PROCEDURE/CREATE_SESSION/END_SESSION) is explicitly rejected
  * with LEVEL2_ERR_NOT_IMPLEMENTED for now - fail closed, not fail open.
  * An operation type without an implemented validator must not silently
@@ -59,6 +70,13 @@ extern "C" {
 #define LEVEL2_ERR_NOT_IMPLEMENTED   -4   /* no validator for this operation type yet */
 #define LEVEL2_ERR_VALIDATION_FAILED -5   /* returned by level2_validate() when
                                             * any operation in the request fails */
+#define LEVEL2_ERR_ROW_COUNT_EXCEEDED -6  /* insert_request_t.row_count >
+                                            * ctx->ini->max_bulk_inserts       */
+#define LEVEL2_ERR_METADATA_LOOKUP    -7  /* metadata_cache_get_or_fetch failed,
+                                            * or table_name/owner not found    */
+#define LEVEL2_ERR_FIELD_INVALID      -8  /* a field failed validate_field(),
+                                            * or referenced an unknown column,
+                                            * or a NOT NULL column was omitted */
 
 /*
  * level2_validate_select()
@@ -83,6 +101,107 @@ extern "C" {
  * otherwise. Does not modify op->payload - only reads it.
  */
 int level2_validate_select(oci_context_t        *ctx,
+                            input_c_operation_t  *op,
+                            operation_status_t   *error_detail);
+
+/*
+ * level2_validate_insert()
+ *
+ * Validates one OP_INSERT operation's already-built insert_request_t
+ * (op->payload) against the table's REAL column metadata, resolved via
+ * ctx->metadata_cache (metadata_cache_get_or_fetch()) - never against
+ * anything the client sent, since field_value_t deliberately carries
+ * no metadata of its own (see field_value_t's doc comment in
+ * OCI_Insert_Execute_Module.h).
+ *
+ * Checks, in order, first failure wins:
+ *   1. row_count between 1 and ctx->ini->max_bulk_inserts - the one
+ *      check Level 2 CAN do without touching the database (it's
+ *      already sitting in the parsed struct), per the case-by-case
+ *      distinction in this header's own top-level comment. This does
+ *      NOT remove the equivalent check inside execute_insert_batch()
+ *      itself - that stays as defense-in-depth for any caller that
+ *      reaches Stage 3 without going through Level 2 first.
+ *   1b. every row sets the same columns (order doesn't matter, the SET
+ *      does) - a single bulk INSERT is one SQL statement with one
+ *      fixed column list via OCI array binding; if two rows genuinely
+ *      need different columns set, that's two INSERT statements, not
+ *      one. Also a pure struct comparison, no connection needed - kept
+ *      before the metadata_cache lookup for the same reason as check 1.
+ *   2. table_name/owner resolve via metadata_cache_get_or_fetch() -
+ *      this DOES need a connection (it's a cache-or-fetch, not a pure
+ *      struct check), same "case-by-case, not a blanket rule" carve-out
+ *      already established for SELECT's row-count guard, just cutting
+ *      the other way here since the metadata cache means this is cheap
+ *      and safe to do even on the common (cache-hit) path.
+ *   3. every field in every row: field_name matches a real column
+ *      (FIELD_UNKNOWN_COLUMN if not), then validate_field() from
+ *      OCI_Insert_Validate_Module.h - same rules documented there,
+ *      just resolved from metadata_cache instead of client-echoed
+ *      metadata.
+ *   4. every NOT NULL column with no default on the table is present
+ *      in the row (FIELD_MISSING_REQUIRED_COLUMN if not) - a check the
+ *      old client-echoes-everything model never needed, since the
+ *      client always enumerated every column whether they were
+ *      setting it or not; the new slim wire format only sends columns
+ *      the client actually wants to set, so an omitted NOT NULL column
+ *      needs to be caught here or Oracle would reject it later as
+ *      ORA-01400 instead of a clean validation failure.
+ *
+ * Parameters
+ *   ctx          - ctx->insert_logger for validation logging (matches
+ *                  every existing Insert-path log call),
+ *                  ctx->metadata_cache for the lookup, ctx->ini for
+ *                  max_bulk_inserts
+ *   op           - must have type == OP_INSERT and a non-NULL payload
+ *                  (an insert_request_t built by Level 1)
+ *   error_detail - populated on any failure. On success,
+ *                  error_detail->status_code is 0 and error_code/
+ *                  error_text are "-".
+ *
+ * Returns LEVEL2_OK on success, one of the LEVEL2_ERR_* codes above
+ * otherwise. Does not modify op->payload - only reads it.
+ */
+int level2_validate_insert(oci_context_t        *ctx,
+                            input_c_operation_t  *op,
+                            operation_status_t   *error_detail);
+
+/*
+ * level2_validate_update()
+ *
+ * Validates one OP_UPDATE operation's already-built update_request_t
+ * (op->payload) against the table's REAL column metadata, resolved via
+ * ctx->metadata_cache - same reasoning as level2_validate_insert().
+ *
+ * Checks, in order, first failure wins:
+ *   1. table_name is non-empty.
+ *   2. key_count > 0 - an UPDATE with no WHERE clause matches every
+ *      row in the table; refused outright rather than silently
+ *      allowed, since that's almost certainly a client mistake, not
+ *      an intentional whole-table update.
+ *   3. field_count > 0 - an UPDATE with nothing to SET is meaningless.
+ *   4. table_name/owner resolve via metadata_cache_get_or_fetch().
+ *   5. every WHERE key: field_name matches a real column
+ *      (FIELD_UNKNOWN_COLUMN if not), key_value is non-empty. No
+ *      validate_field() type/length checking on WHERE values - that's
+ *      about SET clause correctness (data being written), not WHERE
+ *      predicate correctness (a value being matched, not stored).
+ *   6. every SET field: field_name matches a real column, then
+ *      validate_field() - same rules as INSERT's SET/row fields,
+ *      reused unchanged.
+ *
+ * Deliberately has NO equivalent of INSERT's Check 4 (missing required
+ * NOT NULL column) - an UPDATE only touches the columns actually
+ * listed in SET; the row already exists with everything else already
+ * populated, so there's nothing to check there.
+ *
+ * Parameters - same shape as level2_validate_insert(); see that
+ * function's own doc comment above for what ctx/op/error_detail mean.
+ *
+ * Returns LEVEL2_OK on success, one of the LEVEL2_ERR_* codes above
+ * otherwise. Does not modify op->payload - only reads it.
+ */
+int level2_validate_update(oci_context_t        *ctx,
                             input_c_operation_t  *op,
                             operation_status_t   *error_detail);
 

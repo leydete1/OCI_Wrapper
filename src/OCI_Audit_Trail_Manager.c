@@ -119,6 +119,25 @@ static int      audit_append(char  **buf,
                               size_t *used,
                               size_t *capacity,
                               const char *fmt, ...);
+static void     set_audit_field_value(field_value_t *fv, const char *src);
+static int      build_audit_row(insert_row_t *row,
+                                 const char *table_name,
+                                 const char *record_id,
+                                 const char *field_name,
+                                 const char *action_type,
+                                 int         include_old_value,
+                                 const char *old_value,
+                                 const char *new_value,
+                                 const char *data_type,
+                                 const char *changed_by,
+                                 const char *change_reason,
+                                 const char *tx_id,
+                                 const char *session_id,
+                                 const char *client_ip,
+                                 const char *application_name,
+                                 const char *module_name,
+                                 const char *row_hash);
+static void     free_audit_request(insert_request_t *req);
 
 /* ================================================================== */
 /*  audit_trail_build_row_hash                                          */
@@ -153,6 +172,148 @@ char *audit_trail_build_row_hash(const char *table_name,
 
     snprintf(dest, dest_max, "%016llx", (unsigned long long)hash);
     return dest;
+}
+
+/*
+ * set_audit_field_value()
+ *
+ * Mirrors set_field_value() in OCI_Level1_Parser.c exactly - see
+ * field_value_t's own doc comment in OCI_Request_Response_Types.h.
+ * NEW_VALUE (the full row snapshot, or a single column's value on the
+ * field-level path) is the one field here routinely long enough to
+ * need this - kept as its own local copy rather than a shared helper,
+ * matching how every parser/builder module in this project stays
+ * fully independent (same reasoning as OCI_Level2_Parser.c's own
+ * set_error()/set_ok(), for example).
+ */
+static void set_audit_field_value(field_value_t *fv, const char *src)
+{
+    size_t len = strlen(src);
+
+    if (len < sizeof(fv->value))
+    {
+        strncpy(fv->value, src, sizeof(fv->value) - 1);
+        fv->value[sizeof(fv->value) - 1] = '\0';
+        fv->large_value = NULL;
+        return;
+    }
+
+    fv->large_value = malloc(len + 1);
+    if (fv->large_value)
+        memcpy(fv->large_value, src, len + 1);
+    strncpy(fv->value, src, sizeof(fv->value) - 1);
+    fv->value[sizeof(fv->value) - 1] = '\0';
+}
+
+/*
+ * build_audit_row()
+ *
+ * Populates one insert_row_t with AUDIT_TRAIL's column set - shared by
+ * audit_trail_insert()'s field-level path (one call per business-row x
+ * column pair) and audit_trail_insert_snapshot() (one call per
+ * business row). Column order doesn't need to match the table's
+ * physical layout - level2_validate_insert() resolves every column by
+ * name via metadata_cache, not position (see build_insert_ctx_from_
+ * request()'s own doc comment in OCI_Insert_Execute_Module.c).
+ *
+ * old_value is only emitted when include_old_value is set - the
+ * field-level path (audit_trail_insert(), UPDATE/DELETE - out of scope
+ * for behavioural changes today, only needs to compile against the new
+ * signature) always sets this, preserving its original behaviour
+ * exactly (both OLD_VALUE and NEW_VALUE fields always present, empty
+ * when not applicable). audit_trail_insert_snapshot() (INSERT - what
+ * this refactor pass actually targets) passes 0: an INSERT snapshot
+ * has no old value to record, and sending an explicit empty value for
+ * it isn't "no old value", it's a different, wrong thing to assert.
+ * Matches the project's "client only sends the columns it actually
+ * wants to set" design throughout - the audit module isn't a client,
+ * but the same reasoning applies.
+ *
+ * AUDIT_ID, CHANGED_BY_DB_USER, CHANGE_TIMESTAMP, PARTITION_DATE, and
+ * every ESIG_* column are deliberately not set here either - Oracle
+ * assigns/defaults them, same as the old XML-based version's own
+ * comment already noted.
+ *
+ * Returns 0 on success, -1 on allocation failure (row left with
+ * field_count 0, fields NULL - safe to pass to free_audit_request()).
+ */
+static int build_audit_row(insert_row_t *row,
+                            const char *table_name,
+                            const char *record_id,
+                            const char *field_name,
+                            const char *action_type,
+                            int         include_old_value,
+                            const char *old_value,
+                            const char *new_value,
+                            const char *data_type,
+                            const char *changed_by,
+                            const char *change_reason,
+                            const char *tx_id,
+                            const char *session_id,
+                            const char *client_ip,
+                            const char *application_name,
+                            const char *module_name,
+                            const char *row_hash)
+{
+    int field_count = include_old_value ? 15 : 14;
+
+    row->fields = calloc((size_t)field_count, sizeof(field_value_t));
+    if (!row->fields) { row->field_count = 0; return -1; }
+    row->field_count = field_count;
+
+    int i = 0;
+
+#define AUDIT_SET(name_, val_)                                              \
+    do {                                                                    \
+        strncpy(row->fields[i].field_name, (name_),                        \
+                sizeof(row->fields[i].field_name) - 1);                    \
+        set_audit_field_value(&row->fields[i], (val_) ? (val_) : "");      \
+        i++;                                                               \
+    } while (0)
+
+    AUDIT_SET("TABLE_NAME",       table_name);
+    AUDIT_SET("RECORD_ID",        record_id[0] ? record_id : "-");
+    AUDIT_SET("FIELD_NAME",       field_name);
+    AUDIT_SET("ACTION_TYPE",      action_type);
+    if (include_old_value)
+        AUDIT_SET("OLD_VALUE",   old_value);
+    AUDIT_SET("NEW_VALUE",        new_value);
+    AUDIT_SET("DATA_TYPE",        data_type);
+    AUDIT_SET("CHANGED_BY",       changed_by);
+    AUDIT_SET("CHANGE_REASON",    change_reason);
+    AUDIT_SET("TRANSACTION_ID",   tx_id);
+    AUDIT_SET("SESSION_ID",       session_id);
+    AUDIT_SET("CLIENT_IP",        client_ip);
+    AUDIT_SET("APPLICATION_NAME", application_name);
+    AUDIT_SET("MODULE_NAME",      module_name);
+    AUDIT_SET("ROW_HASH",         row_hash);
+
+#undef AUDIT_SET
+
+    return 0;
+}
+
+/*
+ * free_audit_request()
+ *
+ * Frees an insert_request_t built by build_audit_row() calls - mirrors
+ * level1_free_request()'s OP_INSERT case in OCI_Level1_Parser.c
+ * exactly (large_value per field, then each row's fields array, then
+ * the rows array itself), since this request is built directly rather
+ * than through Level 1, so that function never sees it.
+ */
+static void free_audit_request(insert_request_t *req)
+{
+    if (!req) return;
+    for (int r = 0; r < req->row_count; r++)
+    {
+        for (int f = 0; f < req->rows[r].field_count; f++)
+            free(req->rows[r].fields[f].large_value);
+        free(req->rows[r].fields);
+    }
+    free(req->rows);
+    req->rows = NULL;
+    req->row_count = 0;
 }
 
 /* ================================================================== */
@@ -269,53 +430,44 @@ int audit_trail_insert(oci_context_t         *ctx,
                  tx_id);
 
     /* ================================================================
-     *  Build the <Insert_Template> XML for the AUDIT_TRAIL bulk insert.
+     *  Build the AUDIT_TRAIL insert_request_t directly - one row per
+     *  (business_row, col) pair. No XML at all any more:
+     *  execute_insert_batch() takes insert_request_t* now, and values
+     *  are real field_value_t content, not XML text, so there's no
+     *  need to XML-escape anything building this (audit_xml_escape()
+     *  stays defined for the field-level paths not touched today, but
+     *  is no longer called here).
      *
-     *  One <row> element per (business_row, col) pair.
-     *  Fixed columns (scalars): TABLE_NAME, RECORD_ID, FIELD_NAME,
-     *    ACTION_TYPE, DATA_TYPE, CHANGED_BY, CHANGE_REASON,
-     *    TRANSACTION_ID, SESSION_ID, CLIENT_IP, APPLICATION_NAME,
-     *    MODULE_NAME, ROW_HASH.
-     *  CLOB columns: OLD_VALUE, NEW_VALUE.
+     *  Column order doesn't need to match the table's physical layout
+     *  any more either - level2_validate_insert() (called internally
+     *  by execute_insert_batch() as its own first step) resolves every
+     *  column by name via metadata_cache, not position.
      *
-     *  execute_insert_batch() handles CLOB columns via EMPTY_CLOB() +
-     *  SELECT FOR UPDATE automatically when the field type is CLOB.
-     *  We provide the value inline (it may be large but fits within
-     *  MAX_COL_VALUE_SIZE = 32 KB per field).
+     *  Both OLD_VALUE and NEW_VALUE are always included here (possibly
+     *  empty) - preserves this field-level path's original behaviour
+     *  exactly, since UPDATE/DELETE's own audit semantics are out of
+     *  scope for behavioural changes in this pass; only INSERT
+     *  (audit_trail_insert_snapshot() below) is what this refactor
+     *  actually targets, and it makes the opposite, deliberate choice
+     *  to omit OLD_VALUE entirely - see build_audit_row()'s own doc
+     *  comment for why.
      * ================================================================ */
-
-    /* Estimate buffer size and allocate */
-    size_t capacity = (size_t)total_audit_rows * AUDIT_XML_BYTES_PER_ROW
-                    + AUDIT_XML_HEADER_BYTES;
-
-    /* Minimum sensible buffer even for 0 rows (guards against tiny
-     * edge-case allocations that still need the template skeleton)    */
-    if (capacity < 8192) capacity = 8192;
-
-    char  *xml_buf = malloc(capacity);
-    if (!xml_buf)
+    insert_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.table_name, AUDIT_TABLE_NAME, sizeof(req.table_name) - 1);
+    strncpy(req.owner,      AUDIT_OWNER,      sizeof(req.owner) - 1);
+    req.row_count = total_audit_rows;
+    req.rows = calloc((size_t)total_audit_rows, sizeof(insert_row_t));
+    if (!req.rows)
     {
         logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
-                     "malloc failed for audit XML buffer (%zu bytes)",
-                     capacity);
+                     "calloc failed for AUDIT_TRAIL insert_request_t rows "
+                     "(%d rows)", total_audit_rows);
         return -1;
     }
 
-    size_t used = 0;
-
-    /* ---- XML header ---- */
-    rc = audit_append(&xml_buf, &used, &capacity,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<Insert_Template>\n"
-        "  <operation>INSERT</operation>\n"
-        "  <table_name>%s</table_name>\n"
-        "  <owner>%s</owner>\n",
-        AUDIT_TABLE_NAME,
-        AUDIT_OWNER);
-    if (rc != 0) goto Cleanup;
-
-    /* ---- One <row> per (business row * col) ---- */
-    int xml_row_num = 0;
+    /* ---- One row per (business row * col) ---- */
+    int audit_row_num = 0;
 
     /* Cast void* arrays to the internal field_value_t type            */
     const audit_field_value_t *new_vals =
@@ -327,8 +479,6 @@ int audit_trail_insert(oci_context_t         *ctx,
     {
         for (int c = 0; c < atr->col_count; c++)
         {
-            xml_row_num++;
-
             /* ---- Resolve field name ---- */
             const char *field_name = (atr->col_names && atr->col_names[c][0])
                                      ? atr->col_names[c]
@@ -341,29 +491,22 @@ int audit_trail_insert(oci_context_t         *ctx,
                             ? atr->col_types[c].data_type
                             : "-";
 
-            /* ---- Resolve OLD_VALUE and NEW_VALUE ---- */
-            char old_escaped[AUDIT_MAX_COL_VALUE + 64];
-            char new_escaped[AUDIT_MAX_COL_VALUE + 64];
-
-            memset(old_escaped, 0, sizeof(old_escaped));
-            memset(new_escaped, 0, sizeof(new_escaped));
+            /* ---- Resolve OLD_VALUE and NEW_VALUE (raw, no XML escaping
+             * needed any more - see this block's own top comment)     */
+            const char *old_value = "";
+            const char *new_value = "";
 
             if (old_vals)
             {
-                const audit_field_value_t *fv =
-                    &old_vals[br * atr->col_count + c];
+                const audit_field_value_t *fv = &old_vals[br * atr->col_count + c];
                 if (!fv->is_empty && fv->value[0] != '\0')
-                    audit_xml_escape(fv->value,
-                                     old_escaped, sizeof(old_escaped));
+                    old_value = fv->value;
             }
-
             if (new_vals)
             {
-                const audit_field_value_t *fv =
-                    &new_vals[br * atr->col_count + c];
+                const audit_field_value_t *fv = &new_vals[br * atr->col_count + c];
                 if (!fv->is_empty && fv->value[0] != '\0')
-                    audit_xml_escape(fv->value,
-                                     new_escaped, sizeof(new_escaped));
+                    new_value = fv->value;
             }
 
             /* ---- Build ROW_HASH ---- */
@@ -373,7 +516,7 @@ int audit_trail_insert(oci_context_t         *ctx,
                 atr->record_id,
                 field_name,
                 atr->action_type,
-                new_escaped[0] ? new_escaped : "",
+                new_value,
                 changed_by,
                 tx_id,
                 row_hash,
@@ -382,284 +525,43 @@ int audit_trail_insert(oci_context_t         *ctx,
             logger_write(ctx->audit_logger, LOG_DEBUG, __func__, 0,
                          "Audit row %d: table='%s' record='%s' "
                          "field='%s' action='%s' hash='%s'",
-                         xml_row_num,
+                         audit_row_num + 1,
                          atr->table_name, atr->record_id,
                          field_name, atr->action_type, row_hash);
 
-            /* ---- Emit <row> XML ---- */
-            /*
-             * Column order must match the AUDIT_TRAIL table definition.
-             * Columns with Oracle defaults (AUDIT_ID, CHANGED_BY_DB_USER,
-             * CHANGE_TIMESTAMP, PARTITION_DATE) are intentionally omitted
-             * so Oracle assigns them automatically.
-             * ESIG_* columns are also omitted (Stage 2).
-             *
-             * Each <field> block follows the Insert_Template schema
-             * used throughout the project.
-             */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "  <row number=\"%d\">\n"
+            if (build_audit_row(&req.rows[audit_row_num],
+                                 atr->table_name,
+                                 atr->record_id[0] ? atr->record_id : "-",
+                                 field_name,
+                                 atr->action_type,
+                                 1,   /* include_old_value - see block comment */
+                                 old_value,
+                                 new_value,
+                                 data_type,
+                                 changed_by,
+                                 atr->change_reason,
+                                 tx_id,
+                                 session_id,
+                                 client_ip,
+                                 AUDIT_APPLICATION_NAME,
+                                 atr->module_name[0] ? atr->module_name : "Data_Manager",
+                                 row_hash) != 0)
+            {
+                logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
+                             "build_audit_row failed row=%d col=%d",
+                             br, c);
+                free_audit_request(&req);
+                return -1;
+            }
 
-                /* TABLE_NAME - VARCHAR2(128) NOT NULL */
-                "    <field>\n"
-                "      <field_number>1</field_number>\n"
-                "      <field_name>TABLE_NAME</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>128</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n"
-
-                /* RECORD_ID - VARCHAR2(255) NOT NULL */
-                "    <field>\n"
-                "      <field_number>2</field_number>\n"
-                "      <field_name>RECORD_ID</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>255</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n"
-
-                /* FIELD_NAME - VARCHAR2(128) NOT NULL */
-                "    <field>\n"
-                "      <field_number>3</field_number>\n"
-                "      <field_name>FIELD_NAME</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>128</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n"
-
-                /* ACTION_TYPE - VARCHAR2(10) NOT NULL */
-                "    <field>\n"
-                "      <field_number>4</field_number>\n"
-                "      <field_name>ACTION_TYPE</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>10</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                xml_row_num,
-                atr->table_name,
-                atr->record_id[0] ? atr->record_id : "-",
-                field_name,
-                atr->action_type);
-            if (rc != 0) goto Cleanup;
-
-            /* OLD_VALUE - CLOB (nullable) */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>5</field_number>\n"
-                "      <field_name>OLD_VALUE</field_name>\n"
-                "      <field_type>CLOB</field_type>\n"
-                "      <field_length>4000</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                old_escaped);
-            if (rc != 0) goto Cleanup;
-
-            /* NEW_VALUE - CLOB (nullable) */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>6</field_number>\n"
-                "      <field_name>NEW_VALUE</field_name>\n"
-                "      <field_type>CLOB</field_type>\n"
-                "      <field_length>4000</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                new_escaped);
-            if (rc != 0) goto Cleanup;
-
-            /* DATA_TYPE - VARCHAR2(50) nullable */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>7</field_number>\n"
-                "      <field_name>DATA_TYPE</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>50</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                data_type);
-            if (rc != 0) goto Cleanup;
-
-            /* CHANGED_BY - VARCHAR2(100) NOT NULL */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>8</field_number>\n"
-                "      <field_name>CHANGED_BY</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>100</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                changed_by);
-            if (rc != 0) goto Cleanup;
-
-            /* CHANGE_REASON - VARCHAR2(500) NOT NULL */
-            char reason_escaped[1024];
-            memset(reason_escaped, 0, sizeof(reason_escaped));
-            audit_xml_escape(atr->change_reason,
-                             reason_escaped, sizeof(reason_escaped));
-
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>9</field_number>\n"
-                "      <field_name>CHANGE_REASON</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>500</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                reason_escaped);
-            if (rc != 0) goto Cleanup;
-
-            /* TRANSACTION_ID - VARCHAR2(100) NOT NULL */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>10</field_number>\n"
-                "      <field_name>TRANSACTION_ID</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>100</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                tx_id);
-            if (rc != 0) goto Cleanup;
-
-            /* SESSION_ID - VARCHAR2(100) nullable */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>11</field_number>\n"
-                "      <field_name>SESSION_ID</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>100</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                session_id);
-            if (rc != 0) goto Cleanup;
-
-            /* CLIENT_IP - VARCHAR2(45) nullable */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>12</field_number>\n"
-                "      <field_name>CLIENT_IP</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>45</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                client_ip);
-            if (rc != 0) goto Cleanup;
-
-            /* APPLICATION_NAME - VARCHAR2(100) nullable */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>13</field_number>\n"
-                "      <field_name>APPLICATION_NAME</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>100</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                AUDIT_APPLICATION_NAME);
-            if (rc != 0) goto Cleanup;
-
-            /* MODULE_NAME - VARCHAR2(100) nullable */
-            char module_escaped[256];
-            memset(module_escaped, 0, sizeof(module_escaped));
-            audit_xml_escape(atr->module_name[0]
-                             ? atr->module_name : "Data_Manager",
-                             module_escaped, sizeof(module_escaped));
-
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>14</field_number>\n"
-                "      <field_name>MODULE_NAME</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>100</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>Y</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n",
-                module_escaped);
-            if (rc != 0) goto Cleanup;
-
-            /* ROW_HASH - VARCHAR2(64) NOT NULL */
-            rc = audit_append(&xml_buf, &used, &capacity,
-                "    <field>\n"
-                "      <field_number>15</field_number>\n"
-                "      <field_name>ROW_HASH</field_name>\n"
-                "      <field_type>VARCHAR2</field_type>\n"
-                "      <field_length>64</field_length>\n"
-                "      <field_precision>-1</field_precision>\n"
-                "      <field_scale>-1</field_scale>\n"
-                "      <field_nullable>N</field_nullable>\n"
-                "      <field_default></field_default>\n"
-                "      <insert_value>%s</insert_value>\n"
-                "    </field>\n"
-                "  </row>\n",
-                row_hash);
-            if (rc != 0) goto Cleanup;
+            audit_row_num++;
 
         } /* end for each column */
     } /* end for each business row */
 
-    /* ---- XML footer ---- */
-    rc = audit_append(&xml_buf, &used, &capacity,
-        "  <column_count>15</column_count>\n"
-        "</Insert_Template>\n");
-    if (rc != 0) goto Cleanup;
-
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
-                 "Audit XML built: %zu bytes for %d audit row(s)",
-                 used, xml_row_num);
-    logger_write(ctx->audit_logger, LOG_DEBUG, __func__, 0,
-                 "Audit XML:\n%s", xml_buf);
+                 "AUDIT_TRAIL insert_request_t built: %d audit row(s)",
+                 audit_row_num);
 
     /* ================================================================
      *  Execute the bulk audit insert via execute_insert_batch().
@@ -675,15 +577,15 @@ int audit_trail_insert(oci_context_t         *ctx,
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
                  "Calling execute_insert_batch for AUDIT_TRAIL "
                  "(%d row(s)) tx_id='%s'",
-                 xml_row_num, tx_id);
+                 audit_row_num, tx_id);
 
-    rc = execute_insert_batch(ctx, xml_buf, &cfg);
+    rc = execute_insert_batch(ctx, &req, &cfg);
 
     if (rc == 0)
     {
         logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
                      "Audit insert OK: %d row(s) written to AUDIT_TRAIL",
-                     xml_row_num);
+                     audit_row_num);
     }
     else
     {
@@ -700,16 +602,12 @@ int audit_trail_insert(oci_context_t         *ctx,
         free(cfg.xml);
         cfg.xml = NULL;
     }
+    free(cfg.OUTPUT_JSON);
 
-Cleanup:
+    free_audit_request(&req);
+
     /* Always clear the cycle-guard regardless of success or failure   */
     audit_trail_in_progress = 0;
-
-    if (xml_buf)
-    {
-        free(xml_buf);
-        xml_buf = NULL;
-    }
 
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
                  "audit_trail_insert complete rc=%d", rc);
@@ -988,9 +886,14 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
                  atr->row_count, atr->col_count, tx_id);
 
     /* ================================================================
-     *  Allocate snapshot serialisation buffer.
-     *  Worst case: col_count * (128 name + 1 = + AUDIT_MAX_COL_VALUE)
-     *  plus separators.  We use a generous fixed cap per row.
+     *  Allocate snapshot serialisation buffer - unchanged from before.
+     *  audit_trail_serialise_row() still does the actual column
+     *  serialisation; only what happens to its output changed (goes
+     *  straight into a field_value_t via build_audit_row(), which
+     *  transparently handles values larger than field_value_t's 4096-
+     *  byte value[] via large_value - see field_value_t's own doc
+     *  comment in OCI_Request_Response_Types.h - rather than being
+     *  written into an <insert_value> XML tag).
      * ================================================================ */
     size_t snap_cap = (size_t)atr->col_count *
                       (128 + 1 + AUDIT_MAX_COL_VALUE + 8) + 64;
@@ -1005,38 +908,32 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
     }
 
     /* ================================================================
-     *  Allocate XML template buffer.
-     *  One <row> per business row; each row has 15 fields.
-     *  Per-row estimate: snapshot CLOB size + 4 KB overhead.
+     *  Build the AUDIT_TRAIL insert_request_t directly - one row per
+     *  business row. No XML at all any more - see the equivalent
+     *  comment in audit_trail_insert()'s own rewritten block above for
+     *  the full reasoning (applies identically here).
+     *
+     *  OLD_VALUE is omitted entirely (include_old_value=0) - an INSERT
+     *  snapshot has no old value to record. See build_audit_row()'s
+     *  own doc comment for why that's different from sending an
+     *  explicit empty value for it.
      * ================================================================ */
-    size_t capacity = (size_t)atr->row_count *
-                      (snap_cap + 4096) + AUDIT_XML_HEADER_BYTES;
-    if (capacity < 8192) capacity = 8192;
-
-    char  *xml_buf = malloc(capacity);
-    if (!xml_buf)
+    insert_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.table_name, AUDIT_TABLE_NAME, sizeof(req.table_name) - 1);
+    strncpy(req.owner,      AUDIT_OWNER,      sizeof(req.owner) - 1);
+    req.row_count = atr->row_count;
+    req.rows = calloc((size_t)atr->row_count, sizeof(insert_row_t));
+    if (!req.rows)
     {
         logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
-                     "malloc failed for snapshot XML buffer (%zu bytes)",
-                     capacity);
+                     "calloc failed for AUDIT_TRAIL insert_request_t rows "
+                     "(%d rows)", atr->row_count);
         free(snap_buf);
         return -1;
     }
 
-    size_t used = 0;
-
-    /* ---- XML header ---- */
-    rc = audit_append(&xml_buf, &used, &capacity,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<Insert_Template>\n"
-        "  <operation>INSERT</operation>\n"
-        "  <table_name>%s</table_name>\n"
-        "  <owner>%s</owner>\n",
-        AUDIT_TABLE_NAME,
-        AUDIT_OWNER);
-    if (rc != 0) goto Cleanup;
-
-    /* ---- One <row> per business row ---- */
+    /* ---- One row per business row ---- */
     for (int br = 0; br < atr->row_count; br++)
     {
         /* Serialise all columns for this row into snap_buf */
@@ -1050,8 +947,9 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
         {
             logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
                          "audit_trail_serialise_row failed row=%d", br);
-            rc = -1;
-            goto Cleanup;
+            free(snap_buf);
+            free_audit_request(&req);
+            return -1;
         }
 
         /* Build ROW_HASH across the entire snapshot string            */
@@ -1073,267 +971,36 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
                      br + 1, atr->table_name, atr->record_id,
                      strlen(snap_buf), row_hash);
 
-        /* Escape change_reason for XML */
-        char reason_escaped[1024];
-        memset(reason_escaped, 0, sizeof(reason_escaped));
-        audit_xml_escape(atr->change_reason,
-                         reason_escaped, sizeof(reason_escaped));
-
-        /* Escape module_name for XML */
-        char module_escaped[256];
-        memset(module_escaped, 0, sizeof(module_escaped));
-        audit_xml_escape(atr->module_name[0]
-                         ? atr->module_name : "Data_Manager",
-                         module_escaped, sizeof(module_escaped));
-
-        /* ---- Emit <row> ---- */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "  <row number=\"%d\">\n"
-
-            /* 1 TABLE_NAME */
-            "    <field>\n"
-            "      <field_number>1</field_number>\n"
-            "      <field_name>TABLE_NAME</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>128</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n"
-
-            /* 2 RECORD_ID */
-            "    <field>\n"
-            "      <field_number>2</field_number>\n"
-            "      <field_name>RECORD_ID</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>255</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n"
-
-            /* 3 FIELD_NAME - sentinel for snapshot rows */
-            "    <field>\n"
-            "      <field_number>3</field_number>\n"
-            "      <field_name>FIELD_NAME</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>128</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n"
-
-            /* 4 ACTION_TYPE */
-            "    <field>\n"
-            "      <field_number>4</field_number>\n"
-            "      <field_name>ACTION_TYPE</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>10</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            br + 1,
-            atr->table_name,
-            atr->record_id[0] ? atr->record_id : "-",
-            AUDIT_SNAPSHOT_SENTINEL,
-            atr->action_type);
-        if (rc != 0) goto Cleanup;
-
-        /* 5 OLD_VALUE CLOB - always NULL for INSERT snapshot           */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>5</field_number>\n"
-            "      <field_name>OLD_VALUE</field_name>\n"
-            "      <field_type>CLOB</field_type>\n"
-            "      <field_length>4000</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value></insert_value>\n"
-            "    </field>\n");
-        if (rc != 0) goto Cleanup;
-
-        /* 6 NEW_VALUE CLOB - the full row snapshot                     */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>6</field_number>\n"
-            "      <field_name>NEW_VALUE</field_name>\n"
-            "      <field_type>CLOB</field_type>\n"
-            "      <field_length>4000</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            snap_buf);
-        if (rc != 0) goto Cleanup;
-
-        /* 7 DATA_TYPE - "SNAPSHOT" to identify the record type clearly */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>7</field_number>\n"
-            "      <field_name>DATA_TYPE</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>50</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>SNAPSHOT</insert_value>\n"
-            "    </field>\n");
-        if (rc != 0) goto Cleanup;
-
-        /* 8 CHANGED_BY */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>8</field_number>\n"
-            "      <field_name>CHANGED_BY</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>100</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            changed_by);
-        if (rc != 0) goto Cleanup;
-
-        /* 9 CHANGE_REASON */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>9</field_number>\n"
-            "      <field_name>CHANGE_REASON</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>500</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            reason_escaped);
-        if (rc != 0) goto Cleanup;
-
-        /* 10 TRANSACTION_ID */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>10</field_number>\n"
-            "      <field_name>TRANSACTION_ID</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>100</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            tx_id);
-        if (rc != 0) goto Cleanup;
-
-        /* 11 SESSION_ID */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>11</field_number>\n"
-            "      <field_name>SESSION_ID</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>100</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            session_id);
-        if (rc != 0) goto Cleanup;
-
-        /* 12 CLIENT_IP */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>12</field_number>\n"
-            "      <field_name>CLIENT_IP</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>45</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            client_ip);
-        if (rc != 0) goto Cleanup;
-
-        /* 13 APPLICATION_NAME */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>13</field_number>\n"
-            "      <field_name>APPLICATION_NAME</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>100</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            AUDIT_APPLICATION_NAME);
-        if (rc != 0) goto Cleanup;
-
-        /* 14 MODULE_NAME */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>14</field_number>\n"
-            "      <field_name>MODULE_NAME</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>100</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>Y</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n",
-            module_escaped);
-        if (rc != 0) goto Cleanup;
-
-        /* 15 ROW_HASH */
-        rc = audit_append(&xml_buf, &used, &capacity,
-            "    <field>\n"
-            "      <field_number>15</field_number>\n"
-            "      <field_name>ROW_HASH</field_name>\n"
-            "      <field_type>VARCHAR2</field_type>\n"
-            "      <field_length>64</field_length>\n"
-            "      <field_precision>-1</field_precision>\n"
-            "      <field_scale>-1</field_scale>\n"
-            "      <field_nullable>N</field_nullable>\n"
-            "      <field_default></field_default>\n"
-            "      <insert_value>%s</insert_value>\n"
-            "    </field>\n"
-            "  </row>\n",
-            row_hash);
-        if (rc != 0) goto Cleanup;
+        if (build_audit_row(&req.rows[br],
+                             atr->table_name,
+                             atr->record_id[0] ? atr->record_id : "-",
+                             AUDIT_SNAPSHOT_SENTINEL,
+                             atr->action_type,
+                             0,   /* include_old_value - see block comment */
+                             NULL,
+                             snap_buf,
+                             "SNAPSHOT",
+                             changed_by,
+                             atr->change_reason,
+                             tx_id,
+                             session_id,
+                             client_ip,
+                             AUDIT_APPLICATION_NAME,
+                             atr->module_name[0] ? atr->module_name : "Data_Manager",
+                             row_hash) != 0)
+        {
+            logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
+                         "build_audit_row failed row=%d", br);
+            free(snap_buf);
+            free_audit_request(&req);
+            return -1;
+        }
 
     } /* end for each business row */
 
-    /* ---- XML footer ---- */
-    rc = audit_append(&xml_buf, &used, &capacity,
-        "  <column_count>15</column_count>\n"
-        "</Insert_Template>\n");
-    if (rc != 0) goto Cleanup;
-
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
-                 "Snapshot XML built: %zu bytes for %d audit row(s)",
-                 used, atr->row_count);
+                 "AUDIT_TRAIL snapshot insert_request_t built: %d row(s)",
+                 atr->row_count);
 
     /* ---- Execute via execute_insert_batch() with cycle-guard ---- */
     audit_trail_in_progress = 1;
@@ -1347,7 +1014,7 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
                  "(%d row(s)) tx_id='%s'",
                  atr->row_count, tx_id);
 
-    rc = execute_insert_batch(ctx, xml_buf, &cfg);
+    rc = execute_insert_batch(ctx, &req, &cfg);
 
     if (rc == 0)
         logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
@@ -1365,12 +1032,12 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
         if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
         free(cfg.xml);
     }
+    free(cfg.OUTPUT_JSON);
 
-Cleanup:
+    free_audit_request(&req);
+    free(snap_buf);
+
     audit_trail_in_progress = 0;
-
-    if (snap_buf) { free(snap_buf); snap_buf = NULL; }
-    if (xml_buf)  { free(xml_buf);  xml_buf  = NULL; }
 
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
                  "audit_trail_insert_snapshot complete rc=%d", rc);
