@@ -336,6 +336,53 @@ const char *tx_get_id(const tx_handle_t *handle);
  */
 int tx_is_active(const tx_handle_t *handle);
 
+/*
+ * begin_standalone_tx_if_needed() / end_standalone_tx_if_owned()
+ *
+ * Fixes a real GxP traceability gap found 2026-07-26: when
+ * execute_insert_batch()/execute_update_batch()/execute_delete_batch()
+ * runs standalone - not wrapped in an explicit tx_begin()/tx_commit()
+ * transaction by its caller - ctx->active_tx is NULL, so
+ * metrics_set_context() (metrics.c) has nothing to read and every
+ * metrics row produced during that call reports transaction_id="-".
+ * That includes the before-image SELECT, the AUDIT_TRAIL INSERT, and
+ * the operation's own row - three rows that are clearly one atomic
+ * unit (Oracle itself treats them as a single implicit transaction,
+ * auto-committed together at the end of the call) with no shared
+ * identifier linking them, which is exactly the kind of gap an
+ * auditor would immediately question.
+ *
+ * begin_standalone_tx_if_needed() gives that call its own transaction
+ * identity when it doesn't already have one:
+ *   - If ctx->active_tx is already set (this call is itself nested
+ *     inside another - e.g. the audit trail's own INSERT nested inside
+ *     the business operation that triggered it), does nothing and
+ *     returns 0 - the outer call's transaction_id is correctly
+ *     inherited by every nested metrics_set_context() call unchanged,
+ *     since ctx->active_tx is a single, shared context-level pointer
+ *     every such call already reads from.
+ *   - Otherwise, initialises local_tx (caller-owned, typically a
+ *     stack variable), generates a fresh UUID for it, marks it
+ *     TX_STATUS_ACTIVE (so tx_get_id() actually returns the UUID
+ *     instead of "-" - see tx_get_id()'s own status check), points
+ *     ctx->active_tx at it, and returns 1.
+ *
+ * end_standalone_tx_if_owned() must be called at the end of the same
+ * function (Cleanup, or wherever it returns) with whatever
+ * begin_standalone_tx_if_needed() returned - if that was 1, clears
+ * ctx->active_tx back to NULL (local_tx itself just goes out of scope,
+ * nothing to free); if 0, does nothing, since ctx->active_tx wasn't
+ * this call's to touch in the first place.
+ *
+ * local_tx is never registered with any transaction table/commit
+ * bookkeeping - it exists purely to give metrics_set_context() a
+ * transaction_id to read for the duration of one standalone call, not
+ * to become a real multi-call transaction a caller could later
+ * tx_commit()/tx_rollback() themselves.
+ */
+int  begin_standalone_tx_if_needed(oci_context_t *ctx, tx_handle_t *local_tx);
+void end_standalone_tx_if_owned(oci_context_t *ctx, int owned);
+
 #ifdef __cplusplus
 }
 #endif

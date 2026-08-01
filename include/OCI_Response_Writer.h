@@ -40,6 +40,7 @@
 #include "OCI_Resultset_Types.h"
 #include "resultset_cache.h"
 #include "OCI_Request_Response_Types.h"   /* dml_response_t, operation_type_t */
+#include "OCI_Execute_Procedure_Module.h" /* execute_procedure_response_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -200,6 +201,27 @@ char *response_write_dml_xml (oci_context_t *ctx, operation_type_t op_type,
                                const dml_response_t *resp);
 char *response_write_dml_json(oci_context_t *ctx, operation_type_t op_type,
                                const dml_response_t *resp);
+
+/*
+ * response_write_procedure_xml() / response_write_procedure_json()
+ *
+ * Render an execute_procedure_response_t (OCI_Execute_Procedure_
+ * Module.h) - scalar OUT/IN_OUT parameter values plus one resultset
+ * per CURSOR OUT parameter that produced rows.
+ *
+ * response_write_procedure_json()'s resultsets are a known, deliberate
+ * simplification - embedded as a labelled XML string field
+ * ("resultset_xml"), not proper nested JSON, since fetch_cursor_to_xml()
+ * (OCI_Execute_Procedure_Module.c) only ever produces XML; a true
+ * JSON-native cursor fetcher would be its own separate piece of work.
+ * Scalar out_parameters render as proper JSON either way.
+ *
+ * Returns NULL if resp is NULL.
+ */
+char *response_write_procedure_xml (oci_context_t *ctx,
+                                     const execute_procedure_response_t *resp);
+char *response_write_procedure_json(oci_context_t *ctx,
+                                     const execute_procedure_response_t *resp);
 
 #ifdef __cplusplus
 }

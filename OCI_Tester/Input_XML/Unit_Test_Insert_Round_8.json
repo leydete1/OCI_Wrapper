@@ -1,0 +1,31 @@
+{
+    "external_audit_id": "audit_stub_insert_round_8",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "INSERT",
+                "table_name": "AUDIT_TRAIL",
+                "owner": "DATA_MANAGER",
+                "rows": [
+                    {
+                        "row_number": 1,
+                        "fields": [
+                            { "field_name": "AUDIT_ID",            "value": "90001" },
+                            { "field_name": "TABLE_NAME",          "value": "OCI_FIELD_TEST" },
+                            { "field_name": "RECORD_ID",           "value": "1" },
+                            { "field_name": "FIELD_NAME",          "value": "VARCHAR2_COL" },
+                            { "field_name": "ACTION_TYPE",         "value": "UPDATE" },
+                            { "field_name": "CHANGED_BY",          "value": "test_user" },
+                            { "field_name": "CHANGED_BY_DB_USER",  "value": "DATA_MANAGER" },
+                            { "field_name": "CHANGE_TIMESTAMP",    "value": "2026-07-24 10:00:00" },
+                            { "field_name": "TRANSACTION_ID",      "value": "txn_00123" },
+                            { "field_name": "ROW_HASH",            "value": "abc123hash" }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -206,6 +206,93 @@ int level2_validate_update(oci_context_t        *ctx,
                             operation_status_t   *error_detail);
 
 /*
+ * level2_validate_delete()
+ *
+ * Validates one OP_DELETE operation's already-built delete_request_t
+ * (op->payload) against the table's REAL column metadata, resolved via
+ * ctx->metadata_cache - same reasoning as level2_validate_insert()/
+ * level2_validate_update().
+ *
+ * Genuinely simpler than UPDATE - DELETE has no SET clause at all, so
+ * this function's entire scope is the WHERE-key checks:
+ *
+ * Checks, in order, first failure wins:
+ *   1. table_name is non-empty.
+ *   2. key_count > 0 - a DELETE with no WHERE clause matches (and
+ *      removes) every row in the table; refused outright, same
+ *      reasoning as level2_validate_update()'s equivalent check, only
+ *      more consequential here since there is no equivalent of "the
+ *      rows are at least still there" the way an accidental whole-
+ *      table UPDATE leaves behind.
+ *   3. table_name/owner resolve via metadata_cache_get_or_fetch() -
+ *      needed here for the same reason as UPDATE's WHERE keys: the new
+ *      where_key_t carries no type information, so the real column
+ *      type (for date/timestamp bind wrapping) has to come from
+ *      metadata_cache, never the client.
+ *   4. every WHERE key: field_name matches a real column
+ *      (FIELD_UNKNOWN_COLUMN if not), key_value is non-empty. No
+ *      validate_field() type/length checking - same reasoning as
+ *      UPDATE's WHERE keys, a value being matched isn't a value being
+ *      stored.
+ *
+ * Parameters - same shape as level2_validate_insert()/
+ * level2_validate_update(); see those functions' own doc comments for
+ * what ctx/op/error_detail mean.
+ *
+ * Returns LEVEL2_OK on success, one of the LEVEL2_ERR_* codes above
+ * otherwise. Does not modify op->payload - only reads it.
+ */
+int level2_validate_delete(oci_context_t        *ctx,
+                            input_c_operation_t  *op,
+                            operation_status_t   *error_detail);
+
+/*
+ * level2_validate_procedure()
+ *
+ * Validates one OP_EXECUTE_PROCEDURE operation's already-built
+ * execute_procedure_request_t (op->payload).
+ *
+ * Deliberately lighter than INSERT/UPDATE/DELETE's own validators -
+ * there is no metadata_cache equivalent for a procedure's own
+ * parameter signature (Oracle doesn't expose that the way it exposes
+ * table columns via ALL_TAB_COLUMNS, and this project has no lookup
+ * for it), so there is nothing authoritative to resolve a parameter's
+ * declared type against the way find_column()/validate_field() resolve
+ * a table column's real type. This is the one place in the whole
+ * project where a client-declared type is trusted rather than
+ * resolved - not a relaxation of the "never trust the client"
+ * principle, just an acknowledgement that there is nothing available
+ * here to validate against instead.
+ *
+ * Checks, in order, first failure wins:
+ *   1. procedure_name is non-empty.
+ *   2. param_count is in range (0..MAX_PROC_PARAMS) - zero parameters
+ *      is valid (a procedure may take none).
+ *   3. every parameter: param_name is non-empty, param_type is one of
+ *      the recognised set (NUMBER/INTEGER/VARCHAR2/DATE/TIMESTAMP/
+ *      CURSOR).
+ *   4. every CURSOR parameter's direction is OUT - a REFCURSOR can't
+ *      be passed in, and there is nothing meaningful a caller could
+ *      supply for an IN or IN_OUT cursor.
+ *
+ * No audit trail integration for EXECUTE_PROCEDURE at all (2026-07-29
+ * decision) - a procedure is a black box from Data_Manager's own
+ * perspective, with no visibility into what its PL/SQL actually does
+ * internally, so there is nothing meaningful to hold Data_Manager
+ * itself accountable for beyond the fact the call was made.
+ *
+ * Parameters - same shape as level2_validate_insert()/update()/
+ * delete(); see those functions' own doc comments for what
+ * ctx/op/error_detail mean.
+ *
+ * Returns LEVEL2_OK on success, one of the LEVEL2_ERR_* codes above
+ * otherwise. Does not modify op->payload - only reads it.
+ */
+int level2_validate_procedure(oci_context_t        *ctx,
+                               input_c_operation_t  *op,
+                               operation_status_t   *error_detail);
+
+/*
  * level2_validate()
  *
  * Runs the appropriate validator against every operation in request,

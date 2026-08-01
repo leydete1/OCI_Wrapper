@@ -138,6 +138,8 @@ static int      build_audit_row(insert_row_t *row,
                                  const char *module_name,
                                  const char *row_hash);
 static void     free_audit_request(insert_request_t *req);
+static int      find_field_value_in_row(const char *row_buf, const char *col_name,
+                                         char *dest, size_t dest_max);
 
 /* ================================================================== */
 /*  audit_trail_build_row_hash                                          */
@@ -1050,6 +1052,55 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
 /*  Uses execute_query_batch() to re-use all existing query           */
 /*  infrastructure: metadata cache, LOB handling, metrics.            */
 /* ================================================================== */
+/*
+ * audit_get_date_wrapper()
+ *
+ * Local copy of the same wrapper-selection logic as
+ * OCI_Delete_Execute_Module.c's get_del_key_wrapper() / OCI_Update_
+ * Execute_Module.c's get_upd_key_wrapper() - kept independent rather
+ * than shared, matching how every parser/builder module in this
+ * project stays self-contained (same reasoning as this file's own
+ * set_audit_field_value(), a local copy of OCI_Level1_Parser.c's
+ * set_field_value()).
+ *
+ * Returns a %s-format wrapper for date/time/interval types, NULL for
+ * plain scalar types (VARCHAR2, NUMBER, CHAR, RAW, etc. - embedded as
+ * a bare quoted literal, unchanged from before this fix).
+ */
+/*
+ * audit_get_date_wrapper()
+ * Same design as OCI_Insert_Execute_Module.c's get_bind_wrapper() -
+ * see that function's own doc comment for the full 2026-07-28
+ * reasoning (no hardcoded date format literal any more; reads
+ * ctx->ini->nls_date_format fresh on every call instead).
+ */
+static int audit_get_date_wrapper(oci_context_t *ctx, const char *dtype,
+                                   char *dest, size_t dest_max)
+{
+    if (!dtype) return 0;
+    if (strcmp(dtype, "DATE") == 0)
+    {
+        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
+        return 1;
+    }
+    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
+    {
+        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
+        return 1;
+    }
+    if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
+    {
+        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
+        return 1;
+    }
+    if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
+    {
+        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
+        return 1;
+    }
+    return 0;
+}
+
 int audit_trail_fetch_before_image(oci_context_t  *ctx,
                                     const char     *table_name,
                                     const char     *owner,
@@ -1057,6 +1108,7 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
                                     int             col_count,
                                     char          (*key_names)[128],
                                     char          (*key_values)[32768],
+                                    char          (*key_data_types)[128],
                                     int             key_count,
                                     audit_old_value_t **old_values_out,
                                     int            *row_count_out)
@@ -1129,12 +1181,33 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
         }
         escaped_val[ei] = '\0';
 
+        /* Quote the escaped value, then apply a date/time/interval
+         * conversion wrapper around the quoted literal if this key's
+         * real column type needs one - see this function's own doc
+         * comment in OCI_Audit_Trail_Manager.h for the full 2026-07-26
+         * fix this is part of.                                        */
+        char quoted_val[65600];
+        snprintf(quoted_val, sizeof(quoted_val), "'%s'", escaped_val);
+
+        char wrapper_buf[128] = {0};
+        int  has_wrapper = key_data_types
+                            ? audit_get_date_wrapper(ctx, key_data_types[k],
+                                                     wrapper_buf, sizeof(wrapper_buf))
+                            : 0;
+        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
+
+        char value_expr[65700];
+        if (wrapper)
+            snprintf(value_expr, sizeof(value_expr), wrapper, quoted_val);
+        else
+            snprintf(value_expr, sizeof(value_expr), "%s", quoted_val);
+
         sql_used += (size_t)snprintf(sql_buf + sql_used,
                                       sizeof(sql_buf) - sql_used,
-                                      " %s %s = '%s'",
+                                      " %s %s = %s",
                                       k == 0 ? "WHERE" : "AND",
                                       key_names[k],
-                                      escaped_val);
+                                      value_expr);
     }
 
     logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
@@ -1237,36 +1310,26 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
             audit_old_value_t *ov = &old_vals[row_idx * col_count + c];
             ov->is_null = 1;   /* default to NULL */
 
-            /* Build open/close tags for this column */
-            char open_tag [160], close_tag[160];
-            snprintf(open_tag,  sizeof(open_tag),  "<%s>",  col_names[c]);
-            snprintf(close_tag, sizeof(close_tag), "</%s>", col_names[c]);
+            char value_buf[sizeof(ov->value)];
+            int found = find_field_value_in_row(row_buf, col_names[c],
+                                                 value_buf, sizeof(value_buf));
 
-            const char *vs = strstr(row_buf, open_tag);
-            if (vs)
+            if (found)
             {
-                vs += strlen(open_tag);
-                const char *ve = strstr(vs, close_tag);
-                if (ve)
-                {
-                    size_t vlen = (size_t)(ve - vs);
-                    if (vlen >= sizeof(ov->value))
-                        vlen = sizeof(ov->value) - 1;
-                    memcpy(ov->value, vs, vlen);
-                    ov->value[vlen] = '\0';
-                    ov->is_null = (vlen == 0) ? 1 : 0;
+                size_t vlen = strlen(value_buf);
+                memcpy(ov->value, value_buf, vlen + 1);
+                ov->is_null = (vlen == 0) ? 1 : 0;
 
-                    logger_write(ctx->audit_logger, LOG_DEBUG, __func__, 0,
-                                 "Before-image row=%d col='%s' value='%.80s'%s",
-                                 row_idx, col_names[c], ov->value,
-                                 vlen > 80 ? "..." : "");
-                }
+                logger_write(ctx->audit_logger, LOG_DEBUG, __func__, 0,
+                             "Before-image row=%d col='%s' value='%.80s'%s",
+                             row_idx, col_names[c], ov->value,
+                             vlen > 80 ? "..." : "");
             }
             else
             {
                 logger_write(ctx->audit_logger, LOG_DEBUG, __func__, 0,
-                             "Before-image row=%d col='%s' tag not found "
-                             "(NULL or column not in result)",
+                             "Before-image row=%d col='%s' field not found "
+                             "in result row (NULL or column not selected)",
                              row_idx, col_names[c]);
             }
         }
@@ -1293,6 +1356,90 @@ FetchCleanup:
     return rc;
 }
 
+/*
+ * find_field_value_in_row()
+ *
+ * Walks each <field>...</field> block within row_buf (one
+ * <row>...</row> block's content), matching by <field_name> content
+ * (case-insensitive) against col_name, and if found, copies
+ * <field_value>'s content into dest (up to dest_max-1 bytes, NUL-
+ * terminated).
+ *
+ * Replaces a direct "<col_name>value</col_name>" tag search that
+ * matched execute_query_batch()'s old, pre-refactor output shape but
+ * not its current one: response_write_xml() (OCI_Response_Writer.c)
+ * builds each row as a series of <field><field_name>/<field_type>/
+ * <field_value></field> blocks via xml_add_field() (XML_Helper.c), not
+ * as a tag literally named after the column - the old search could
+ * never match that shape, which is exactly why every column on every
+ * row was logging "tag not found" here before this fix, regardless of
+ * what was actually in the database. Matches by name, not position or
+ * literal tag name - same pattern used throughout this refactor (see
+ * build_insert_ctx_from_request()'s own doc comment in
+ * OCI_Insert_Execute_Module.c for the precedent).
+ *
+ * Returns 1 if a field with this name exists in the row (even if its
+ * value is empty - check dest[0] for that), 0 if no field with that
+ * name is present in this row at all.
+ */
+static int find_field_value_in_row(const char *row_buf, const char *col_name,
+                                    char *dest, size_t dest_max)
+{
+    dest[0] = '\0';
+
+    const char *fp = row_buf;
+    while ((fp = strstr(fp, "<field>")) != NULL)
+    {
+        const char *fe = strstr(fp, "</field>");
+        if (!fe) break;
+
+        size_t flen = (size_t)(fe - fp) + 8;
+        char  *fbuf = malloc(flen + 1);
+        if (!fbuf) { fp = fe + 8; continue; }
+        memcpy(fbuf, fp, flen);
+        fbuf[flen] = '\0';
+
+        char fname[256] = {0};
+        const char *ns = strstr(fbuf, "<field_name>");
+        if (ns)
+        {
+            ns += strlen("<field_name>");
+            const char *ne = strstr(ns, "</field_name>");
+            if (ne)
+            {
+                size_t nlen = (size_t)(ne - ns);
+                if (nlen >= sizeof(fname)) nlen = sizeof(fname) - 1;
+                memcpy(fname, ns, nlen);
+                fname[nlen] = '\0';
+            }
+        }
+
+        if (fname[0] && strcasecmp(fname, col_name) == 0)
+        {
+            const char *vs = strstr(fbuf, "<field_value>");
+            if (vs)
+            {
+                vs += strlen("<field_value>");
+                const char *ve = strstr(vs, "</field_value>");
+                if (ve)
+                {
+                    size_t vlen = (size_t)(ve - vs);
+                    if (vlen >= dest_max) vlen = dest_max - 1;
+                    memcpy(dest, vs, vlen);
+                    dest[vlen] = '\0';
+                }
+            }
+            free(fbuf);
+            return 1;
+        }
+
+        free(fbuf);
+        fp = fe + 8;
+    }
+
+    return 0;
+}
+
 /* ================================================================== */
 /*  Stage 2 - audit_trail_insert_update                                */
 /*  Write one AUDIT_TRAIL row per (updated row × changed column).     */
@@ -1312,8 +1459,25 @@ int audit_trail_insert_update(oci_context_t         *ctx,
         return -1;
     }
 
-    /* Cast new_values to the internal field type */
-    typedef struct { char value[32768]; int is_empty; } upd_fv_t;
+    /* Cast new_values to the internal field type.
+     *
+     * 2026-08-01 fix: this local redeclaration was missing the
+     * large_value pointer field that the real struct
+     * (upd_field_value_t, OCI_Update_Execute_Module.c) actually has
+     * between value[] and is_empty. Reading nv->is_empty through this
+     * mismatched layout was actually reading the first bytes of the
+     * real struct's large_value pointer instead of the real is_empty
+     * flag - undefined behaviour that happened to go unnoticed for
+     * most ordinary values (large_value is NULL when a value fits
+     * inline, so those bytes read as zero/false, coincidentally
+     * matching what is_empty should say for a normal, non-empty
+     * value) but is not guaranteed to behave consistently. Found via a
+     * real Tier 3 self-test run where a genuine NULL-to-value column
+     * change was incorrectly treated as unchanged. The field itself is
+     * never used here (new_values are read-only in this function,
+     * never freed), but the layout must match exactly for value[]/
+     * is_empty to land at the correct offsets.                         */
+    typedef struct { char value[32768]; char *large_value; int is_empty; } upd_fv_t;
     const upd_fv_t *new_vals = (const upd_fv_t *)atr->new_values;
 
     if (!new_vals)
@@ -1505,6 +1669,123 @@ int audit_trail_insert_update(oci_context_t         *ctx,
                  "table='%s' tx_id='%s'",
                  total_audited, total_skipped, total_rc,
                  atr->table_name, tx_id);
+
+    return total_rc;
+}
+
+/*
+ * audit_trail_insert_delete()
+ *
+ * Writes one AUDIT_TRAIL row per (matched row, WHERE-key column) -
+ * unconditional, unlike audit_trail_insert_update()'s diff-based skip:
+ * there is no "new" value to compare against for a DELETE, the old
+ * value going away IS the change by definition. Scoped to the
+ * WHERE-key columns only, per 2026-07-26 design decision - not every
+ * column on the table (audit_trail_fetch_before_image() is called
+ * with the WHERE keys themselves as the columns to capture, from
+ * execute_delete_batch(), so old_values here already only ever covers
+ * that same set).
+ *
+ * Called BEFORE the actual DELETE executes (from
+ * execute_delete_batch()), so the attempt is captured in AUDIT_TRAIL
+ * even if Oracle itself then rejects the DELETE for lack of privilege
+ * - see OCI_Delete_Execute_Module.h's own doc comment for the full GxP
+ * reasoning behind that ordering.
+ *
+ * old_values must be a flat array [row_count * col_count] of
+ * audit_old_value_t, as returned by audit_trail_fetch_before_image().
+ * new_values is always NULL on the resulting audit_trail_request_t -
+ * per that struct's own doc comment ("For DELETE: new_values[] is
+ * NULL"), already handled by audit_trail_insert()'s existing
+ * if (new_vals) guard, no changes needed there.
+ */
+int audit_trail_insert_delete(oci_context_t         *ctx,
+                               audit_trail_request_t *atr,
+                               audit_old_value_t     *old_values)
+{
+    if (!ctx || !atr || !old_values)
+    {
+        logger_write(ctx ? ctx->audit_logger : NULL,
+                     LOG_ERROR, __func__, 0,
+                     "audit_trail_insert_delete: NULL argument");
+        return -1;
+    }
+
+    const char *tx_id = ctx->active_tx ? tx_get_id(ctx->active_tx) : "-";
+
+    logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
+                 "audit_trail_insert_delete: table='%s' rows=%d cols=%d "
+                 "tx_id='%s'",
+                 atr->table_name, atr->row_count, atr->col_count, tx_id);
+
+    /* Convert audit_old_value_t -> the internal field_value_t layout
+     * audit_trail_insert()'s field-level path expects - same
+     * conversion pattern as audit_trail_insert_update()'s own
+     * old_fv_buf, for consistency rather than relying on structural
+     * equivalence via casting.                                        */
+    typedef struct { char value[32768]; int is_empty; } audit_fv_t;
+
+    audit_fv_t *old_fv_buf =
+        calloc((size_t)atr->row_count * atr->col_count, sizeof(audit_fv_t));
+    if (!old_fv_buf)
+    {
+        logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
+                     "calloc failed for delete audit buffer");
+        return -1;
+    }
+
+    for (int i = 0; i < atr->row_count * atr->col_count; i++)
+    {
+        if (!old_values[i].is_null && old_values[i].value[0])
+            strncpy(old_fv_buf[i].value, old_values[i].value,
+                    sizeof(old_fv_buf[i].value) - 1);
+        old_fv_buf[i].is_empty = old_values[i].is_null;
+    }
+
+    int total_rc = 0;
+
+    for (int br = 0; br < atr->row_count; br++)
+    {
+        audit_trail_request_t row_atr;
+        memset(&row_atr, 0, sizeof(row_atr));
+
+        strncpy(row_atr.table_name,    atr->table_name,    sizeof(row_atr.table_name)    - 1);
+        strncpy(row_atr.action_type,   "DELETE",           sizeof(row_atr.action_type)   - 1);
+        strncpy(row_atr.record_id,     atr->record_id,     sizeof(row_atr.record_id)     - 1);
+        strncpy(row_atr.changed_by,    atr->changed_by,    sizeof(row_atr.changed_by)    - 1);
+        strncpy(row_atr.change_reason, atr->change_reason, sizeof(row_atr.change_reason) - 1);
+        strncpy(row_atr.module_name,   atr->module_name,   sizeof(row_atr.module_name)   - 1);
+        strncpy(row_atr.session_id,    atr->session_id,    sizeof(row_atr.session_id)    - 1);
+        strncpy(row_atr.client_ip,     atr->client_ip,     sizeof(row_atr.client_ip)     - 1);
+
+        row_atr.col_names  = atr->col_names;   /* WHERE-key columns, shared across all rows */
+        row_atr.col_types  = atr->col_types;
+        row_atr.old_values = &old_fv_buf[br * atr->col_count];
+        row_atr.new_values = NULL;             /* deleted - no new value, ever */
+        row_atr.col_count  = atr->col_count;
+        row_atr.row_count  = 1;
+        row_atr.audit_mode = AUDIT_MODE_FIELD;
+
+        int row_rc = audit_trail_insert(ctx, &row_atr);
+        if (row_rc != 0)
+        {
+            logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
+                         "audit_trail_insert failed for DELETE row=%d "
+                         "table='%s' rc=%d",
+                         br, atr->table_name, row_rc);
+            total_rc = -1;
+            /* Continue to next row - partial audit is better than none,
+             * same reasoning as audit_trail_insert_update()'s own
+             * error handling.                                          */
+        }
+    }
+
+    free(old_fv_buf);
+
+    logger_write(ctx->audit_logger, LOG_INFO, __func__, 0,
+                 "audit_trail_insert_delete complete: rows=%d rc=%d "
+                 "table='%s' tx_id='%s'",
+                 atr->row_count, total_rc, atr->table_name, tx_id);
 
     return total_rc;
 }

@@ -11,6 +11,8 @@
 #include <string.h>
 
 #include "OCI_Response_Writer.h"
+#include "OCI_Execute_Procedure_Module.h" /* execute_procedure_response_t,
+                                              procedure_param_t             */
 #include "XML_Helper.h"
 #include "cJSON.h"
 
@@ -262,6 +264,122 @@ char *response_write_dml_json(oci_context_t *ctx, operation_type_t op_type,
     cJSON_AddNumberToObject(root, rows_key,      resp->rows_affected);
     cJSON_AddNumberToObject(root, "lobs_written", resp->lobs_written);
     cJSON_AddNumberToObject(root, "execution_time", resp->execution_time_seconds);
+
+    char *result = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    return result;
+}
+
+/*
+ * response_write_procedure_xml() / response_write_procedure_json()
+ *
+ * Render an execute_procedure_response_t (OCI_Execute_Procedure_
+ * Module.h) - out_parameters[] (scalar OUT/IN_OUT values) and
+ * resultsets[] (one per CURSOR OUT parameter that produced rows).
+ *
+ * Each resultsets[i].resultset_xml_fragment is already a complete,
+ * self-contained <resultset param_name="...">...</resultset> fragment
+ * (fetch_cursor_to_xml() in OCI_Execute_Procedure_Module.c builds it
+ * that way, unchanged by the 2026-07-30 refactor - only how it's
+ * captured changed, from writing straight into the shared response
+ * builder to its own local one per cursor, so it could be stored here
+ * as a standalone string instead). Spliced in via xml_append_raw() -
+ * never xml_append(xml,"%s",...) - same reasoning as every other raw-
+ * fragment splice in this project.
+ *
+ * response_write_procedure_json()'s own resultsets are a known,
+ * deliberate simplification, not an oversight: fetch_cursor_to_xml()
+ * only ever produces XML, so there is no native JSON cursor-fetch path
+ * to draw from at all. Each resultset is embedded as a labelled XML
+ * string field ("resultset_xml") rather than proper nested JSON -
+ * building a true JSON-native cursor fetcher (a JSON equivalent of
+ * fetch_cursor_to_xml()) would be its own separate piece of work,
+ * out of scope for this refactor. Scalar out_parameters render as
+ * proper JSON either way - only the CURSOR resultset content itself
+ * has this limitation.
+ */
+char *response_write_procedure_xml(oci_context_t *ctx,
+                                    const execute_procedure_response_t *resp)
+{
+    (void)ctx;
+
+    if (!resp) return NULL;
+
+    xml_builder_t *xml = xml_create(4096);
+    if (!xml) return NULL;
+
+    xml_append(xml, "<procedure_name>%s</procedure_name>\n", resp->procedure_name);
+    xml_append(xml, "<execution_time>%.6f</execution_time>\n",
+               resp->execution_time_seconds);
+
+    if (resp->out_param_count > 0)
+    {
+        xml_append(xml, "<out_parameters>\n");
+        for (int i = 0; i < resp->out_param_count; i++)
+        {
+            const procedure_param_t *p = &resp->out_parameters[i];
+            xml_append(xml,
+                       "  <parameter>"
+                       "<param_name>%s</param_name>"
+                       "<param_type>%s</param_type>"
+                       "<param_value>%s</param_value>"
+                       "</parameter>\n",
+                       p->param_name, p->param_type, p->param_value);
+        }
+        xml_append(xml, "</out_parameters>\n");
+    }
+
+    for (int i = 0; i < resp->resultset_count; i++)
+    {
+        if (resp->resultsets[i].resultset_xml_fragment)
+            xml_append_raw(xml, resp->resultsets[i].resultset_xml_fragment);
+    }
+
+    char *result = xml->buffer ? strdup(xml->buffer) : NULL;
+    xml_free(xml);
+
+    return result;
+}
+
+char *response_write_procedure_json(oci_context_t *ctx,
+                                     const execute_procedure_response_t *resp)
+{
+    (void)ctx;
+
+    if (!resp) return NULL;
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+
+    cJSON_AddStringToObject(root, "procedure_name", resp->procedure_name);
+    cJSON_AddNumberToObject(root, "execution_time", resp->execution_time_seconds);
+
+    cJSON *out_params = cJSON_CreateArray();
+    for (int i = 0; i < resp->out_param_count; i++)
+    {
+        const procedure_param_t *p = &resp->out_parameters[i];
+        cJSON *pj = cJSON_CreateObject();
+        cJSON_AddStringToObject(pj, "param_name",  p->param_name);
+        cJSON_AddStringToObject(pj, "param_type",  p->param_type);
+        cJSON_AddStringToObject(pj, "param_value", p->param_value);
+        cJSON_AddItemToArray(out_params, pj);
+    }
+    cJSON_AddItemToObject(root, "out_parameters", out_params);
+
+    /* See this pair's own top doc comment - resultset_xml is a known,
+     * deliberate simplification, not proper nested JSON.               */
+    cJSON *resultsets = cJSON_CreateArray();
+    for (int i = 0; i < resp->resultset_count; i++)
+    {
+        cJSON *rj = cJSON_CreateObject();
+        cJSON_AddStringToObject(rj, "param_name", resp->resultsets[i].param_name);
+        cJSON_AddStringToObject(rj, "resultset_xml",
+                                resp->resultsets[i].resultset_xml_fragment
+                                    ? resp->resultsets[i].resultset_xml_fragment : "");
+        cJSON_AddItemToArray(resultsets, rj);
+    }
+    cJSON_AddItemToObject(root, "resultsets", resultsets);
 
     char *result = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

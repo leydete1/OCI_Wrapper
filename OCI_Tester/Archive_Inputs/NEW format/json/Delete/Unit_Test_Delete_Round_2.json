@@ -1,0 +1,18 @@
+{
+    "external_audit_id": "audit_stub_delete_round_2",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "DELETE",
+                "table_name": "OCI_FIELD_TEST",
+                "owner": "DATA_MANAGER",
+                "where": [
+                    { "field_name": "NUMBER_COL",   "key_value": "501" },
+                    { "field_name": "VARCHAR2_COL", "key_value": "Round 5 mixed row 1" }
+                ]
+            }
+        ]
+    }
+}

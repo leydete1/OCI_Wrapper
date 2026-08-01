@@ -317,24 +317,62 @@ static int build_insert_ctx_from_request(oci_context_t          *ctx,
 
 /* Return SQL conversion wrapper for a given Oracle type.
  * %s will be replaced with the bind placeholder e.g. :1              */
-static const char *get_bind_wrapper(const char *dtype)
+/*
+ * get_bind_wrapper()
+ *
+ * Writes the SQL wrapper expression for this column's real data type
+ * into dest, if one applies. Returns 1 if dest was populated
+ * (date/timestamp/interval - still containing exactly one %s
+ * placeholder for the caller's own bind-position substitution - or
+ * CLOB/BLOB, which takes no placeholder at all), 0 for a plain scalar
+ * type (caller uses a bare bind placeholder, no wrapper needed).
+ *
+ * ctx->ini->nls_date_format is read fresh on every call - no hardcoded
+ * date format literal anywhere in this function any more (2026-07-28
+ * decision - see OCI_Level2_Parser.c's normalize_client_date_value()
+ * for the matching client-side half of this same design: by the time
+ * a value reaches this wrapper, Level 2 has already normalized it into
+ * whatever nls_date_format currently is, so this wrapper and that
+ * normalization step always agree, even if nls_date_format is changed
+ * in config.ini - neither one has its own independent, potentially
+ * stale copy of the format string any more).
+ */
+static int get_bind_wrapper(oci_context_t *ctx, const char *dtype,
+                             char *dest, size_t dest_max)
 {
     if (strcmp(dtype, "DATE") == 0)
-        return "TO_DATE(%s,'YYYY-MM-DD HH24:MI:SS')";
+    {
+        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
+        return 1;
+    }
     if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-        return "TO_TIMESTAMP(%s,'YYYY-MM-DD HH24:MI:SS.FF6')";
+    {
+        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
+        return 1;
+    }
     if (strstr(dtype, "INTERVAL") != NULL && strstr(dtype, "MONTH") != NULL)
-        return "TO_YMINTERVAL(%s)";
+    {
+        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
+        return 1;
+    }
     if (strstr(dtype, "INTERVAL") != NULL && strstr(dtype, "SECOND") != NULL)
-        return "TO_DSINTERVAL(%s)";
+    {
+        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
+        return 1;
+    }
     if (strcmp(dtype, "CLOB")  == 0 ||
         strcmp(dtype, "NCLOB") == 0)
-        return "EMPTY_CLOB()";
-
+    {
+        snprintf(dest, dest_max, "EMPTY_CLOB()");
+        return 1;
+    }
     if (strcmp(dtype, "BLOB") == 0)
-        return "EMPTY_BLOB()";
+    {
+        snprintf(dest, dest_max, "EMPTY_BLOB()");
+        return 1;
+    }
 
-    return NULL;   /* plain bind placeholder - no wrapper needed */
+    return 0;   /* plain bind placeholder - no wrapper needed */
 }
 
 static int build_insert_sql(oci_context_t        *ctx,
@@ -382,7 +420,9 @@ static int build_insert_sql(oci_context_t        *ctx,
             }
         }
 
-        const char *wrapper = get_bind_wrapper(dtype);
+        char wrapper_buf[128] = {0};
+        int  has_wrapper = get_bind_wrapper(ctx, dtype, wrapper_buf, sizeof(wrapper_buf));
+        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
 
         if (strcmp(dtype, "BLOB")  == 0 ||
             strcmp(dtype, "CLOB")  == 0 ||
@@ -827,6 +867,16 @@ int execute_insert_batch(oci_context_t    *ctx,
                      "Invalid arguments: ctx, req or cfg is NULL");
         return -1;
     }
+
+    /* Give this call its own transaction identity if it doesn't already
+     * have one - fixes the 2026-07-26 GxP traceability gap where a
+     * standalone call's before-image/audit/actual-change metrics rows
+     * had no shared transaction_id at all. See the full reasoning in
+     * OCI_Transaction_Manager.h's own doc comment for these two
+     * functions. owns_standalone_tx tells Cleanup whether it's this
+     * call's job to clear ctx->active_tx back to NULL again.           */
+    tx_handle_t local_tx;
+    int owns_standalone_tx = begin_standalone_tx_if_needed(ctx, &local_tx);
 
 
     metrics_record_t metrics;
@@ -1640,5 +1690,8 @@ Cleanup:
 
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "Cleanup complete rc=%d", rc);
+
+    end_standalone_tx_if_owned(ctx, owns_standalone_tx);
+
     return rc;
 }

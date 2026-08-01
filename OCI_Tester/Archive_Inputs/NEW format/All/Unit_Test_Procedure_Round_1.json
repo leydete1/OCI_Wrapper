@@ -1,0 +1,28 @@
+{
+    "external_audit_id": "audit_stub_procedure_round_1",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "EXECUTE_PROCEDURE",
+                "procedure_name": "GET_DEPT_STATUS",
+                "owner": "DATA_MANAGER",
+                "parameters": [
+                    {
+                        "param_name": "P_DEPT_ID",
+                        "param_type": "NUMBER",
+                        "param_direction": "IN",
+                        "param_value": "42"
+                    },
+                    {
+                        "param_name": "P_STATUS",
+                        "param_type": "INTEGER",
+                        "param_direction": "OUT",
+                        "param_value": ""
+                    }
+                ]
+            }
+        ]
+    }
+}

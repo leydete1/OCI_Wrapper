@@ -254,22 +254,48 @@ static int build_update_ctx_from_request(oci_context_t          *ctx,
 /*  BLOB/CLOB use EMPTY_BLOB()/EMPTY_CLOB() in SET clause;            */
 /*  WHERE key columns always bind as plain SQLT_STR.                   */
 /* ================================================================== */
-static const char *get_upd_bind_wrapper(const char *dtype)
+/*
+ * get_upd_bind_wrapper()
+ * Same design as OCI_Insert_Execute_Module.c's get_bind_wrapper() -
+ * see that function's own doc comment for the full 2026-07-28
+ * reasoning (no hardcoded date format literal any more; reads
+ * ctx->ini->nls_date_format fresh on every call instead).
+ */
+static int get_upd_bind_wrapper(oci_context_t *ctx, const char *dtype,
+                                 char *dest, size_t dest_max)
 {
     if (strcmp(dtype, "DATE") == 0)
-        return "TO_DATE(%s,'YYYY-MM-DD HH24:MI:SS')";
+    {
+        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
+        return 1;
+    }
     if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-        return "TO_TIMESTAMP(%s,'YYYY-MM-DD HH24:MI:SS.FF6')";
+    {
+        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
+        return 1;
+    }
     if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
-        return "TO_YMINTERVAL(%s)";
+    {
+        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
+        return 1;
+    }
     if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
-        return "TO_DSINTERVAL(%s)";
+    {
+        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
+        return 1;
+    }
     if (strcmp(dtype, "BLOB") == 0)
-        return "EMPTY_BLOB()";
+    {
+        snprintf(dest, dest_max, "EMPTY_BLOB()");
+        return 1;
+    }
     if (strcmp(dtype, "CLOB")  == 0 ||
         strcmp(dtype, "NCLOB") == 0)
-        return "EMPTY_CLOB()";
-    return NULL;
+    {
+        snprintf(dest, dest_max, "EMPTY_CLOB()");
+        return 1;
+    }
+    return 0;
 }
 
 /* ================================================================== */
@@ -304,7 +330,9 @@ static int build_update_sql(oci_context_t        *ctx,
             if (strcasecmp(cols[m].col_name, uc->col_names[i]) == 0)
             { dtype = cols[m].data_type; break; }
 
-        const char *wrapper = get_upd_bind_wrapper(dtype);
+        char wrapper_buf[128] = {0};
+        int  has_wrapper = get_upd_bind_wrapper(ctx, dtype, wrapper_buf, sizeof(wrapper_buf));
+        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
         char assignment[256] = {0};
 
         if (wrapper &&
@@ -350,13 +378,24 @@ static int build_update_sql(oci_context_t        *ctx,
         char bind_ph[16];
         snprintf(bind_ph, sizeof(bind_ph), ":%d", bind_pos++);
 
-        /* Apply date wrapper to WHERE keys too if needed */
-        const char *ktype   = uc->keys[k].field_type;
-        const char *wrapper = NULL;
-        if (strcmp(ktype, "DATE") == 0)
-            wrapper = "TO_DATE(%s,'YYYY-MM-DD HH24:MI:SS')";
-        else if (strncmp(ktype, "TIMESTAMP", 9) == 0)
-            wrapper = "TO_TIMESTAMP(%s,'YYYY-MM-DD HH24:MI:SS.FF6')";
+        /* Apply date/timestamp/interval wrapper to WHERE keys too if
+         * needed - resolved from cols[] by real column name lookup,
+         * same as the SET clause above. Found and fixed 2026-07-26:
+         * this used to read uc->keys[k].field_type directly, a field
+         * build_update_ctx_from_request() deliberately leaves empty -
+         * see that function's own comment - meaning this comparison
+         * could never match and the wrapper was silently never applied
+         * for any WHERE key, ever. Isolated to just this one section;
+         * the SET clause loop above it, and every other type
+         * resolution in this project, already does the real lookup.  */
+        const char *ktype = "VARCHAR2";
+        for (int m = 0; m < col_meta_count; m++)
+            if (strcasecmp(cols[m].col_name, uc->keys[k].field_name) == 0)
+            { ktype = cols[m].data_type; break; }
+
+        char wrapper_buf[128] = {0};
+        int  has_wrapper = get_upd_bind_wrapper(ctx, ktype, wrapper_buf, sizeof(wrapper_buf));
+        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
 
         char cond[256] = {0};
         if (wrapper)
@@ -731,6 +770,17 @@ int execute_update_batch(oci_context_t     *ctx,
         return -1;
     }
 
+    /* Give this call its own transaction identity if it doesn't already
+     * have one - fixes the 2026-07-26 GxP traceability gap. See
+     * execute_insert_batch()'s identical fix and the full reasoning in
+     * OCI_Transaction_Manager.h's own doc comment for these functions.
+     * Particularly relevant here: this is exactly the call chain
+     * (before-image SELECT -> AUDIT_TRAIL INSERT -> the UPDATE itself)
+     * that first surfaced the gap, via session_end()'s standalone
+     * calls.                                                            */
+    tx_handle_t local_tx;
+    int owns_standalone_tx = begin_standalone_tx_if_needed(ctx, &local_tx);
+
 
     metrics_record_t metrics;
      metrics_init(&metrics);
@@ -939,14 +989,16 @@ int execute_update_batch(oci_context_t     *ctx,
      * ================================================================ */
     if (!audit_trail_in_progress)
     {
-        /* Build key name/value arrays from uc->keys[] */
+        /* Build key name/value/type arrays from uc->keys[] */
         char (*key_names) [128]   = NULL;
         char (*key_vals)  [32768] = NULL;
+        char (*key_types) [128]   = NULL;
 
         key_names = calloc((size_t)uc->key_count, sizeof(*key_names));
         key_vals  = calloc((size_t)uc->key_count, sizeof(*key_vals));
+        key_types = calloc((size_t)uc->key_count, sizeof(*key_types));
 
-        if (key_names && key_vals)
+        if (key_names && key_vals && key_types)
         {
             for (int k = 0; k < uc->key_count; k++)
             {
@@ -954,6 +1006,19 @@ int execute_update_batch(oci_context_t     *ctx,
                         sizeof(key_names[k]) - 1);
                 strncpy(key_vals[k],  uc->keys[k].key_value,
                         sizeof(key_vals[k])  - 1);
+
+                /* Real type from cols[] - never trust a client-
+                 * supplied type (there isn't one here anyway; see the
+                 * 2026-07-26 fix in OCI_Audit_Trail_Manager.c/.h for
+                 * why this parameter exists at all now).               */
+                strncpy(key_types[k], "VARCHAR2", sizeof(key_types[k]) - 1);
+                for (int m = 0; m < col_meta_count; m++)
+                    if (strcasecmp(cols[m].col_name, uc->keys[k].field_name) == 0)
+                    {
+                        strncpy(key_types[k], cols[m].data_type,
+                                sizeof(key_types[k]) - 1);
+                        break;
+                    }
             }
 
             int fetch_rc =
@@ -964,6 +1029,7 @@ int execute_update_batch(oci_context_t     *ctx,
                                                uc->col_count,
                                                key_names,
                                                key_vals,
+                                               key_types,
                                                uc->key_count,
                                                &old_values,
                                                &old_row_count);
@@ -987,6 +1053,7 @@ int execute_update_batch(oci_context_t     *ctx,
 
         free(key_names);
         free(key_vals);
+        free(key_types);
     }
 
     /* ================================================================
@@ -1530,5 +1597,8 @@ Cleanup:
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "Cleanup complete rc=%d", rc);
+
+    end_standalone_tx_if_owned(ctx, owns_standalone_tx);
+
     return rc;
 }

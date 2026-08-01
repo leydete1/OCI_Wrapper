@@ -11,12 +11,18 @@
 #include <string.h>
 #include <strings.h>   /* strcasecmp() - find_column(), row_has_field() */
 
+#include <oci.h>
+
 #include "OCI_Level2_Parser.h"
 #include "logger.h"
 #include "sql_dependency_extractor.h"
 
 #include "OCI_Insert_Execute_Module.h"   /* insert_request_t, insert_row_t   */
 #include "OCI_Update_Execute_Module.h"   /* update_request_t                 */
+#include "OCI_Delete_Execute_Module.h"   /* delete_request_t                 */
+#include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
+                                              procedure_param_t,
+                                              MAX_PROC_PARAMS              */
 #include "OCI_Insert_Validate_Module.h"  /* parsed_field_t, validate_field() */
 #include "OCI_Table_Metadata_Module.h"   /* col_metadata_t, metadata_request_t,
                                             MAX_TABLE_COLUMNS                */
@@ -180,6 +186,215 @@ static int row_field_sets_match(const insert_row_t *reference, const insert_row_
     return 1;
 }
 
+/*
+ * normalize_client_date_value()
+ *
+ * Part of the 2026-07-27/28 date-handling design. For every DATE/
+ * TIMESTAMP-typed field, validates (and where needed, converts) the
+ * value via Oracle itself - by the time build_insert_ctx_from_
+ * request()/build_update_ctx_from_request()/build_delete_ctx_from_
+ * request() ever sees the value, it's already in the one canonical
+ * shape (ctx->ini->nls_date_format, optionally with a fractional-
+ * seconds suffix for TIMESTAMP columns) every TO_DATE()/TO_TIMESTAMP()
+ * wrapper in this project expects.
+ *
+ * If the client supplied a <client_date_format>, that's used as the
+ * SOURCE format for the conversion. If not, the canonical
+ * nls_date_format is used as both source AND target - i.e. the value
+ * is validated against the real configured format rather than simply
+ * assumed correct. This closes a real gap found 2026-07-28: this
+ * function used to be a no-op whenever client_date_format was empty,
+ * meaning the common case (no format hint) was never actually checked
+ * against anything - only a hardcoded, disconnected sscanf pattern in
+ * OCI_Insert_Validate_Module.c's validate_date()/validate_timestamp()
+ * did, which is why those two functions are now removed entirely (see
+ * their own removal note) - this is the one authoritative date-format
+ * check now, for every date value, always.
+ *
+ * client_date_format is deliberately mutable (not const) - see the
+ * 2026-07-29 fix inline at the success path below: this function is
+ * called twice per request (once from the dispatcher's own top-level
+ * validation pass, again inside execute_insert_batch()/
+ * execute_update_batch()/execute_delete_batch()'s own Stage 1 as
+ * defense-in-depth), and mutates value in place on a successful
+ * conversion. Without clearing client_date_format after that, the
+ * second pass would see an already-canonical value but a still-stale
+ * format label, and reject it trying to reinterpret an already-
+ * converted value against a format it no longer matches - this is not
+ * a hypothetical, it's exactly what a real end-to-end UPDATE test with
+ * a European DD/MM/YYYY WHERE-key value hit on its first run.
+ *
+ * Uses Oracle itself as the authoritative converter
+ * (SELECT TO_CHAR(TO_DATE(:1,:2),:3) FROM DUAL, or TO_TIMESTAMP for
+ * TIMESTAMP-family columns) rather than reimplementing Oracle's format-
+ * model parsing in C - same "resolve via the authoritative source"
+ * principle used everywhere else in this project (metadata_cache,
+ * never trusting a client-supplied column type).
+ *
+ * real_data_type is the REAL column type already resolved via
+ * metadata_cache by the caller - never trust anything client-supplied
+ * for this, same reasoning as every other type resolution here.
+ *
+ * If real_data_type isn't DATE/TIMESTAMP-family, this is a no-op - a
+ * format hint on a non-date column isn't this function's concern to
+ * act on or reject, and a non-date value has nothing here to validate.
+ *
+ * Returns  0 - validated (and normalized, if needed) successfully, or
+ *             nothing to do (real_data_type isn't a date/time type)
+ *         -1 - Oracle itself rejected the conversion - either the
+ *             client's declared format doesn't match their value, or
+ *             (no client format supplied) the value isn't actually in
+ *             nls_date_format at all. Either way a genuine, reportable
+ *             validation failure (err_msg populated), not silently
+ *             ignored - fail closed rather than let a bad date reach
+ *             the database in some unpredictable shape.
+ */
+static int normalize_client_date_value(oci_context_t *ctx,
+                                        logger_t      *op_logger,
+                                        const char    *real_data_type,
+                                        char          *client_date_format,
+                                        char          *value,
+                                        size_t         value_max,
+                                        char          *err_msg,
+                                        size_t         err_msg_max)
+{
+    int is_timestamp = (strncmp(real_data_type, "TIMESTAMP", 9) == 0);
+    int is_date      = (strcmp(real_data_type, "DATE") == 0);
+
+    if (!is_date && !is_timestamp)
+    {
+        if (client_date_format && client_date_format[0])
+            /* Format hint on a non-date column - not this function's
+             * concern; ignore rather than risk a nonsensical conversion
+             * attempt against an incompatible column type.            */
+            logger_write(op_logger, LOG_WARN, __func__, 0,
+                         "client_date_format='%s' supplied for a non-date "
+                         "column (real type='%s') - ignored",
+                         client_date_format, real_data_type);
+        return 0;
+    }
+
+    if (!value[0])
+        return 0;   /* empty value - a nullable/required-ness concern
+                     * handled elsewhere, not a date-format one         */
+
+    /* Canonical target format - ctx->ini->nls_date_format is the one
+     * source of truth (no hardcoded literal here at all, per the
+     * 2026-07-27 decision to remove every hardcoded date format
+     * string from this project). TIMESTAMP columns get a fractional-
+     * seconds suffix so the canonical string round-trips cleanly
+     * through the TO_TIMESTAMP()/'...FF6' wrapper every execute
+     * module already applies downstream.                              */
+    char canonical_fmt[80];
+    if (is_timestamp)
+        snprintf(canonical_fmt, sizeof(canonical_fmt), "%s.FF6",
+                 ctx->ini->nls_date_format);
+    else
+        snprintf(canonical_fmt, sizeof(canonical_fmt), "%s",
+                 ctx->ini->nls_date_format);
+
+    /* Source format: the client's declared format if supplied,
+     * otherwise the canonical format itself - meaning an un-tagged
+     * value gets VALIDATED against the real configured
+     * nls_date_format via this same Oracle round-trip, rather than
+     * silently assumed correct (see this function's own doc comment
+     * for the gap this closes).                                       */
+    const char *source_fmt = (client_date_format && client_date_format[0])
+                              ? client_date_format
+                              : canonical_fmt;
+
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT TO_CHAR(%s(:1,:2),:3) FROM DUAL",
+             is_timestamp ? "TO_TIMESTAMP" : "TO_DATE");
+
+    OCIStmt *stmt = NULL;
+    OCIBind *bnd1 = NULL, *bnd2 = NULL, *bnd3 = NULL;
+    OCIDefine *dfn = NULL;
+    char     result_buf[128] = {0};
+    sb2      result_ind = 0;
+    int      rc = 0;
+
+    sword status = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                                    (text *)sql, (ub4)strlen(sql),
+                                    NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO)
+    {
+        snprintf(err_msg, err_msg_max,
+                 "Internal error preparing date normalization query");
+        logger_write(op_logger, LOG_ERROR, __func__, 0, "%s", err_msg);
+        return -1;
+    }
+
+    OCIBindByPos(stmt, &bnd1, ctx->errhp, 1,
+                 (dvoid *)value, (sb4)strlen(value) + 1,
+                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+    OCIBindByPos(stmt, &bnd2, ctx->errhp, 2,
+                 (dvoid *)source_fmt, (sb4)strlen(source_fmt) + 1,
+                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+    OCIBindByPos(stmt, &bnd3, ctx->errhp, 3,
+                 (dvoid *)canonical_fmt, (sb4)strlen(canonical_fmt) + 1,
+                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+
+    OCIDefineByPos(stmt, &dfn, ctx->errhp, 1,
+                   (dvoid *)result_buf, (sb4)sizeof(result_buf),
+                   SQLT_STR, &result_ind, NULL, NULL, OCI_DEFAULT);
+
+    status = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0,
+                             NULL, NULL, OCI_DEFAULT);
+
+    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO)
+    {
+        /* Oracle itself rejected the conversion - almost always means
+         * the client's declared format doesn't actually match the
+         * value they sent (ORA-01858/ORA-01861 and similar). This is
+         * the genuine, reportable validation failure this function's
+         * own doc comment describes - fail closed, per the 2026-07-27
+         * decision, rather than let a bad date through in some
+         * unpredictable shape.                                        */
+        text errbuf[512];
+        sb4  errcode = 0;
+        OCIErrorGet(ctx->errhp, 1, NULL, &errcode, errbuf, sizeof(errbuf),
+                    OCI_HTYPE_ERROR);
+        snprintf(err_msg, err_msg_max,
+                 "Invalid date: value='%.80s' does not match "
+                 "%s='%s' (ORA-%05d: %.200s)",
+                 value,
+                 (client_date_format && client_date_format[0])
+                     ? "client_date_format" : "nls_date_format",
+                 source_fmt, errcode, (char *)errbuf);
+        logger_write(op_logger, LOG_ERROR, __func__, 0, "%s", err_msg);
+        rc = -1;
+    }
+    else
+    {
+        strncpy(value, result_buf, value_max - 1);
+        value[value_max - 1] = '\0';
+
+        /* Clear client_date_format after a successful conversion - see
+         * this function's own doc comment for the 2026-07-29 bug this
+         * fixes: level2_validate_insert()/update()/delete() each run
+         * twice per request (once from the dispatcher, again inside
+         * execute_*_batch()'s own Stage 1 as defense-in-depth), and
+         * this function mutates value in place. Without this clear,
+         * the second pass would see value already sitting in canonical
+         * format but client_date_format still declaring the ORIGINAL
+         * (now stale) format, and fail trying to reinterpret an
+         * already-converted value against a format it no longer
+         * matches - found via a real UPDATE end-to-end test where a
+         * European DD/MM/YYYY WHERE-key value converted successfully
+         * on the first pass, then was rejected on the second.          */
+        if (client_date_format) client_date_format[0] = '\0';
+
+        logger_write(op_logger, LOG_DEBUG, __func__, 0,
+                     "Normalized date value to '%s' (canonical format "
+                     "'%s')", value, canonical_fmt);
+    }
+
+    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    return rc;
+}
+
 /* ================================================================== */
 /*  level2_validate_insert                                              */
 /* ================================================================== */
@@ -309,7 +524,7 @@ int level2_validate_insert(oci_context_t        *ctx,
 
         for (int f = 0; f < row->field_count; f++)
         {
-            const field_value_t *fv = &row->fields[f];
+            field_value_t *fv = &row->fields[f];
 
             const col_metadata_t *col = find_column(cols, col_count, fv->field_name);
 
@@ -323,6 +538,28 @@ int level2_validate_insert(oci_context_t        *ctx,
                 logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0, "%s", msg);
                 if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
                 continue;
+            }
+
+            /* Normalize a client-declared date format into this
+             * project's one canonical format BEFORE anything else
+             * reads this field's value - see normalize_client_date_
+             * value()'s own doc comment for the full 2026-07-27
+             * design. A no-op unless fv->client_date_format is set.    */
+            {
+                char date_err[512];
+                if (normalize_client_date_value(ctx, ctx->insert_logger,
+                                                col->data_type,
+                                                fv->client_date_format,
+                                                fv->value, sizeof(fv->value),
+                                                date_err, sizeof(date_err)) != 0)
+                {
+                    failures++;
+                    char msg[512];
+                    snprintf(msg, sizeof(msg), "Row %d, field '%s': %s",
+                             r + 1, fv->field_name, date_err);
+                    if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+                    continue;
+                }
             }
 
             parsed_field_t pf;
@@ -508,7 +745,7 @@ int level2_validate_update(oci_context_t        *ctx,
      * that apply to writing a column don't apply to matching one.      */
     for (int k = 0; k < req->key_count; k++)
     {
-        const where_key_t *wk = &req->keys[k];
+        where_key_t *wk = &req->keys[k];
 
         const col_metadata_t *col = find_column(cols, col_count, wk->field_name);
         if (!col)
@@ -521,6 +758,23 @@ int level2_validate_update(oci_context_t        *ctx,
             logger_write(ctx->update_logger, LOG_ERROR, __func__, 0, "%s", msg);
             if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
             continue;
+        }
+
+        {
+            char date_err[512];
+            if (normalize_client_date_value(ctx, ctx->update_logger,
+                                            col->data_type,
+                                            wk->client_date_format,
+                                            wk->key_value, sizeof(wk->key_value),
+                                            date_err, sizeof(date_err)) != 0)
+            {
+                failures++;
+                char msg[512];
+                snprintf(msg, sizeof(msg), "WHERE key '%s': %s",
+                         wk->field_name, date_err);
+                if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+                continue;
+            }
         }
 
         if (!wk->key_value[0])
@@ -543,7 +797,7 @@ int level2_validate_update(oci_context_t        *ctx,
      * column omitted" concern for UPDATE at all.                       */
     for (int f = 0; f < req->field_count; f++)
     {
-        const field_value_t *fv = &req->fields[f];
+        field_value_t *fv = &req->fields[f];
 
         const col_metadata_t *col = find_column(cols, col_count, fv->field_name);
 
@@ -557,6 +811,23 @@ int level2_validate_update(oci_context_t        *ctx,
             logger_write(ctx->update_logger, LOG_ERROR, __func__, 0, "%s", msg);
             if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
             continue;
+        }
+
+        {
+            char date_err[512];
+            if (normalize_client_date_value(ctx, ctx->update_logger,
+                                            col->data_type,
+                                            fv->client_date_format,
+                                            fv->value, sizeof(fv->value),
+                                            date_err, sizeof(date_err)) != 0)
+            {
+                failures++;
+                char msg[512];
+                snprintf(msg, sizeof(msg), "SET field '%s': %s",
+                         fv->field_name, date_err);
+                if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+                continue;
+            }
         }
 
         parsed_field_t pf;
@@ -608,6 +879,284 @@ int level2_validate_update(oci_context_t        *ctx,
 }
 
 /* ================================================================== */
+/*  level2_validate_delete                                              */
+/* ================================================================== */
+int level2_validate_delete(oci_context_t        *ctx,
+                            input_c_operation_t  *op,
+                            operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing DELETE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    delete_request_t *req = (delete_request_t *)op->payload;
+
+    if (!req->table_name[0])
+    {
+        logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: DELETE operation has empty table_name");
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - table_name is empty.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    /* ---- Check: at least one WHERE key ----
+     * Same reasoning as level2_validate_update()'s own equivalent check
+     * - a DELETE with no WHERE clause matches (and removes) every row
+     * in the table. Refused outright rather than silently allowed;
+     * almost certainly a client mistake, not an intentional whole-
+     * table delete, and there is no equivalent of "at least it's
+     * reversible" the way an accidental whole-table UPDATE at least
+     * leaves the rows in place - an accidental whole-table DELETE does
+     * not.                                                              */
+    if (req->key_count <= 0)
+    {
+        logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: DELETE has no WHERE keys - refusing to "
+                     "risk a whole-table delete");
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - at least one "
+                  "WHERE key is required.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    /* ---- Resolve real column metadata ----
+     * Needed here for the same reason as UPDATE's WHERE keys - the new
+     * where_key_t carries no type information at all, so the real
+     * column type (for TO_DATE()/TO_TIMESTAMP()/etc bind wrapping in
+     * build_delete_ctx_from_request()) has to come from metadata_cache,
+     * never from the client. The pre-refactor version of this module
+     * trusted a client-supplied field_type for exactly this - see this
+     * file's own design note in OCI_Delete_Execute_Module.h.           */
+    col_metadata_t     cols[MAX_TABLE_COLUMNS];
+    int                col_count = 0;
+    metadata_request_t meta_req;
+
+    memset(&meta_req, 0, sizeof(meta_req));
+    strncpy(meta_req.table_name, req->table_name, sizeof(meta_req.table_name) - 1);
+    strncpy(meta_req.owner,      req->owner,      sizeof(meta_req.owner)      - 1);
+
+    metadata_cache_result_t meta_result;
+    memset(&meta_result, 0, sizeof(meta_result));
+
+    if (metadata_cache_get_or_fetch(ctx->metadata_cache, ctx, &meta_req,
+                                     cols, &col_count, MAX_TABLE_COLUMNS,
+                                     &meta_result) != 0)
+    {
+        logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: metadata_cache_get_or_fetch failed for %s.%s",
+                     req->owner, req->table_name);
+        set_error(error_detail, LEVEL2_ERR_METADATA_LOOKUP, "LEVEL2_METADATA_LOOKUP",
+                  "Request aborted. Level 2 validation failed - could not resolve "
+                  "column metadata for the target table.");
+        return LEVEL2_ERR_METADATA_LOOKUP;
+    }
+
+    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                 "Level 2: resolved %d columns for %s.%s (cache_hit=%d)",
+                 col_count, req->owner, req->table_name, meta_result.was_cache_hit);
+
+    int  failures = 0;
+    char first_failure_msg[512] = {0};
+
+    /* ---- Validate WHERE keys: field_name must be a real column,
+     * key_value must be non-empty. No SET-field validation at all -
+     * DELETE has no SET clause, so there is nothing to run
+     * validate_field() against; the WHERE-key checks below are this
+     * function's entire scope, same reasoning as
+     * level2_validate_update()'s own WHERE-key checks.                 */
+    for (int k = 0; k < req->key_count; k++)
+    {
+        where_key_t *wk = &req->keys[k];
+
+        const col_metadata_t *col = find_column(cols, col_count, wk->field_name);
+        if (!col)
+        {
+            failures++;
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "WHERE key '%s': no such column on %s.%s",
+                     wk->field_name, req->owner, req->table_name);
+            logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0, "%s", msg);
+            if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+            continue;
+        }
+
+        {
+            char date_err[512];
+            if (normalize_client_date_value(ctx, ctx->delete_logger,
+                                            col->data_type,
+                                            wk->client_date_format,
+                                            wk->key_value, sizeof(wk->key_value),
+                                            date_err, sizeof(date_err)) != 0)
+            {
+                failures++;
+                char msg[512];
+                snprintf(msg, sizeof(msg), "WHERE key '%s': %s",
+                         wk->field_name, date_err);
+                if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+                continue;
+            }
+        }
+
+        if (!wk->key_value[0])
+        {
+            failures++;
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "WHERE key '%s': key_value is empty", wk->field_name);
+            logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0, "%s", msg);
+            if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+        }
+    }
+
+    if (failures > 0)
+    {
+        logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: DELETE validation failed - %d failure(s), "
+                     "first: %s", failures, first_failure_msg);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  first_failure_msg);
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                 "Level 2: DELETE validated OK - table=%s.%s keys=%d",
+                 req->owner, req->table_name, req->key_count);
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_procedure                                           */
+/*  Deliberately light - see this function's own doc comment in         */
+/*  OCI_Level2_Parser.h for why (no metadata_cache equivalent exists     */
+/*  for a procedure's own parameter signature the way it does for a      */
+/*  table's columns).                                                    */
+/* ================================================================== */
+int level2_validate_procedure(oci_context_t        *ctx,
+                               input_c_operation_t  *op,
+                               operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "EXECUTE_PROCEDURE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    execute_procedure_request_t *req = (execute_procedure_request_t *)op->payload;
+
+    if (!req->procedure_name[0])
+    {
+        logger_write(ctx->logger, LOG_ERROR, __func__, 0,
+                     "Level 2: EXECUTE_PROCEDURE operation has empty "
+                     "procedure_name");
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - "
+                  "procedure_name is empty.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    if (req->param_count < 0 || req->param_count > MAX_PROC_PARAMS)
+    {
+        logger_write(ctx->logger, LOG_ERROR, __func__, 0,
+                     "Level 2: EXECUTE_PROCEDURE param_count=%d out of "
+                     "range (0..%d)", req->param_count, MAX_PROC_PARAMS);
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - "
+                  "param_count out of range.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    int  failures = 0;
+    char first_failure_msg[512] = {0};
+
+    /* ---- Per-parameter structural checks ----
+     * No validate_field()-style type/length checking here at all -
+     * there is no real column metadata to validate a procedure
+     * parameter against, only what the client itself declared. This is
+     * the one place in the whole project where a client-declared type
+     * is trusted rather than resolved against something authoritative,
+     * simply because there is nothing authoritative available to
+     * resolve it against - see this function's own doc comment in
+     * OCI_Level2_Parser.h.                                             */
+    for (int i = 0; i < req->param_count; i++)
+    {
+        const procedure_param_t *pp = &req->parameters[i];
+
+        if (!pp->param_name[0])
+        {
+            failures++;
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "Parameter %d: param_name is empty", i + 1);
+            logger_write(ctx->logger, LOG_ERROR, __func__, 0, "%s", msg);
+            if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+            continue;
+        }
+
+        int is_recognised_type =
+            (strcasecmp(pp->param_type, "NUMBER")    == 0 ||
+             strcasecmp(pp->param_type, "INTEGER")   == 0 ||
+             strcasecmp(pp->param_type, "VARCHAR2")  == 0 ||
+             strcasecmp(pp->param_type, "DATE")      == 0 ||
+             strcasecmp(pp->param_type, "TIMESTAMP") == 0 ||
+             strcasecmp(pp->param_type, "CURSOR")    == 0);
+
+        if (!is_recognised_type)
+        {
+            failures++;
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "Parameter '%s': param_type '%s' is not one of "
+                     "NUMBER/INTEGER/VARCHAR2/DATE/TIMESTAMP/CURSOR",
+                     pp->param_name, pp->param_type);
+            logger_write(ctx->logger, LOG_ERROR, __func__, 0, "%s", msg);
+            if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+            continue;
+        }
+
+        /* CURSOR is always OUT - a REFCURSOR can't be passed in, and
+         * doesn't round-trip as IN_OUT either (there is nothing
+         * meaningful the caller could pass in for it).                 */
+        if (strcasecmp(pp->param_type, "CURSOR") == 0 &&
+            pp->direction != PARAM_DIR_OUT)
+        {
+            failures++;
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "Parameter '%s': CURSOR parameters must be OUT "
+                     "(a cursor cannot be passed in)", pp->param_name);
+            logger_write(ctx->logger, LOG_ERROR, __func__, 0, "%s", msg);
+            if (failures == 1) snprintf(first_failure_msg, sizeof(first_failure_msg), "%s", msg);
+        }
+    }
+
+    if (failures > 0)
+    {
+        logger_write(ctx->logger, LOG_ERROR, __func__, 0,
+                     "Level 2: EXECUTE_PROCEDURE validation failed - "
+                     "%d failure(s), first: %s", failures, first_failure_msg);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  first_failure_msg);
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    logger_write(ctx->logger, LOG_INFO, __func__, 0,
+                 "Level 2: EXECUTE_PROCEDURE validated OK - proc='%s' "
+                 "params=%d", req->procedure_name, req->param_count);
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
 /*  level2_validate                                                      */
 /* ================================================================== */
 int level2_validate(oci_context_t *ctx, input_c_request_t *request)
@@ -633,12 +1182,18 @@ int level2_validate(oci_context_t *ctx, input_c_request_t *request)
                 level2_validate_update(ctx, op, &op->validation_status);
                 break;
 
+            case OP_DELETE:
+                level2_validate_delete(ctx, op, &op->validation_status);
+                break;
+
+            case OP_EXECUTE_PROCEDURE:
+                level2_validate_procedure(ctx, op, &op->validation_status);
+                break;
+
             /* Not yet implemented - fail closed. An operation type with
              * no validator here must never silently proceed to the
              * CRUD layer unvalidated.                                  */
-            case OP_DELETE:
             case OP_GET_TEMPLATE:
-            case OP_EXECUTE_PROCEDURE:
             case OP_CREATE_SESSION:
             case OP_END_SESSION:
             case OP_UNKNOWN:

@@ -1,0 +1,588 @@
+Data Manager
+
+# Request Definitions
+
+*Version 1.2*
+
+*2026-07-31*
+
+# Purpose and Scope
+
+This document is the single source of truth for every request type the Data Manager input layer accepts, and every response it returns. It exists so that "what does Data Manager support" has one definite answer, rather than being inferred from test files or module source.
+
+**Anything not described in this document is out of scope.**
+
+This applies equally to the format-agnostic C structures used internally (see OCI_Request_Response_Types.h) and to the XML/JSON wire representations of each request. Both are described together for each operation type below, since they are two views of exactly the same thing.
+
+Each operation type is marked with a status:
+
+- Defined - request/response shape is settled and has at least one working test fixture, or is anchored directly in a complete, unambiguous module specification.
+
+- Pending - operation type exists in the design but the concrete request/response shape is not yet confirmed against a real example. Treat as reserved, not implemented.
+
+## Authentication
+
+*Session establishment (CREATE_SESSION) and authentication are deliberately separate concerns, per decision 2026-07-15. CREATE_SESSION registers a client session; it does not verify identity. Authentication (credentials, tokens, API keys, or whatever mechanism is chosen) will be handled by a separate module, designed and documented separately when that work is taken up. Until then, CREATE_SESSION has no authentication fields and none should be added to session_request_t without a corresponding design pass here.*
+
+## Error reporting
+
+*error_code/error_text are populated at both the per-operation level and the request level (operation_status_t, used by both output_c_operation_result_t.status and output_c_response_t.request_status). This detail is deliberately preserved all the way into the client-visible response - not just kept internal to logs/metrics - because it has proven genuinely valuable for debugging throughout this project.*
+
+# Index
+
+| **Operation** | **Status** | **Purpose** |
+| --- | --- | --- |
+| GET_TEMPLATE | Defined | Client requests a blank column/field template for a table before building an INSERT (or, once supported, UPDATE). |
+| SELECT | Defined | Execute a read-only query and return a resultset. |
+| INSERT | Defined | Insert one or more rows into a table, in a single bulk/array-bind batch. |
+| UPDATE | Defined | Update one or more rows matching a WHERE clause. |
+| DELETE | Defined | Delete one or more rows matching a WHERE clause. |
+| EXECUTE_PROCEDURE | Defined | Execute a stored procedure - IN/OUT/IN_OUT scalar params plus optional CURSOR OUT params, each producing its own resultset. |
+| CREATE_SESSION | Defined | Establish a new client session, returning a session_id for use on subsequent requests. Authentication is a separate, future concern - see Authentication above. |
+| END_SESSION | Defined | Explicitly end a session (client-initiated logout). |
+
+# Response Envelope
+
+Every request produces exactly one response envelope (output_c_response_t), regardless of how many operations were in the request. This section documents that envelope itself - the per-operation payload shapes (dml_response_t, execute_procedure_response_t, etc.) are documented under each operation below; this is the wrapper that carries them.
+
+## Fields (output_c_response_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| version | char[16] | Echoed from the request. |
+| external_audit_id | char[64] | Echoed from the request. |
+| session_id | char[64] | Echoed from the request, or the newly created session_id if this request was itself a CREATE_SESSION. |
+| source_format | input_format_t | Copied from the request - tells the Response layer what wire format to render back into (XML/JSON), without re-detecting anything. |
+| result_count | int | Number of entries in results. |
+| results | output_c_operation_result_t[] | One entry per operation in the request, in the same order. See below. |
+| request_status | operation_status_t | What the client actually sees as the overall outcome. See Error reporting note at the front of this document. |
+
+## Fields (output_c_operation_result_t) - one per operation
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| type | operation_type_t | Which operation this result is for. |
+| result_payload | void * | Cast per type - dml_response_t* for SELECT/INSERT/UPDATE/DELETE, execute_procedure_response_t* for EXECUTE_PROCEDURE, get_template_response_t* for GET_TEMPLATE, and so on. |
+| status | operation_status_t | This operation's own outcome - see note on rollback behaviour below. |
+
+## Fields (operation_status_t) - shared by both levels above
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| status_code | int | 0 = OK, non-zero = failure. |
+| error_code | char[64] | "-" when status_code == 0. |
+| error_text | char[256] | "-" when status_code == 0. |
+
+## Rollback behaviour
+
+*If transaction_required was set on the request and one operation fails, the whole transaction rolls back. Per decision 2026-07-14: earlier operations in results may still show status_code == 0 (they did execute successfully before the rollback) even though none of it is durable - this array is primarily for internal bookkeeping, matching how metrics/audit already log each operation**'**s own row regardless of a later rollback. The client-facing outcome is request_status alone: on a rolled-back request, request_status.status_code is non-zero and error_code/error_text come from whichever operation actually triggered the rollback (sourced from logger_last_error at that point) - not a separate rollback-specific error, since rollback itself is not expected to fail under normal operation.*
+
+## Example: single successful INSERT
+
+<response version="1.0">
+    <external_audit_id>audit_stub_insert_round_1</external_audit_id>
+    <session_id>-</session_id>
+    <results>
+        <result type="INSERT">
+            <status_code>0</status_code>
+            <error_code>-</error_code>
+            <error_text>-</error_text>
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <rows_affected>2</rows_affected>
+            <lobs_written>0</lobs_written>
+            <execution_time_seconds>0.015923</execution_time_seconds>
+        </result>
+    </results>
+    <request_status>
+        <status_code>0</status_code>
+        <error_code>-</error_code>
+        <error_text>-</error_text>
+    </request_status>
+</response>
+
+## Example: successful SELECT
+
+*resultset is the same **<**resultset**>**...**<**/resultset**>** body execute_query_batch() already produces today, carried through as resultset_xml_fragment and rendered verbatim here.*
+
+<response version="1.0">
+    <external_audit_id>audit_stub_select_2</external_audit_id>
+    <session_id>-</session_id>
+    <results>
+        <result type="SELECT">
+            <status_code>0</status_code>
+            <error_code>-</error_code>
+            <error_text>-</error_text>
+            <rows_affected>21</rows_affected>
+            <execution_time_seconds>0.008120</execution_time_seconds>
+            <resultset>
+                <row number="1">
+                    <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+                    <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 test row 1</field_value></field>
+                </row>
+                <!-- ...additional rows... -->
+            </resultset>
+        </result>
+    </results>
+    <request_status>
+        <status_code>0</status_code>
+        <error_code>-</error_code>
+        <error_text>-</error_text>
+    </request_status>
+</response>
+
+## Example: multi-operation transactional request that rolled back
+
+*Operation 1 (INSERT) succeeded on its own terms; operation 2 (UPDATE) failed and triggered a rollback of the whole transaction, per transaction_required=**"**1**"**. Neither operation is durable, and the client sees only request_status carrying the failure.*
+
+<response version="1.0">
+    <external_audit_id>audit_stub_multi_op_example</external_audit_id>
+    <session_id>-</session_id>
+    <results>
+        <result type="INSERT">
+            <status_code>0</status_code>
+            <error_code>-</error_code>
+            <error_text>-</error_text>
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <rows_affected>1</rows_affected>
+            <lobs_written>0</lobs_written>
+            <execution_time_seconds>0.011200</execution_time_seconds>
+        </result>
+        <result type="UPDATE">
+            <status_code>-1</status_code>
+            <error_code>ORA-00001</error_code>
+            <error_text>unique constraint violated</error_text>
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <rows_affected>0</rows_affected>
+            <lobs_written>0</lobs_written>
+            <execution_time_seconds>0.006340</execution_time_seconds>
+        </result>
+    </results>
+    <request_status>
+        <status_code>-1</status_code>
+        <error_code>ORA-00001</error_code>
+        <error_text>unique constraint violated</error_text>
+    </request_status>
+</response>
+
+# Date Handling
+
+*Added 2026-07-27/28/29, following a real bug: a DATE-typed WHERE-key value failed silently against a real Oracle comparison because nothing validated it was actually in the expected format - see the design reasoning below.*
+
+The one canonical date/timestamp format across this whole project is ctx-\>ini-\>nls_date_format (config.ini) - DATE columns use it directly; TIMESTAMP columns use it with a ".FF6" fractional-seconds suffix appended. No hardcoded date format literal exists anywhere in the codebase - every TO_DATE()/TO_TIMESTAMP() wrapper (INSERT, UPDATE, DELETE, and the shared audit-trail before-image function) reads this same value fresh at the point it's needed.
+
+**client_date_format** is an optional field on field_value_t (INSERT SET values, UPDATE SET values) and where_key_t (UPDATE and DELETE WHERE keys) - the one deliberate exception to "the client never supplies metadata, the server resolves everything." If a client's own date value isn't already in nls_date_format, it can declare what format it *is* in via this field, e.g. `<client_date_format>DD/MM/YYYY HH24:MI:SS</client_date_format>` alongside a value of `19/08/2026 14:30:00`.
+
+**Validation and normalization happen the same way regardless of whether client_date_format is supplied.** Level 2 validates every DATE/TIMESTAMP-typed value via a live Oracle round-trip (`SELECT TO_CHAR(TO_DATE(value, source_format), nls_date_format) FROM DUAL`, or TO_TIMESTAMP for TIMESTAMP columns) - using the client's declared format as source_format if supplied, or nls_date_format itself if not. This means an un-tagged date value is genuinely checked against the real configured format, not silently assumed correct. If the value doesn't match, the request fails Level 2 validation with a clear "Invalid date" message - it does not reach the database in an unpredictable shape.
+
+On a successful conversion, the value is normalized in place into nls_date_format before execute_insert_batch()/execute_update_batch()/execute_delete_batch() ever sees it, and client_date_format is cleared - this second part matters because Level 2 validation runs twice per request (once from the dispatcher, again inside each execute module's own Stage 1 as defense-in-depth), and without clearing it, the second pass would try to reinterpret an already-converted value against the original, now-stale format label and fail. Confirmed via a real end-to-end test: an UPDATE's WHERE key declared in European DD/MM/YYYY format, and a DELETE's WHERE key on the same underlying value declared in US MM/DD/YYYY format, both converted and matched correctly.
+
+# GET_TEMPLATE
+
+**Status: Defined**
+
+## Purpose
+
+Step 1 of a two-round-trip flow. The client asks for a blank field/column template for a table before building an INSERT (or, once supported, UPDATE). The response carries full column metadata - name, type, length, precision, scale, nullable, default - with every value left empty. The client fills in values and sends a separate follow-up INSERT/UPDATE request; this stays two independent requests, not combined into one multi-operation transaction.
+
+## Request Fields (get_template_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| target_operation | char[32] | "INSERT" today. "UPDATE" is reserved but not yet implemented server-side. |
+| table_name | char[128] | Table to describe. |
+| owner | char[128] | Optional - empty string auto-resolves. |
+
+## Response Fields (get_template_response_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| table_name | char[128] | Echoed from the request. |
+| owner | char[128] | Echoed from the request. |
+| column_count | int | Number of entries in columns. |
+| columns | field_spec_t[] | Full metadata per column - see field_spec_t below. Every .value is empty. |
+
+### field_spec_t (used only on GET_TEMPLATE responses)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| field_number | int | Ordinal position. |
+| field_name | char[128] |  |
+| field_type | char[32] | NUMBER, VARCHAR2, DATE, BLOB, CLOB, ... |
+| field_length | int |  |
+| field_precision | int | -1 = not applicable. |
+| field_scale | int | -1 = not applicable. |
+| field_nullable | int | 1 = Y, 0 = N. |
+| field_default | char[256] | Empty = no default. |
+| value | char[4096] | Always empty on a template response. |
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_get_insert_template</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="GET_TEMPLATE">
+            <target_operation>INSERT</target_operation>
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+        </operation>
+    </transaction>
+</request>
+
+Note: transaction required is 0 here - a template request is a read-only metadata lookup with no writes to wrap in a transaction, unlike the other operation types below which default to required="1" to match existing runtime behaviour.
+
+# SELECT
+
+**Status: Defined**
+
+## Purpose
+
+Execute a read-only query and return a resultset, including BLOB/CLOB extraction where the query selects LOB columns.
+
+## Request Fields (select_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| sql | char[4096] | Validated SQL text, post Level 2 / SQL dependency parsing. |
+| max_rows | int | Defaults to ctx->ini->query_max_record_count unless overridden per-request. |
+| fetch_batch_size | int |  |
+| include_column_names | int |  |
+
+## Response Fields (dml_response_t)
+
+Shared response struct across SELECT/INSERT/UPDATE/DELETE - see full field list and design rationale under INSERT below. For SELECT specifically: table_name/owner/lobs_written are not applicable; sql_query and resultset_xml_fragment are populated, rows_affected holds the row count.
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_select_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="SELECT">
+            <sql>
+                SELECT * FROM OCI_FIELD_TEST
+            </sql>
+        </operation>
+    </transaction>
+</request>
+
+# INSERT
+
+**Status: Defined**
+
+## Purpose
+
+Insert one or more rows into a table in a single bulk/array-bind batch. row_count is capped by ctx->ini->max_bulk_inserts (500 by default) - Level 2 validation should check this explicitly and reject early, rather than only relying on execute_insert_batch()'s own existing cap check at execution time.
+
+## Request Fields (insert_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| table_name | char[128] |  |
+| owner | char[128] |  |
+| row_count | int | Capped by max_bulk_inserts. |
+| rows | insert_row_t[] | One entry per row. |
+
+### insert_row_t
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| field_count | int |  |
+| fields | field_value_t[] | field_name + value pairs only - see note below. |
+
+### field_value_t (used on INSERT and UPDATE requests, not on GET_TEMPLATE responses)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| field_name | char[128] |  |
+| value | char[4096] |  |
+| client_date_format | char[64] | Optional. See Date Handling below. Empty means value is already in ctx-\>ini-\>nls_date_format. |
+
+*Design note: field_value_t deliberately excludes field_type/length/precision/scale/nullable/default. The client has no authority over column metadata - it lives in the database and is already served by metadata_cache. Sending it back on every INSERT/UPDATE is pure overhead and opens a class of bug where client-supplied metadata could disagree with what the server actually has. Level 2 validation resolves the real metadata itself via metadata_cache before executing. client_date_format is the one deliberate exception to "server resolves everything" - see Date Handling below for why.*
+
+## Response Fields (dml_response_t) - shared across SELECT / INSERT / UPDATE / DELETE
+
+Anchored directly against real output_xml captured in metrics_Data_Manager.csv across all four operations - they turned out structurally near-identical, so one struct with optional fields is used instead of four almost-duplicate ones.
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| table_name | char[128] | "" for SELECT. |
+| owner | char[128] | "" for SELECT. |
+| rows_affected | int | rows_inserted/updated/deleted, or row count for SELECT. |
+| lobs_written | int | INSERT/UPDATE only; 0 otherwise. |
+| lobs_extracted | int | SELECT only; 0 otherwise. |
+| execution_time_seconds | double |  |
+| sql_query | char * | SELECT only. |
+| resultset_xml_fragment | char * | SELECT only - the <resultset>...</resultset> body already produced internally by execute_query_batch() today, reused as-is. |
+
+*No WHERE-clause echo on the response. DELETE**'**s output used to include one and UPDATE**'**s didn**'**t; per decision 2026-07-15, removed from DELETE for consistency rather than added to UPDATE - neither echoes it now.*
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_1</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>42</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 1 test row 1</value></field>
+                <field><field_name>DATE_COL</field_name><value>2026-05-20</value></field>
+            </row>
+            <row number="2">
+                <field><field_name>NUMBER_COL</field_name><value>99</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 1 test row 2</value></field>
+                <field><field_name>DATE_COL</field_name><value>2026-05-20</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>
+
+# UPDATE
+
+**Status: Defined**
+
+## Purpose
+
+Update rows matching a WHERE clause. Uses field_value_t for the SET clause (same struct as INSERT, same reasoning) and where_key_t for the WHERE clause. An UPDATE has exactly one SET list applied to however many rows match - there is no per-row concept the way there is for INSERT, so the SET clause is a flat list under <set>, not a numbered <row>.
+
+## Request Fields (update_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| table_name | char[128] |  |
+| owner | char[128] |  |
+| key_count | int |  |
+| keys | where_key_t[] | WHERE clause - AND'd together. |
+| field_count | int |  |
+| fields | field_value_t[] | SET clause. |
+
+### where_key_t (used on UPDATE and DELETE requests)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| field_name | char[128] |  |
+| key_value | char[4096] |  |
+| client_date_format | char[64] | Optional. See Date Handling below. Empty means key_value is already in ctx-\>ini-\>nls_date_format. |
+
+*Like field_value_t, where_key_t deliberately excludes field_type - resolved server-side via metadata_cache, not supplied by the client. client_date_format is the same deliberate exception as field_value_t's own - see Date Handling below.*
+
+## Response Fields
+
+dml_response_t - see INSERT above for the full shared shape.
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_update_scalar</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="UPDATE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>42</key_value></key>
+            </where>
+            <set>
+                <field><field_name>VARCHAR2_COL</field_name><value>Updated by test</value></field>
+                <field><field_name>DATE_COL</field_name><value>2026-05-23 00:00:00</value></field>
+            </set>
+        </operation>
+    </transaction>
+</request>
+
+# DELETE
+
+**Status: Defined**
+
+## Purpose
+
+Delete rows matching a WHERE clause. No SET clause - otherwise structurally identical to UPDATE's WHERE handling.
+
+*Audit trail note, added 2026-07-26: unlike UPDATE (which audits after a successful change), DELETE's before-image SELECT and its AUDIT_TRAIL write both happen BEFORE the actual DELETE statement executes. This is deliberate: in many regulated environments records aren't physically deleted at all (a status change is used instead), so the account executing this may have no DELETE privilege whatsoever - the audit record of the attempt needs to exist regardless of whether the DELETE itself is allowed to succeed. The before-image is scoped to the WHERE-key columns only, not every column on the table.*
+
+## Request Fields (delete_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| table_name | char[128] |  |
+| owner | char[128] |  |
+| key_count | int |  |
+| keys | where_key_t[] | WHERE clause - AND'd together. See where_key_t under UPDATE. |
+
+## Response Fields
+
+dml_response_t - see INSERT above. No WHERE-clause echo (removed 2026-07-15 for consistency with UPDATE).
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_delete_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="DELETE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>99</key_value></key>
+                <key><field_name>VARCHAR2_COL</field_name><key_value>Round 1 test row 2</key_value></key>
+            </where>
+        </operation>
+    </transaction>
+</request>
+
+# EXECUTE_PROCEDURE
+
+**Status: Defined**
+
+## Purpose
+
+Executes an Oracle stored procedure or function via an internally-generated anonymous PL/SQL block. Supports IN, OUT, and IN_OUT scalar parameters, plus CURSOR OUT parameters - each CURSOR OUT produces its own resultset in the response, identified by parameter name. Anchored directly against the complete, unambiguous specification in OCI_Execute_Procedure_Module.h for a working, proven module.
+
+*No audit trail, by deliberate decision (2026-07-29): a procedure is a black box from Data Manager's own perspective - it has no visibility into what the procedure's own PL/SQL actually does internally, so there is nothing meaningful to hold Data Manager itself accountable for beyond the fact the call was made. This is different from INSERT/UPDATE/DELETE, where Data Manager itself builds and executes the actual DML and bears direct responsibility for what changed.*
+
+## Request Fields (execute_procedure_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| procedure_name | char[128] | May include package prefix, e.g. "MY_PKG.GET_DATA". |
+| owner | char[128] | Optional schema prefix. |
+| param_count | int | Capped by MAX_PROC_PARAMS (64). Zero is valid - a procedure may take no parameters. |
+| parameters | procedure_param_t[] |  |
+
+### procedure_param_t
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| param_name | char[128] |  |
+| param_type | char[32] | NUMBER, INTEGER, VARCHAR2, DATE, TIMESTAMP, CURSOR. |
+| direction | param_direction_t | PARAM_DIR_IN / PARAM_DIR_OUT / PARAM_DIR_IN_OUT. |
+| param_value | char[4096] | IN value on the request; empty for a pure OUT param going in. |
+
+## Response Fields (execute_procedure_response_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| procedure_name | char[128] |  |
+| execution_time_seconds | double |  |
+| out_param_count | int |  |
+| out_parameters | procedure_param_t[] | OUT/IN_OUT values after execution. |
+| resultset_count | int | Number of CURSOR OUT params that actually produced a resultset - zero, one, or several. |
+| resultsets | procedure_resultset_t[] | One entry per CURSOR OUT param. |
+
+### procedure_resultset_t
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| param_name | char[128] | Which CURSOR OUT param this resultset came from. |
+| resultset_xml_fragment | char * | Same reused shape as dml_response_t's field. |
+
+*JSON response note: in JSON mode, each resultset is embedded as a labelled XML string field ("resultset_xml"), not proper nested JSON - fetch_cursor_to_xml() only ever produces XML, so there is no JSON-native cursor fetcher to draw from. A true JSON-native equivalent would be its own separate piece of work. Scalar out_parameters render as proper JSON either way - only the CURSOR resultset content itself has this limitation.*
+
+## Example Request (XML)
+
+*Derived directly from the documented example in OCI_Execute_Procedure_Module.h - swap procedure_name/parameters for a real procedure in your schema if MY_PKG.GET_DATA doesn**'**t exist.*
+
+<request version="1.0">
+    <external_audit_id>audit_stub_execute_procedure</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="EXECUTE_PROCEDURE">
+            <procedure_name>MY_PKG.GET_DATA</procedure_name>
+            <owner></owner>
+            <parameters>
+                <parameter>
+                    <param_name>P_DEPT_ID</param_name>
+                    <param_type>NUMBER</param_type>
+                    <param_direction>IN</param_direction>
+                    <param_value>10</param_value>
+                </parameter>
+                <parameter>
+                    <param_name>P_STATUS</param_name>
+                    <param_type>INTEGER</param_type>
+                    <param_direction>OUT</param_direction>
+                    <param_value></param_value>
+                </parameter>
+                <parameter>
+                    <param_name>P_RESULTS</param_name>
+                    <param_type>CURSOR</param_type>
+                    <param_direction>OUT</param_direction>
+                    <param_value></param_value>
+                </parameter>
+            </parameters>
+        </operation>
+    </transaction>
+</request>
+
+# CREATE_SESSION
+
+**Status: Defined**
+
+## Purpose
+
+Establish a new client session. Generates a UUID session_id, writes a permanent row to OCI_SESSION, and returns the session_id for use on subsequent requests. See OCI_Session_Manager.h for full lifecycle detail (reconciliation, TTL, session_cache).
+
+*Authentication is explicitly out of scope for this operation, per decision 2026-07-15 - see Authentication under Purpose and Scope at the front of this document. CREATE_SESSION registers a session; it does not verify who the caller is.*
+
+## Request Fields (session_request_t, in OCI_Session_Manager.h)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| operation | char[32] | "CREATE_SESSION" |
+| client_id | char[128] |  |
+| client_ip | char[64] |  |
+| client_host | char[128] |  |
+| application_name | char[128] |  |
+| requested_ttl_seconds | int | 0 = use session_default_ttl_seconds from config.ini. |
+
+## Response
+
+session_id (the newly generated UUID), status ("ACTIVE"), created_ts, ttl_seconds. See session_create() in OCI_Session_Manager.c for the exact XML shape already in production use.
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_create_session</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="CREATE_SESSION">
+            <client_id>stub_client_001</client_id>
+            <client_ip>127.0.0.1</client_ip>
+            <client_host>localhost</client_host>
+            <application_name>Data_Manager_Test_Runner</application_name>
+            <requested_ttl_seconds>1800</requested_ttl_seconds>
+        </operation>
+    </transaction>
+</request>
+
+# END_SESSION
+
+**Status: Defined**
+
+## Purpose
+
+Explicitly end a session (client-initiated logout). Maps to session_end(ctx, session_id, SESSION_STATUS_LOGGED_OUT, reason, ...). Status is always LOGGED_OUT for this operation type - EXPIRED and EXPIRED_ORPHAN are system-detected conditions (TTL timeout during normal use, or startup reconciliation finding an orphaned session from an unclean shutdown) and are never something a client explicitly requests.
+
+## Request Fields (end_session_request_t)
+
+| **Field** | **C Type** | **Notes** |
+| --- | --- | --- |
+| session_id | char[64] | Session to end. |
+| reason | char[256] | Optional - "-" if not supplied. |
+
+## Example Request (XML)
+
+<request version="1.0">
+    <external_audit_id>audit_stub_end_session</external_audit_id>
+    <session_id>fea5b7ef-86c4-4d77-b3eb-eaa14c38f501</session_id>
+    <transaction required="1">
+        <operation type="END_SESSION">
+            <reason>Client logout</reason>
+        </operation>
+    </transaction>
+</request>

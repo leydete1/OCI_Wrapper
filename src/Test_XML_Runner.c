@@ -85,17 +85,24 @@
 #include "session_cache.h"
 #include "OCI_Session_Manager.h"
 #include "OCI_Level1_Parser.h"
+#include "OCI_Unit_Test_Module.h"
 #include "OCI_Level2_Parser.h"
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Execute_Query_Batch_Module.h"
 
-static int looks_like_new_request_format(const char *xml, size_t len);
+/* looks_like_new_request_format()'s own forward declaration removed
+ * 2026-08-01 - now level1_looks_like_new_format(), declared in
+ * OCI_Level1_Parser.h (already included above).                       */
 static int dispatch_select_new(oci_context_t *ctx, const char *filename,
                                 input_c_request_t *request, input_c_operation_t *op);
 static int dispatch_insert_new(oci_context_t *ctx, const char *filename,
                                 input_c_request_t *request, input_c_operation_t *op);
 static int dispatch_update_new(oci_context_t *ctx, const char *filename,
                                 input_c_request_t *request, input_c_operation_t *op);
+static int dispatch_delete_new(oci_context_t *ctx, const char *filename,
+                                input_c_request_t *request, input_c_operation_t *op);
+static int dispatch_procedure_new(oci_context_t *ctx, const char *filename,
+                                   input_c_request_t *request, input_c_operation_t *op);
 
 
 typedef struct {
@@ -668,82 +675,19 @@ static int dispatch_select(oci_context_t *ctx,
  * is retired for UPDATE too. See dispatch_update_new() below for the
  * new-pipeline replacement. */
 
-/* ================================================================== */
-/*  dispatch_delete                                                     */
-/* ================================================================== */
-static int dispatch_delete(oci_context_t *ctx,
-                            const char    *filename,
-                            const char    *xml)
-{
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                 "Dispatching DELETE: %s", filename);
+/* dispatch_delete (legacy, flat-XML <operation>DELETE</operation>
+ * format) removed - same reasoning as dispatch_insert/dispatch_update's
+ * removal: execute_delete_batch()'s signature changed from a raw XML
+ * string to delete_request_t* as part of this refactor, so the old
+ * flat format is retired for DELETE too. See dispatch_delete_new()
+ * below for the new-pipeline replacement. */
 
-    execute_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.input_file_name = (char *)filename;   /* points to caller's string, no alloc needed */
-
-    int rc = execute_delete_batch(ctx, xml, &cfg);
-
-    if (rc == 0)
-    {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                     "PASS [DELETE]: %s", filename);
-        if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
-    }
-    else
-    {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
-                     "FAIL [DELETE]: %s (rc=%d)", filename, rc);
-    }
-
-    if (cfg.xml)
-    {
-        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
-        free(cfg.xml);
-    }
-    return rc;
-}
-
-/* ================================================================== */
-/*  dispatch_procedure                                                  */
-/* ================================================================== */
-static int dispatch_procedure(oci_context_t *ctx,
-                               const char    *filename,
-                               const char    *xml)
-{
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                 "Dispatching EXECUTE_PROCEDURE: %s", filename);
-
-    execute_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.input_file_name = (char *)filename;   /* points to caller's string, no alloc needed */
-
-    int rc = execute_procedure(ctx, xml, &cfg);
-
-    if (rc == 0)
-    {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                     "PASS [EXECUTE_PROCEDURE]: %s", filename);
-        if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
-                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
-    }
-    else
-    {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
-                     "FAIL [EXECUTE_PROCEDURE]: %s (rc=%d)",
-                     filename, rc);
-    }
-
-    if (cfg.xml)
-    {
-        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
-        free(cfg.xml);
-    }
-    return rc;
-}
+/* dispatch_procedure (legacy, flat-XML <Procedure_Template> format)
+ * removed - same reasoning as dispatch_insert/update/delete's removal:
+ * execute_procedure()'s signature changed from a raw XML string to
+ * execute_procedure_request_t* as part of this refactor, so the old
+ * flat format is retired for EXECUTE_PROCEDURE too. See
+ * dispatch_procedure_new() below for the new-pipeline replacement. */
 
 /* ================================================================== */
 /*  process_xml_file                                                    */
@@ -778,7 +722,7 @@ static int process_xml_file(oci_context_t *ctx,
      * meaningful rather than firing on every old-format file. Old
      * dispatch below is untouched and stays the fallback for
      * everything else, both formats coexisting in xml_input_dir. */
-    if (looks_like_new_request_format(xml, (size_t)len))
+    if (level1_looks_like_new_format(xml, (size_t)len))
     {
         input_c_request_t   new_request;
         operation_status_t  level1_error;
@@ -827,6 +771,14 @@ static int process_xml_file(oci_context_t *ctx,
                 {
                     rc = dispatch_update_new(ctx, filename, &new_request, op);
                 }
+                else if (op->type == OP_DELETE)
+                {
+                    rc = dispatch_delete_new(ctx, filename, &new_request, op);
+                }
+                else if (op->type == OP_EXECUTE_PROCEDURE)
+                {
+                    rc = dispatch_procedure_new(ctx, filename, &new_request, op);
+                }
                 else
                 {
                     /* Every other operation type still runs through the
@@ -839,7 +791,8 @@ static int process_xml_file(oci_context_t *ctx,
                     logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
                                  "File='%s' operation[%d] type=%d - new "
                                  "pipeline only implements SELECT/INSERT/"
-                                 "UPDATE so far, skipping", filename, i, (int)op->type);
+                                 "UPDATE/DELETE/EXECUTE_PROCEDURE so far, "
+                                 "skipping", filename, i, (int)op->type);
                 }
             }
         }
@@ -905,9 +858,25 @@ static int process_xml_file(oci_context_t *ctx,
         rc = -1;
     }
     else if (strcmp(operation, "DELETE") == 0)
-        rc = dispatch_delete(ctx, filename, xml);
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "File='%s' is old flat-XML DELETE format - no longer "
+                     "supported (execute_delete_batch() now requires "
+                     "delete_request_t via the new pipeline). Convert this "
+                     "fixture to the new <request version=\"1.0\">...<operation "
+                     "type=\"DELETE\"> format.", filename);
+        rc = -1;
+    }
     else if (strcmp(operation, "EXECUTE_PROCEDURE") == 0)
-        rc = dispatch_procedure(ctx, filename, xml);
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "File='%s' is old flat-XML EXECUTE_PROCEDURE format - "
+                     "no longer supported (execute_procedure() now requires "
+                     "execute_procedure_request_t via the new pipeline). "
+                     "Convert this fixture to the new <request version=\"1.0\">"
+                     "...<operation type=\"EXECUTE_PROCEDURE\"> format.", filename);
+        rc = -1;
+    }
     else
         logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
                      "Unknown operation '%s' in %s - skipping",
@@ -1008,7 +977,19 @@ static int initialise_loggers(oci_context_t *ctx,
                ctx->ini->log_file_name);
         return -1;
     }
-    ctx->connectionpool_logger = logger;
+    /* 2026-08-01 fix: this used to read
+     * "ctx->connectionpool_logger = logger;" - a copy-paste slip that
+     * meant ctx->logger itself was NEVER actually assigned, ever. It
+     * stayed invisible because ctx->connectionpool_logger gets its own,
+     * correct, separate assignment further down (from its own
+     * dedicated connectionpool_logger variable), which simply
+     * overwrote this mistake before anything could observe it being
+     * wrong - but ctx->logger had no such second chance. Found via
+     * UT-LOG-001, the very first time anything actually checked
+     * ctx->logger directly rather than always using the standalone
+     * local `logger` variable (which was never affected by this bug -
+     * only the ctx-> field was).                                      */
+    ctx->logger = logger;
     printf("Initialize Main logger name =%s complete successful.\n",
            ctx->ini->log_file_name);
 
@@ -1387,6 +1368,12 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /* Record the real config.ini path for UT-INI-002's own re-run of
+     * load_ini() against this same known-good file - see
+     * unit_test_set_ini_path()'s own doc comment in
+     * OCI_Unit_Test_Module.h.                                          */
+    unit_test_set_ini_path(argv[1]);
+
     /* ---- Initialise all loggers via helper ---- */
     if (initialise_loggers(&ctx,
                             &logger,
@@ -1518,7 +1505,82 @@ int main(int argc, char *argv[])
                      "OCI_Connect OK");
     }
 
-    /* ---- Scan input_xml directory ---- */
+    /* ---- Startup self-test ----
+     * ctx is fully set up at this point (loggers + connection) - see
+     * OCI_Unit_Test_Module.h's own top comment for why every test is
+     * called with ctx in this state rather than splitting invocation
+     * by tier. unit_test.ini is looked for alongside config.ini (same
+     * directory as argv[1]) - if it isn't there, unit_test_load_config()
+     * itself returns safe, disabled-by-default settings (2026-08-01
+     * backward-compatibility decision), so this whole block is a no-op
+     * for any deployment that predates this feature.                   */
+    {
+        char ut_ini_path[600];
+        const char *last_slash = strrchr(argv[1], '/');
+        if (last_slash)
+        {
+            size_t dir_len = (size_t)(last_slash - argv[1]) + 1;
+            if (dir_len > sizeof(ut_ini_path) - 32) dir_len = sizeof(ut_ini_path) - 32;
+            memcpy(ut_ini_path, argv[1], dir_len);
+            snprintf(ut_ini_path + dir_len, sizeof(ut_ini_path) - dir_len, "unit_test.ini");
+        }
+        else
+        {
+            snprintf(ut_ini_path, sizeof(ut_ini_path), "unit_test.ini");
+        }
+
+        unit_test_config_t ut_cfg;
+        unit_test_load_config(ut_ini_path, &logger, &ut_cfg);
+        unit_test_set_tier3_objects(ut_cfg.test_table_name, ut_cfg.test_table_owner,
+                                     ut_cfg.test_procedure_name);
+
+        if (ut_cfg.startup_self_test_enabled)
+        {
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Startup self-test enabled (max_tier=%d) - running now",
+                         ut_cfg.startup_max_tier);
+
+            unit_test_result_t *ut_results = NULL;
+            int ut_result_count = 0;
+            unit_test_run_all(&ctx, ut_cfg.startup_max_tier, &ut_results, &ut_result_count);
+
+            if (ut_cfg.unit_test_log_summary_enabled)
+                unit_test_write_summary(&logger, ut_results, ut_result_count);
+
+            /* Halt decision is per-tier, per unit_test.ini - see this
+             * file's own doc comment in OCI_Unit_Test_Module.h. A test
+             * above startup_max_tier never even ran, so it can't be part
+             * of this decision either way.                             */
+            int tier1_failed = 0, tier2_failed = 0, tier3_failed = 0;
+            for (int i = 0; i < ut_result_count; i++)
+            {
+                if (strcmp(ut_results[i].status, "FAIL") != 0) continue;
+                if (ut_results[i].tier == 1) tier1_failed = 1;
+                else if (ut_results[i].tier == 2) tier2_failed = 1;
+                else if (ut_results[i].tier == 3) tier3_failed = 1;
+            }
+
+            int should_halt =
+                (tier1_failed && ut_cfg.startup_halt_on_tier1_fail) ||
+                (tier2_failed && ut_cfg.startup_halt_on_tier2_fail) ||
+                (tier3_failed && ut_cfg.startup_halt_on_tier3_fail);
+
+            unit_test_free_results(ut_results);
+
+            if (should_halt)
+            {
+                logger_write(&logger, LOG_ERROR, __func__, 0,
+                             "Startup self-test failure(s) triggered a halt "
+                             "per unit_test.ini - exiting before the request "
+                             "consumer loop starts. See the Unit Test Summary "
+                             "above for detail.");
+                logger_close(&logger);
+                return -1;
+            }
+        }
+    }
+
+
     const char *input_dir = ctx.ini->xml_input_dir;
 
     DIR *dir = opendir(input_dir);
@@ -1882,57 +1944,16 @@ void print_limits(void)
 
 
 
-/*
- * looks_like_new_request_format()
- *
- * Cheap sniff of just the root tag - does NOT call level1_parse().
- * Only files that pass this go anywhere near the real parser, so
- * level1_parse()'s existing LOG_ERROR-level diagnostics stay meaningful
- * (a real error on a file that already looked like a new-format
- * request) rather than firing on every old-format file just for being
- * old-format, which would otherwise be normal/expected noise in
- * error_Data_Manager.log during this transition period.
- *
- * Deliberately does not touch or duplicate level1_parse()'s own format
- * detection (level1_detect_format()) - that function's job is
- * XML-vs-JSON; this one's job is old-format-vs-new-format, a different
- * question, answered before level1_parse() is ever invoked at all.
- */
+/* looks_like_new_request_format() moved to OCI_Level1_Parser.c/.h as
+ * level1_looks_like_new_format() (2026-08-01) - format detection is a
+ * Level 1 concern, and keeping it private to this file made it
+ * untestable by the new Unit Test module (OCI_Unit_Test_Module.c,
+ * UT-L1-001) without duplicating the logic. See that function's own
+ * doc comment in OCI_Level1_Parser.h for the full reasoning (unchanged
+ * from when it lived here) - this file now just calls it. */
 
-static int looks_like_new_request_format(const char *xml, size_t len)
-{
-    if (!xml) return 0;
 
-    input_format_t fmt = level1_detect_format(xml, len);
 
-    if (fmt == INPUT_FORMAT_JSON)
-        return 1;   /* old-format files are never JSON - safe to assume new format */
-
-    if (fmt == INPUT_FORMAT_XML)
-    {
-        /* Skip an optional XML declaration before checking the root tag -
-         * e.g. <?xml version="1.0" encoding="UTF-8"?> - every Request_*.xml
-         * fixture has one, and the original version of this check didn't
-         * account for it, so every new-format XML file was incorrectly
-         * treated as old-format.                                         */
-        const char *p = xml;
-        while (*p && isspace((unsigned char)*p)) p++;
-
-        if (strncmp(p, "<?xml", 5) == 0)
-        {
-            const char *decl_end = strstr(p, "?>");
-            if (decl_end)
-            {
-                p = decl_end + 2;
-                while (*p && isspace((unsigned char)*p)) p++;
-            }
-        }
-
-        return (strncmp(p, "<request", 8) == 0);
-    }
-
-    return 0;
-}
 
 
 
@@ -2159,3 +2180,132 @@ static int dispatch_update_new(oci_context_t       *ctx,
 
 
 
+
+/* ================================================================== */
+/*  dispatch_delete_new                                                 */
+/*  DELETE via the new format-agnostic pipeline - mirrors               */
+/*  dispatch_update_new() exactly. level2_validate_delete() also runs   */
+/*  again internally as execute_delete_batch()'s own first step, so     */
+/*  this is genuinely just the thin adapter from delete_request_t to    */
+/*  execute_config_t.                                                    */
+/* ================================================================== */
+static int dispatch_delete_new(oci_context_t       *ctx,
+                                const char          *filename,
+                                input_c_request_t   *request,
+                                input_c_operation_t *op)
+{
+    delete_request_t *req = (delete_request_t *)op->payload;
+
+    if (!req)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [DELETE/new]: %s - no delete_request_t payload",
+                     filename);
+        return -1;
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)filename;
+
+    /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
+     * without this, JSON-format DELETE requests would silently only
+     * ever get an XML response back.                                  */
+    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
+                        ? "JSON" : "XML";
+
+    int rc = execute_delete_batch(ctx, req, &cfg);
+
+    if (rc == 0)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "PASS [DELETE/new] audit_id=%s: %s",
+                     request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
+    }
+    else
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [DELETE/new] audit_id=%s: %s (rc=%d)",
+                     request->external_audit_id, filename, rc);
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+    if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
+
+    return rc;
+}
+
+/* ================================================================== */
+/*  dispatch_procedure_new                                              */
+/*  EXECUTE_PROCEDURE via the new format-agnostic pipeline - mirrors    */
+/*  dispatch_delete_new() exactly. level2_validate_procedure() also     */
+/*  runs again internally as execute_procedure()'s own first step, so   */
+/*  this is genuinely just the thin adapter from                        */
+/*  execute_procedure_request_t to execute_config_t.                    */
+/* ================================================================== */
+static int dispatch_procedure_new(oci_context_t       *ctx,
+                                   const char          *filename,
+                                   input_c_request_t   *request,
+                                   input_c_operation_t *op)
+{
+    execute_procedure_request_t *req = (execute_procedure_request_t *)op->payload;
+
+    if (!req)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [EXECUTE_PROCEDURE/new]: %s - no "
+                     "execute_procedure_request_t payload",
+                     filename);
+        return -1;
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)filename;
+
+    /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
+     * without this, JSON-format EXECUTE_PROCEDURE requests would
+     * silently only ever get an XML response back.                     */
+    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
+                        ? "JSON" : "XML";
+
+    int rc = execute_procedure(ctx, req, &cfg);
+
+    if (rc == 0)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "PASS [EXECUTE_PROCEDURE/new] audit_id=%s: %s",
+                     request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
+    }
+    else
+    {
+        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [EXECUTE_PROCEDURE/new] audit_id=%s: %s (rc=%d)",
+                     request->external_audit_id, filename, rc);
+    }
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+    if (cfg.OUTPUT_JSON) free(cfg.OUTPUT_JSON);
+
+    return rc;
+}

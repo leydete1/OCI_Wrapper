@@ -269,60 +269,35 @@ validate_string(const parsed_field_t *f, char *msg, size_t msg_max)
     return FIELD_VALID;
 }
 
-/* ---- DATE: accepts YYYY-MM-DD or YYYY-MM-DD HH24:MI:SS ---- */
+/* ---- DATE ----
+ * No longer does its own format checking here (2026-07-28) - used to
+ * be a hardcoded sscanf("%d-%d-%d %d:%d:%d", ...) pattern, completely
+ * disconnected from ctx->ini->nls_date_format and from the
+ * <client_date_format> mechanism added 2026-07-27. That hardcoded
+ * pattern is exactly what the "remove all hardcoding of date format"
+ * decision was about - and it's now genuinely redundant, not just
+ * hardcoded: OCI_Level2_Parser.c's normalize_client_date_value() has
+ * already validated (and normalized) this value via a real Oracle
+ * round-trip against the actual configured nls_date_format (or the
+ * client's own declared format) before validate_field() is ever
+ * called at all. This function stays as a real dispatch target rather
+ * than being removed, so nothing upstream needs to change, but it has
+ * nothing left to check.                                              */
 static field_validation_result_t
 validate_date(const parsed_field_t *f, char *msg, size_t msg_max)
 {
-    const char *v = f->insert_value;
-    int y, mo, d, h = 0, mi = 0, s = 0;
-    int n;
-
-    /* Try long form first */
-    n = sscanf(v, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s);
-    if (n < 3)
-    {
-        snprintf(msg, msg_max,
-                 "Field '%s': DATE value '%s' does not match "
-                 "YYYY-MM-DD[ HH24:MI:SS]",
-                 f->field_name, v);
-        return FIELD_FORMAT_INVALID;
-    }
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 ||
-        h  < 0 || h  > 23 || mi< 0 || mi> 59 || s < 0 || s > 59)
-    {
-        snprintf(msg, msg_max,
-                 "Field '%s': DATE value '%s' has out-of-range component",
-                 f->field_name, v);
-        return FIELD_FORMAT_INVALID;
-    }
+    (void)f; (void)msg; (void)msg_max;
     return FIELD_VALID;
 }
 
-/* ---- TIMESTAMP (all variants) ---- */
+/* ---- TIMESTAMP (all variants) ----
+ * Same reasoning as validate_date() above - already validated
+ * authoritatively by OCI_Level2_Parser.c's normalize_client_date_
+ * value() before this ever runs.                                      */
 static field_validation_result_t
 validate_timestamp(const parsed_field_t *f, char *msg, size_t msg_max)
 {
-    const char *v = f->insert_value;
-    int y, mo, d, h, mi, s;
-
-    int n = sscanf(v, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s);
-    if (n < 6)
-    {
-        snprintf(msg, msg_max,
-                 "Field '%s': TIMESTAMP value '%s' does not match "
-                 "YYYY-MM-DD HH24:MI:SS[.ffffff][timezone]",
-                 f->field_name, v);
-        return FIELD_FORMAT_INVALID;
-    }
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 ||
-        h  < 0 || h  > 23 || mi< 0 || mi> 59 || s < 0 || s > 59)
-    {
-        snprintf(msg, msg_max,
-                 "Field '%s': TIMESTAMP '%s' has out-of-range component",
-                 f->field_name, v);
-        return FIELD_FORMAT_INVALID;
-    }
-    /* Fractional seconds and timezone suffix are accepted as-is */
+    (void)f; (void)msg; (void)msg_max;
     return FIELD_VALID;
 }
 

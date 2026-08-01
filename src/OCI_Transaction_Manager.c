@@ -178,6 +178,43 @@ int tx_is_active(const tx_handle_t *handle)
 }
 
 /* ================================================================== */
+/*  begin_standalone_tx_if_needed / end_standalone_tx_if_owned          */
+/*  See doc comment in OCI_Transaction_Manager.h for the full           */
+/*  reasoning - fixes the 2026-07-26 GxP traceability gap.              */
+/* ================================================================== */
+int begin_standalone_tx_if_needed(oci_context_t *ctx, tx_handle_t *local_tx)
+{
+    if (!ctx) return 0;
+
+    if (ctx->active_tx)
+    {
+        /* Already have one - this call is nested inside another that
+         * already gave itself (or was given) a transaction identity.
+         * Not ours to touch.                                          */
+        return 0;
+    }
+
+    tx_init(local_tx, ctx);
+    tx_generate_uuid(local_tx->transaction_id);
+    local_tx->status = TX_STATUS_ACTIVE;
+    ctx->active_tx = local_tx;
+
+    if (ctx->transaction_logger)
+        logger_write(ctx->transaction_logger, LOG_DEBUG, __func__, 0,
+                     "Standalone call given its own transaction identity "
+                     "for metrics/audit traceability: tx_id='%s'",
+                     local_tx->transaction_id);
+
+    return 1;
+}
+
+void end_standalone_tx_if_owned(oci_context_t *ctx, int owned)
+{
+    if (!ctx || !owned) return;
+    ctx->active_tx = NULL;
+}
+
+/* ================================================================== */
 /*  tx_touch                                                            */
 /* ================================================================== */
 void tx_touch(tx_handle_t *handle)

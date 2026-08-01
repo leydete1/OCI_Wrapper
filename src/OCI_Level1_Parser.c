@@ -18,6 +18,10 @@
                                             field_value_t come via
                                             OCI_Request_Response_Types.h,
                                             already pulled in above       */
+#include "OCI_Delete_Execute_Module.h"   /* delete_request_t */
+#include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
+                                              procedure_param_t,
+                                              param_direction_t          */
 #include "logger.h"
 
 #include <libxml/parser.h>
@@ -36,6 +40,50 @@ input_format_t level1_detect_format(const char *buf, size_t len)
     if (buf[i] == '<') return INPUT_FORMAT_XML;
     if (buf[i] == '{' || buf[i] == '[') return INPUT_FORMAT_JSON;
     return INPUT_FORMAT_UNKNOWN;
+}
+
+/* See this function's own doc comment in OCI_Level1_Parser.h - moved
+ * here verbatim from Test_XML_Runner.c (2026-08-01), only renamed.    */
+int level1_looks_like_new_format(const char *buf, size_t len)
+{
+    if (!buf) return 0;
+
+    input_format_t fmt = level1_detect_format(buf, len);
+
+    if (fmt == INPUT_FORMAT_JSON)
+        return 1;   /* old-format files are never JSON - safe to assume new format */
+
+    if (fmt == INPUT_FORMAT_XML)
+    {
+        const char *p = buf;
+
+        for (;;)
+        {
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            if (strncmp(p, "<?xml", 5) == 0)
+            {
+                const char *decl_end = strstr(p, "?>");
+                if (!decl_end) break;
+                p = decl_end + 2;
+                continue;
+            }
+
+            if (strncmp(p, "<!--", 4) == 0)
+            {
+                const char *comment_end = strstr(p, "-->");
+                if (!comment_end) break;
+                p = comment_end + 3;
+                continue;
+            }
+
+            break;
+        }
+
+        return (strncmp(p, "<request", 8) == 0);
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,6 +176,25 @@ static void set_field_value(field_value_t *fv, const char *src)
      * the field entirely.                                              */
     strncpy(fv->value, src, sizeof(fv->value) - 1);
     fv->value[sizeof(fv->value) - 1] = '\0';
+}
+
+/*
+ * parse_direction_l1()
+ *
+ * Maps a <param_direction>/"param_direction" string ("IN"/"OUT"/
+ * "IN_OUT") to param_direction_t during Level 1 parsing - a local copy
+ * of the same logic OCI_Execute_Procedure_Module.c's own
+ * parse_direction() used to have before this refactor (see that file's
+ * own removal note), matching the project convention of each parser/
+ * builder module staying independent rather than sharing this kind of
+ * small helper.
+ */
+static param_direction_t parse_direction_l1(const char *s)
+{
+    if (!s) return PARAM_DIR_IN;
+    if (strcasecmp(s, "OUT")    == 0) return PARAM_DIR_OUT;
+    if (strcasecmp(s, "IN_OUT") == 0) return PARAM_DIR_IN_OUT;
+    return PARAM_DIR_IN;   /* default */
 }
 
 /*
@@ -283,6 +350,22 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
                             }
                             xmlFree(content);
                         }
+                        else if (xmlStrcmp(fc->name, (const xmlChar *)"client_date_format") == 0)
+                        {
+                            /* Optional - see level2_validate_insert()'s
+                             * own doc comment in OCI_Level2_Parser.h
+                             * for the full 2026-07-27 date-handling
+                             * design this is part of. Empty means
+                             * "already in nls_date_format".            */
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                strncpy(fv->client_date_format, (const char *)content,
+                                        sizeof(fv->client_date_format) - 1);
+                                trim_inplace(fv->client_date_format);
+                            }
+                            xmlFree(content);
+                        }
                     }
                 }
             }
@@ -376,6 +459,17 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
                             }
                             xmlFree(content);
                         }
+                        else if (xmlStrcmp(kc->name, (const xmlChar *)"client_date_format") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->client_date_format, (const char *)content,
+                                        sizeof(wk->client_date_format) - 1);
+                                trim_inplace(wk->client_date_format);
+                            }
+                            xmlFree(content);
+                        }
                     }
                 }
             }
@@ -431,6 +525,240 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
                             {
                                 trim_inplace((char *)content);
                                 set_field_value(fv, (const char *)content);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(fc->name, (const xmlChar *)"client_date_format") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(fc);
+                            if (content)
+                            {
+                                strncpy(fv->client_date_format, (const char *)content,
+                                        sizeof(fv->client_date_format) - 1);
+                                trim_inplace(fv->client_date_format);
+                            }
+                            xmlFree(content);
+                        }
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_DELETE:
+        {
+            delete_request_t *req = calloc(1, sizeof(delete_request_t));
+            if (!req) return NULL;
+
+            xmlNodePtr where_node = NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"table_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->table_name, (const char *)content, sizeof(req->table_name) - 1);
+                        trim_inplace(req->table_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"where") == 0)
+                    where_node = child;
+                /* No <set> at all - DELETE has nothing else to carry,
+                 * unlike UPDATE. See delete_request_t's own doc comment
+                 * in OCI_Delete_Execute_Module.h.                       */
+            }
+
+            /* ---- <where><key>...</key></where> - AND'd together -
+             * identical shape and parsing to UPDATE's own WHERE clause.  */
+            if (where_node)
+            {
+                int key_count = 0;
+                for (xmlNodePtr k = where_node->children; k; k = k->next)
+                    if (k->type == XML_ELEMENT_NODE &&
+                        xmlStrcmp(k->name, (const xmlChar *)"key") == 0)
+                        key_count++;
+
+                if (key_count > 0)
+                {
+                    req->keys = calloc((size_t)key_count, sizeof(where_key_t));
+                    if (!req->keys) { free(req); return NULL; }
+                }
+                req->key_count = key_count;
+
+                int key_idx = 0;
+                for (xmlNodePtr k = where_node->children; k; k = k->next)
+                {
+                    if (k->type != XML_ELEMENT_NODE ||
+                        xmlStrcmp(k->name, (const xmlChar *)"key") != 0)
+                        continue;
+
+                    where_key_t *wk = &req->keys[key_idx++];
+
+                    for (xmlNodePtr kc = k->children; kc; kc = kc->next)
+                    {
+                        if (kc->type != XML_ELEMENT_NODE) continue;
+
+                        if (xmlStrcmp(kc->name, (const xmlChar *)"field_name") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->field_name, (const char *)content, sizeof(wk->field_name) - 1);
+                                trim_inplace(wk->field_name);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(kc->name, (const xmlChar *)"key_value") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->key_value, (const char *)content, sizeof(wk->key_value) - 1);
+                                trim_inplace(wk->key_value);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(kc->name, (const xmlChar *)"client_date_format") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(kc);
+                            if (content)
+                            {
+                                strncpy(wk->client_date_format, (const char *)content,
+                                        sizeof(wk->client_date_format) - 1);
+                                trim_inplace(wk->client_date_format);
+                            }
+                            xmlFree(content);
+                        }
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_EXECUTE_PROCEDURE:
+        {
+            execute_procedure_request_t *req =
+                calloc(1, sizeof(execute_procedure_request_t));
+            if (!req) return NULL;
+
+            xmlNodePtr params_node = NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"procedure_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->procedure_name, (const char *)content,
+                                sizeof(req->procedure_name) - 1);
+                        trim_inplace(req->procedure_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"parameters") == 0)
+                    params_node = child;
+            }
+
+            /* ---- <parameters><parameter>...</parameter></parameters> -
+             * one entry per IN/OUT/IN_OUT scalar or CURSOR OUT param.    */
+            if (params_node)
+            {
+                int param_count = 0;
+                for (xmlNodePtr p = params_node->children; p; p = p->next)
+                    if (p->type == XML_ELEMENT_NODE &&
+                        xmlStrcmp(p->name, (const xmlChar *)"parameter") == 0)
+                        param_count++;
+
+                if (param_count > 0)
+                {
+                    req->parameters = calloc((size_t)param_count, sizeof(procedure_param_t));
+                    if (!req->parameters) { free(req); return NULL; }
+                }
+                req->param_count = param_count;
+
+                int param_idx = 0;
+                for (xmlNodePtr p = params_node->children; p; p = p->next)
+                {
+                    if (p->type != XML_ELEMENT_NODE ||
+                        xmlStrcmp(p->name, (const xmlChar *)"parameter") != 0)
+                        continue;
+
+                    procedure_param_t *pp = &req->parameters[param_idx++];
+
+                    for (xmlNodePtr pc = p->children; pc; pc = pc->next)
+                    {
+                        if (pc->type != XML_ELEMENT_NODE) continue;
+
+                        if (xmlStrcmp(pc->name, (const xmlChar *)"param_name") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(pc);
+                            if (content)
+                            {
+                                strncpy(pp->param_name, (const char *)content,
+                                        sizeof(pp->param_name) - 1);
+                                trim_inplace(pp->param_name);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(pc->name, (const xmlChar *)"param_type") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(pc);
+                            if (content)
+                            {
+                                strncpy(pp->param_type, (const char *)content,
+                                        sizeof(pp->param_type) - 1);
+                                trim_inplace(pp->param_type);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(pc->name, (const xmlChar *)"param_direction") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(pc);
+                            if (content)
+                            {
+                                char dir_str[32] = {0};
+                                strncpy(dir_str, (const char *)content, sizeof(dir_str) - 1);
+                                trim_inplace(dir_str);
+                                pp->direction = parse_direction_l1(dir_str);
+                            }
+                            xmlFree(content);
+                        }
+                        else if (xmlStrcmp(pc->name, (const xmlChar *)"param_value") == 0)
+                        {
+                            xmlChar *content = xmlNodeGetContent(pc);
+                            if (content)
+                            {
+                                strncpy(pp->param_value, (const char *)content,
+                                        sizeof(pp->param_value) - 1);
+                                trim_inplace(pp->param_value);
                             }
                             xmlFree(content);
                         }
@@ -520,6 +848,11 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
                     cJSON *fvalue = cJSON_GetObjectItemCaseSensitive(field_json, "value");
                     if (cJSON_IsString(fvalue) && fvalue->valuestring)
                         set_field_value(fv, fvalue->valuestring);
+
+                    cJSON *fdatefmt = cJSON_GetObjectItemCaseSensitive(field_json, "client_date_format");
+                    if (cJSON_IsString(fdatefmt) && fdatefmt->valuestring)
+                        strncpy(fv->client_date_format, fdatefmt->valuestring,
+                                sizeof(fv->client_date_format) - 1);
                 }
             }
 
@@ -561,6 +894,11 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
                 cJSON *kvalue = cJSON_GetObjectItemCaseSensitive(key_json, "key_value");
                 if (cJSON_IsString(kvalue) && kvalue->valuestring)
                     strncpy(wk->key_value, kvalue->valuestring, sizeof(wk->key_value) - 1);
+
+                cJSON *kdatefmt = cJSON_GetObjectItemCaseSensitive(key_json, "client_date_format");
+                if (cJSON_IsString(kdatefmt) && kdatefmt->valuestring)
+                    strncpy(wk->client_date_format, kdatefmt->valuestring,
+                            sizeof(wk->client_date_format) - 1);
             }
 
             /* ---- "set": [ {field_name, value}, ... ] - no per-row
@@ -587,6 +925,109 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
                 cJSON *fvalue = cJSON_GetObjectItemCaseSensitive(field_json, "value");
                 if (cJSON_IsString(fvalue) && fvalue->valuestring)
                     set_field_value(fv, fvalue->valuestring);
+
+                cJSON *fdatefmt = cJSON_GetObjectItemCaseSensitive(field_json, "client_date_format");
+                if (cJSON_IsString(fdatefmt) && fdatefmt->valuestring)
+                    strncpy(fv->client_date_format, fdatefmt->valuestring,
+                            sizeof(fv->client_date_format) - 1);
+            }
+
+            return req;
+        }
+        case OP_DELETE:
+        {
+            delete_request_t *req = calloc(1, sizeof(delete_request_t));
+            if (!req) return NULL;
+
+            cJSON *table_name = cJSON_GetObjectItemCaseSensitive(op_json, "table_name");
+            if (cJSON_IsString(table_name) && table_name->valuestring)
+                strncpy(req->table_name, table_name->valuestring, sizeof(req->table_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            /* ---- "where": [ {field_name, key_value}, ... ] - identical
+             * shape and parsing to UPDATE's own WHERE clause. No "set"
+             * at all - DELETE has nothing else to carry.                */
+            cJSON *where = cJSON_GetObjectItemCaseSensitive(op_json, "where");
+            int key_count = cJSON_IsArray(where) ? cJSON_GetArraySize(where) : 0;
+
+            if (key_count > 0)
+            {
+                req->keys = calloc((size_t)key_count, sizeof(where_key_t));
+                if (!req->keys) { free(req); return NULL; }
+            }
+            req->key_count = key_count;
+
+            for (int k = 0; k < key_count; k++)
+            {
+                cJSON *key_json = cJSON_GetArrayItem(where, k);
+                where_key_t *wk = &req->keys[k];
+
+                cJSON *fname = cJSON_GetObjectItemCaseSensitive(key_json, "field_name");
+                if (cJSON_IsString(fname) && fname->valuestring)
+                    strncpy(wk->field_name, fname->valuestring, sizeof(wk->field_name) - 1);
+
+                cJSON *kvalue = cJSON_GetObjectItemCaseSensitive(key_json, "key_value");
+                if (cJSON_IsString(kvalue) && kvalue->valuestring)
+                    strncpy(wk->key_value, kvalue->valuestring, sizeof(wk->key_value) - 1);
+
+                cJSON *kdatefmt = cJSON_GetObjectItemCaseSensitive(key_json, "client_date_format");
+                if (cJSON_IsString(kdatefmt) && kdatefmt->valuestring)
+                    strncpy(wk->client_date_format, kdatefmt->valuestring,
+                            sizeof(wk->client_date_format) - 1);
+            }
+
+            return req;
+        }
+        case OP_EXECUTE_PROCEDURE:
+        {
+            execute_procedure_request_t *req =
+                calloc(1, sizeof(execute_procedure_request_t));
+            if (!req) return NULL;
+
+            cJSON *proc_name = cJSON_GetObjectItemCaseSensitive(op_json, "procedure_name");
+            if (cJSON_IsString(proc_name) && proc_name->valuestring)
+                strncpy(req->procedure_name, proc_name->valuestring,
+                        sizeof(req->procedure_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            /* ---- "parameters": [ {param_name, param_type,
+             * param_direction, param_value}, ... ]                      */
+            cJSON *params = cJSON_GetObjectItemCaseSensitive(op_json, "parameters");
+            int param_count = cJSON_IsArray(params) ? cJSON_GetArraySize(params) : 0;
+
+            if (param_count > 0)
+            {
+                req->parameters = calloc((size_t)param_count, sizeof(procedure_param_t));
+                if (!req->parameters) { free(req); return NULL; }
+            }
+            req->param_count = param_count;
+
+            for (int i = 0; i < param_count; i++)
+            {
+                cJSON *param_json = cJSON_GetArrayItem(params, i);
+                procedure_param_t *pp = &req->parameters[i];
+
+                cJSON *pname = cJSON_GetObjectItemCaseSensitive(param_json, "param_name");
+                if (cJSON_IsString(pname) && pname->valuestring)
+                    strncpy(pp->param_name, pname->valuestring, sizeof(pp->param_name) - 1);
+
+                cJSON *ptype = cJSON_GetObjectItemCaseSensitive(param_json, "param_type");
+                if (cJSON_IsString(ptype) && ptype->valuestring)
+                    strncpy(pp->param_type, ptype->valuestring, sizeof(pp->param_type) - 1);
+
+                cJSON *pdir = cJSON_GetObjectItemCaseSensitive(param_json, "param_direction");
+                if (cJSON_IsString(pdir) && pdir->valuestring)
+                    pp->direction = parse_direction_l1(pdir->valuestring);
+
+                cJSON *pvalue = cJSON_GetObjectItemCaseSensitive(param_json, "param_value");
+                if (cJSON_IsString(pvalue) && pvalue->valuestring)
+                    strncpy(pp->param_value, pvalue->valuestring, sizeof(pp->param_value) - 1);
             }
 
             return req;
@@ -936,6 +1377,33 @@ void level1_free_request(input_c_request_t *request)
                     free(req->fields);
                     free(req->keys);
                 }
+                free(req);
+                break;
+            }
+
+            case OP_DELETE:
+            {
+                /* No fields[], no large_value at all - DELETE has no SET
+                 * clause, so nothing here can ever have overflowed into
+                 * a heap allocation the way a field_value_t can.         */
+                delete_request_t *req = (delete_request_t *)op->payload;
+                if (req)
+                    free(req->keys);
+                free(req);
+                break;
+            }
+
+            case OP_EXECUTE_PROCEDURE:
+            {
+                /* parameters[] is a flat array - procedure_param_t has
+                 * no nested heap allocations at all (param_value is a
+                 * plain fixed char[4096], no large_value overflow
+                 * mechanism the way field_value_t has), so this is
+                 * just two frees.                                       */
+                execute_procedure_request_t *req =
+                    (execute_procedure_request_t *)op->payload;
+                if (req)
+                    free(req->parameters);
                 free(req);
                 break;
             }

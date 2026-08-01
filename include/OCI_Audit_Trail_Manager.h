@@ -399,23 +399,50 @@ typedef struct {
  * audit_trail_fetch_before_image()
  *
  * Execute a SELECT against the business table to capture the current
- * (pre-update) values of the columns being updated.
+ * (pre-update, or pre-delete) values of the target columns.
  *
  * Builds and executes:
  *   SELECT col1, col2, ... FROM owner.table
- *   WHERE  key1 = :1 AND key2 = :2 ...
+ *   WHERE  key1 = 'val1' AND key2 = 'val2' ...
+ * (or, for a DATE/TIMESTAMP/INTERVAL-typed key - see key_data_types
+ * below - key1 = TO_DATE('val1','YYYY-MM-DD HH24:MI:SS') and so on)
  *
  * Uses OCI_Execute_Query_Batch_Module internally.  Results are stored
  * in old_values[row][col] indexed as old_values[r * col_count + c].
  *
  * Parameters
- *   ctx        - OCI context (same session as the UPDATE)
+ *   ctx        - OCI context (same session as the UPDATE/DELETE)
  *   table_name - business table name
  *   owner      - schema owner (may be empty)
- *   col_names  - columns being updated [col_count][128]
- *   col_count  - number of SET columns
+ *   col_names  - columns being captured [col_count][128]
+ *   col_count  - number of columns being captured
  *   key_names  - WHERE key column names [key_count][128]
  *   key_values - WHERE key values [key_count][32768]
+ *   key_data_types - WHERE key columns' REAL Oracle data types
+ *                (e.g. "DATE", "TIMESTAMP(6)", "NUMBER", "VARCHAR2")
+ *                [key_count][128], resolved by the caller via
+ *                metadata_cache - never trust a client-supplied type,
+ *                same reasoning as every other type resolution in this
+ *                project. May be NULL (every key then embeds as a
+ *                plain string literal, the original pre-2026-07-26
+ *                behaviour) - but a caller that has already resolved
+ *                real column metadata for its own SQL building (which
+ *                every caller of this function does, since it's always
+ *                called from inside execute_update_batch()/
+ *                execute_delete_batch()) should always pass the real
+ *                types instead.
+ *                Found and fixed 2026-07-26: without this, a DATE (or
+ *                TIMESTAMP/INTERVAL) key value was always embedded as
+ *                a bare string literal ('2026-05-20 00:00:00'),
+ *                relying on Oracle's implicit string-to-DATE
+ *                conversion succeeding - which isn't guaranteed
+ *                (depends on session NLS_DATE_FORMAT actually matching
+ *                the literal's format), and failed outright the first
+ *                time any WHERE-key audit path was ever exercised with
+ *                a DATE-typed key (DELETE's own Round 3 test fixture -
+ *                UPDATE's fixtures all happened to key on NUMBER_COL,
+ *                so this was a dormant, pre-existing gap in this
+ *                function itself, not something DELETE introduced).
  *   key_count  - number of WHERE key columns
  *   old_values - output: flat array [row_count * col_count]
  *                caller must free() this pointer
@@ -432,6 +459,7 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
                                     int             col_count,
                                     char          (*key_names)[128],
                                     char          (*key_values)[32768],
+                                    char          (*key_data_types)[128],
                                     int             key_count,
                                     audit_old_value_t **old_values,
                                     int            *row_count);
@@ -467,6 +495,50 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
  *   -1   error (logged to ctx->audit_logger)
  */
 int audit_trail_insert_update(oci_context_t         *ctx,
+                               audit_trail_request_t *atr,
+                               audit_old_value_t     *old_values);
+
+/*
+ * audit_trail_insert_delete()
+ *
+ * Write one AUDIT_TRAIL row per (matched row x WHERE-key column) -
+ * unconditional, unlike audit_trail_insert_update()'s diff-based skip:
+ * there is no "new" value to compare against for a DELETE, the old
+ * value going away IS the change by definition:
+ *   OLD_VALUE = old_values[r][c]
+ *   NEW_VALUE = NULL
+ *   FIELD_NAME = col_names[c]
+ *   ACTION_TYPE = "DELETE"
+ *
+ * Scoped to the WHERE-key columns only (2026-07-26 design decision),
+ * not every column on the table - col_names/old_values here already
+ * only ever cover that same set, since audit_trail_fetch_before_image()
+ * is called with the WHERE keys themselves as the columns to capture.
+ *
+ * Called BEFORE the actual DELETE executes (from
+ * execute_delete_batch()), so the attempt is captured in AUDIT_TRAIL
+ * even if Oracle itself then rejects the DELETE for lack of privilege
+ * - a GxP-relevant distinction: in many regulated environments,
+ * database records aren't deleted at all (a status change to
+ * "CLOSED"/similar is used instead), so the executing account may have
+ * no DELETE privilege whatsoever, and the record of the attempt still
+ * needs to exist regardless of whether the DELETE itself succeeds.
+ *
+ * Parameters
+ *   ctx        - OCI context (same session as the DELETE)
+ *   atr        - populated audit_trail_request_t with:
+ *                  table_name, action_type="DELETE", changed_by,
+ *                  change_reason, module_name, record_id,
+ *                  col_names, col_types, col_count, row_count
+ *                  new_values is ignored (always NULL on the
+ *                  resulting per-row request this function builds)
+ *   old_values - before-image from audit_trail_fetch_before_image()
+ *
+ * Returns
+ *    0   all audit rows written successfully
+ *   -1   error (logged to ctx->audit_logger)
+ */
+int audit_trail_insert_delete(oci_context_t         *ctx,
                                audit_trail_request_t *atr,
                                audit_old_value_t     *old_values);
 

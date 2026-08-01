@@ -187,6 +187,20 @@ typedef struct {
     char  field_name[128];
     char  value      [4096];
     char *large_value;    /* NULL unless value[] didn't fit - see above */
+    char  client_date_format[64];  /* Optional - see the
+                                     * <client_date_format> tag's own
+                                     * doc comment near
+                                     * level2_validate_insert() in
+                                     * OCI_Level2_Parser.h. Empty
+                                     * means "already in nls_date_format
+                                     * from config.ini", the same
+                                     * assumption this project has
+                                     * always made - this field just
+                                     * makes an escape hatch for
+                                     * clients that can't send it that
+                                     * way, rather than silently
+                                     * hoping every client's date
+                                     * strings happen to match.        */
 } field_value_t;
 
 /*
@@ -218,28 +232,21 @@ static inline const char *field_value_get(const field_value_t *fv)
 /*  Insert/Update are actually refactored").                            */
 /*                                                                        */
 /*  update_request_t has moved the same way, to                         */
-/*  OCI_Update_Execute_Module.h, now that Update is being refactored     */
-/*  too. where_key_t stays here - it's shared between UPDATE and         */
-/*  DELETE (delete_request_t below still needs it), and DELETE hasn't    */
-/*  been refactored yet. Same reasoning as field_value_t staying here    */
-/*  rather than moving into OCI_Insert_Execute_Module.h - a type shared   */
-/*  by two request kinds belongs wherever the LAST of those two to be     */
-/*  refactored can still reach it, not in the first one's own header.     */
+/*  OCI_Update_Execute_Module.h, now that Update was refactored, and     */
+/*  delete_request_t has moved to OCI_Delete_Execute_Module.h the same   */
+/*  way now that Delete is being refactored too. where_key_t stays here  */
+/*  - it's genuinely shared, not owned by either module.                 */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
     char field_name[128];
     char key_value  [4096];
+    char client_date_format[64];  /* Optional - same meaning and
+                                    * default as field_value_t's own
+                                    * client_date_format above. WHERE
+                                    * keys can be dates too (see
+                                    * Delete Round 3's own fixture).    */
 } where_key_t;
-
-typedef struct {
-    char table_name[128];
-    char owner[128];
-    int  key_count;
-    where_key_t *keys;          /* WHERE clause - AND'd together. No SET
-                                  * clause - DELETE has nothing else to
-                                  * carry, unlike UPDATE.                 */
-} delete_request_t;
 
 /* ------------------------------------------------------------------ */
 /*  END_SESSION request                                                 */
@@ -255,56 +262,18 @@ typedef struct {
 } end_session_request_t;
 
 /* ------------------------------------------------------------------ */
-/*  EXECUTE_PROCEDURE                                                    */
-/*  Anchored directly in OCI_Execute_Procedure_Module.h's documented     */
-/*  contract (XML input layout / result XML layout in that header),     */
-/*  not guessed - that header is a complete, unambiguous specification  */
-/*  of a working, proven module, same standing as a real test fixture.  */
+/*  EXECUTE_PROCEDURE - param_direction_t, procedure_param_t,          */
+/*  execute_procedure_request_t, procedure_resultset_t,                 */
+/*  execute_procedure_response_t all moved to OCI_Execute_Procedure_     */
+/*  Module.h now that Execute_Procedure is being refactored, same        */
+/*  pattern as insert_request_t/update_request_t/delete_request_t's      */
+/*  own moves out of this file as each of THOSE modules got refactored.  */
+/*  This block used to live here, pre-staged ahead of the refactor       */
+/*  actually happening - found and removed 2026-07-31 via a genuine      */
+/*  build error (duplicate-definition conflict) after the new header     */
+/*  was written fresh without checking whether a copy already existed    */
+/*  here first, unlike every other struct relocation in this project.    */
 /* ------------------------------------------------------------------ */
-typedef enum {
-    PARAM_DIR_IN,
-    PARAM_DIR_OUT,
-    PARAM_DIR_IN_OUT
-} param_direction_t;
-
-typedef struct {
-    char param_name[128];
-    char param_type[32];        /* NUMBER, INTEGER, VARCHAR2, DATE,
-                                  * TIMESTAMP, CURSOR                    */
-    param_direction_t direction;
-    char param_value[4096];     /* IN value on the request; "" for a
-                                  * pure OUT param going in              */
-} procedure_param_t;
-
-typedef struct {
-    char procedure_name[128];   /* may include package prefix, e.g.
-                                  * "MY_PKG.GET_DATA"                    */
-    char owner[128];            /* optional schema prefix                */
-    int  param_count;
-    procedure_param_t *parameters;
-} execute_procedure_request_t;
-
-typedef struct {
-    char   param_name[128];      /* which CURSOR OUT param this came from */
-    char  *resultset_xml_fragment; /* same reused shape as
-                                     * dml_response_t's field - one
-                                     * <resultset>...</resultset> body per
-                                     * CURSOR OUT parameter                */
-} procedure_resultset_t;
-
-typedef struct {
-    char   procedure_name[128];
-    double execution_time_seconds;
-
-    int    out_param_count;
-    procedure_param_t *out_parameters;  /* OUT/IN_OUT values after execution */
-
-    int    resultset_count;             /* number of CURSOR OUT params that
-                                          * actually produced a resultset -
-                                          * a procedure may have zero, one,
-                                          * or several                     */
-    procedure_resultset_t *resultsets;
-} execute_procedure_response_t;
 
 /* ------------------------------------------------------------------ */
 /*  Status / error - same shape as metrics_record_t / logger_last_error */

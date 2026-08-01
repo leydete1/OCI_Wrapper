@@ -82,6 +82,52 @@ extern "C" {
 input_format_t level1_detect_format(const char *buf, size_t len);
 
 /*
+ * level1_looks_like_new_format()
+ *
+ * Moved here from Test_XML_Runner.c (2026-08-01) - format detection is
+ * a Level 1 concern, and keeping it private to the test-runner file
+ * made it untestable by the Unit Test module without duplicating the
+ * logic (see OCI_Unit_Test_Module.c, UT-L1-001).
+ *
+ * Cheap sniff of just the root tag - does NOT call level1_parse().
+ * Callers should only pass a buffer on to level1_parse() once this
+ * returns true, so level1_parse()'s own LOG_ERROR-level diagnostics
+ * stay meaningful (a real error on a file that already looked like a
+ * new-format request) rather than firing on every old-format file just
+ * for being old-format.
+ *
+ * Deliberately does not touch or duplicate level1_detect_format()'s own
+ * job (XML-vs-JSON) - this function answers a different question,
+ * old-format-vs-new-format, before level1_parse() is ever invoked.
+ *
+ * Skips an optional XML declaration, then any number of XML comments
+ * (with whitespace between them), before checking for the root
+ * <request> tag - e.g.
+ *   <?xml version="1.0" encoding="UTF-8"?>
+ *
+ *   <!-- descriptive header comment -->
+ *
+ *   <request version="1.0">
+ * every fixture in this project follows exactly this shape. The
+ * original version of this check only skipped the declaration, so
+ * every fixture with a leading comment block - which is all of them -
+ * was silently misrouted to the old-format dispatch path, where
+ * extract_tag(xml, "operation", ...) fails too (the new format's
+ * <operation type="..."> has an attribute, the old format's parser
+ * looks for a bare <operation> tag), logs a WARN (not ERROR, so
+ * invisible in error_Data_Manager.log) and returns success without
+ * doing any actual work at all - found 2026-07-28 via an INSERT that
+ * silently did nothing while still counting as passed. Fixed the same
+ * day; relocated here 2026-08-01 so UT-L1-001 can exercise this exact
+ * function directly, not a reimplementation of it.
+ *
+ * For JSON input, always returns 1 - old-format files were never JSON.
+ *
+ * Returns 1 if buf looks like a new-format request, 0 otherwise.
+ */
+int level1_looks_like_new_format(const char *buf, size_t len);
+
+/*
  * level1_parse()
  *
  * Runs all four steps described in the header comment above against
