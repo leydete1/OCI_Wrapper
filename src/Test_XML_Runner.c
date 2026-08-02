@@ -1536,7 +1536,30 @@ int main(int argc, char *argv[])
 
         if (ut_cfg.startup_self_test_enabled)
         {
-            logger_write(&logger, LOG_INFO, __func__, 0,
+            /* Dedicated log file for the self-test's own results - only
+             * created when the self-test is actually enabled, matching
+             * the same backward-compatibility principle as everything
+             * else in this feature (nothing new happens for a
+             * deployment that doesn't use it). Uses ctx.error_logger,
+             * matching the same convention as every other logger_init_
+             * str2() call in this function.                            */
+            logger_t unit_test_logger;
+            memset(&unit_test_logger, 0, sizeof(unit_test_logger));
+            int ut_logger_ok = (logger_init_str2(&unit_test_logger,
+                                 ut_cfg.unit_test_log_file_name,
+                                 ut_cfg.unit_test_log_file_max_size,
+                                 ut_cfg.unit_test_log_file_rotation_number,
+                                 ut_cfg.unit_test_log_level,
+                                 ctx.error_logger) == 0);
+            logger_t *summary_logger = ut_logger_ok ? &unit_test_logger : &logger;
+
+            if (!ut_logger_ok)
+                logger_write(&logger, LOG_WARN, __func__, 0,
+                             "Could not initialise the dedicated unit test "
+                             "logger ('%s') - falling back to the main log",
+                             ut_cfg.unit_test_log_file_name);
+
+            logger_write(summary_logger, LOG_INFO, __func__, 0,
                          "Startup self-test enabled (max_tier=%d) - running now",
                          ut_cfg.startup_max_tier);
 
@@ -1545,7 +1568,9 @@ int main(int argc, char *argv[])
             unit_test_run_all(&ctx, ut_cfg.startup_max_tier, &ut_results, &ut_result_count);
 
             if (ut_cfg.unit_test_log_summary_enabled)
-                unit_test_write_summary(&logger, ut_results, ut_result_count);
+                unit_test_write_summary(summary_logger, ut_results, ut_result_count);
+
+            if (ut_logger_ok) logger_close(&unit_test_logger);
 
             /* Halt decision is per-tier, per unit_test.ini - see this
              * file's own doc comment in OCI_Unit_Test_Module.h. A test

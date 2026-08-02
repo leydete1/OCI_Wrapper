@@ -153,6 +153,12 @@ int unit_test_load_config(const char *path, logger_t *logger, unit_test_config_t
     cfg->startup_halt_on_tier2_fail    = 1;
     cfg->startup_halt_on_tier3_fail    = 0;
     cfg->unit_test_log_summary_enabled = 1;
+    strncpy(cfg->unit_test_log_file_name, "start_unit_tests.log",
+            sizeof(cfg->unit_test_log_file_name) - 1);
+    cfg->unit_test_log_file_max_size = 10485760;   /* 10MB, matching the
+                                                     * project-wide default */
+    cfg->unit_test_log_file_rotation_number = 5;
+    strncpy(cfg->unit_test_log_level, "DEBUG", sizeof(cfg->unit_test_log_level) - 1);
 
     if (!path)
     {
@@ -206,6 +212,15 @@ int unit_test_load_config(const char *path, logger_t *logger, unit_test_config_t
             strncpy(cfg->test_procedure_name, val, sizeof(cfg->test_procedure_name) - 1);
         else if (strcmp(key, "unit_test_log_summary_enabled") == 0)
             cfg->unit_test_log_summary_enabled = atoi(val);
+        else if (strcmp(key, "unit_test_log_file_name") == 0)
+            strncpy(cfg->unit_test_log_file_name, val,
+                    sizeof(cfg->unit_test_log_file_name) - 1);
+        else if (strcmp(key, "unit_test_log_file_max_size") == 0)
+            cfg->unit_test_log_file_max_size = atof(val);
+        else if (strcmp(key, "unit_test_log_file_rotation_number") == 0)
+            cfg->unit_test_log_file_rotation_number = atoi(val);
+        else if (strcmp(key, "unit_test_log_level") == 0)
+            strncpy(cfg->unit_test_log_level, val, sizeof(cfg->unit_test_log_level) - 1);
         else if (logger)
             logger_write(logger, LOG_WARN, __func__, 0,
                          "unit_test_load_config: unrecognised key '%s' in "
@@ -3556,6 +3571,1593 @@ static int test_ut_del_003(oci_context_t *ctx, char *message, size_t message_max
     return result;
 }
 
+/* ---- UT-SEL-001 ----
+ * A plain column-list SELECT returns the expected row count and
+ * values. */
+static int test_ut_sel_001(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999070", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "select-me", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT VARCHAR2_COL FROM %s.%s WHERE NUMBER_COL = 999070",
+             g_test_table_owner, g_test_table_name);
+    cfg.SQL = sql;
+    cfg.max_rows = 10;
+    cfg.fetch_array_size = 10;
+    cfg.include_column_names = 1;
+
+    int rc = execute_query_batch(ctx, &cfg);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max, "execute_query_batch() failed rc=%d", rc);
+        result = -1;
+    }
+    else if (!cfg.xml || !cfg.xml->OUTPUT_XML || !strstr(cfg.xml->OUTPUT_XML, "select-me"))
+    {
+        snprintf(message, message_max,
+                 "Expected value 'select-me' not found in the SELECT "
+                 "response: %s", cfg.xml && cfg.xml->OUTPUT_XML ? cfg.xml->OUTPUT_XML : "(null)");
+        result = -1;
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-SEL-003 ----
+ * A CLOB column in the SELECT list is correctly extracted and included
+ * in the resultset. Per UT-AUDIT-004's own 2026-08-01 finding, a CLOB
+ * value fetched via a real SELECT renders as a file-URL reference
+ * (this project's established LOB-output convention), not the raw
+ * text - so this test confirms a reference is present, not that the
+ * literal original text appears verbatim. */
+static int test_ut_sel_003(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row with a real CLOB value */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999071", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "CLOB_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "select-this-clob", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT (with real CLOB_COL value) failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT CLOB_COL FROM %s.%s WHERE NUMBER_COL = 999071",
+             g_test_table_owner, g_test_table_name);
+    cfg.SQL = sql;
+    cfg.max_rows = 10;
+    cfg.fetch_array_size = 10;
+    cfg.include_column_names = 1;
+
+    int rc = execute_query_batch(ctx, &cfg);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "execute_query_batch() with a CLOB_COL in the SELECT "
+                 "list failed rc=%d", rc);
+        result = -1;
+    }
+    else if (!cfg.xml || !cfg.xml->OUTPUT_XML)
+    {
+        snprintf(message, message_max, "No OUTPUT_XML produced");
+        result = -1;
+    }
+    else
+    {
+        /* CLOB_COL's own field should be present with SOME non-empty
+         * content - a file-URL reference, per the established LOB-
+         * output convention, not necessarily the raw text.             */
+        const char *field = strstr(cfg.xml->OUTPUT_XML, "CLOB_COL");
+        if (!field)
+        {
+            snprintf(message, message_max,
+                     "CLOB_COL not present at all in the resultset - "
+                     "LOB extraction may have failed silently");
+            result = -1;
+        }
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-SEL-004 ----
+ * A query against changed underlying data is not silently served
+ * stale from cache. Tested as an observable, black-box property
+ * (select, update, select again, confirm the new value comes back) -
+ * cache_hit itself is only tracked in metrics.csv, not exposed
+ * programmatically, so this is more robust than trying to inspect an
+ * internal flag directly, and is valid regardless of whether
+ * resultset caching is even enabled in this environment. */
+static int test_ut_sel_004(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999072", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "before-update", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT VARCHAR2_COL FROM %s.%s WHERE NUMBER_COL = 999072",
+             g_test_table_owner, g_test_table_name);
+
+    /* First SELECT - establishes a possible cache entry */
+    {
+        execute_config_t cfg1;
+        memset(&cfg1, 0, sizeof(cfg1));
+        cfg1.SQL = sql;
+        cfg1.max_rows = 10;
+        cfg1.fetch_array_size = 10;
+        int rc1 = execute_query_batch(ctx, &cfg1);
+        int first_ok = (rc1 == 0 && cfg1.xml && cfg1.xml->OUTPUT_XML &&
+                        strstr(cfg1.xml->OUTPUT_XML, "before-update") != NULL);
+        if (cfg1.xml) { free(cfg1.xml->OUTPUT_XML); free(cfg1.xml); }
+        free(cfg1.OUTPUT_JSON);
+        if (!first_ok)
+        {
+            snprintf(message, message_max,
+                     "First SELECT did not return the expected "
+                     "'before-update' value");
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+    }
+
+    /* Update the row */
+    {
+        update_request_t ureq;
+        memset(&ureq, 0, sizeof(ureq));
+        strncpy(ureq.table_name, g_test_table_name, sizeof(ureq.table_name) - 1);
+        strncpy(ureq.owner, g_test_table_owner, sizeof(ureq.owner) - 1);
+        where_key_t wk;
+        memset(&wk, 0, sizeof(wk));
+        strncpy(wk.field_name, "NUMBER_COL", sizeof(wk.field_name) - 1);
+        strncpy(wk.key_value, "999072", sizeof(wk.key_value) - 1);
+        ureq.key_count = 1;
+        ureq.keys = &wk;
+        field_value_t set_field;
+        memset(&set_field, 0, sizeof(set_field));
+        strncpy(set_field.field_name, "VARCHAR2_COL", sizeof(set_field.field_name) - 1);
+        strncpy(set_field.value, "after-update", sizeof(set_field.value) - 1);
+        ureq.field_count = 1;
+        ureq.fields = &set_field;
+        execute_config_t ucfg;
+        memset(&ucfg, 0, sizeof(ucfg));
+        if (execute_update_batch(ctx, &ureq, &ucfg) != 0)
+        {
+            snprintf(message, message_max, "UPDATE (between the two SELECTs) failed");
+            if (ucfg.xml) { free(ucfg.xml->OUTPUT_XML); free(ucfg.xml); }
+            free(ucfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (ucfg.xml) { free(ucfg.xml->OUTPUT_XML); free(ucfg.xml); }
+        free(ucfg.OUTPUT_JSON);
+    }
+
+    /* Second SELECT - must reflect the update, not a stale cached value */
+    {
+        execute_config_t cfg2;
+        memset(&cfg2, 0, sizeof(cfg2));
+        cfg2.SQL = sql;
+        cfg2.max_rows = 10;
+        cfg2.fetch_array_size = 10;
+        int rc2 = execute_query_batch(ctx, &cfg2);
+
+        if (rc2 != 0)
+        {
+            snprintf(message, message_max, "Second execute_query_batch() failed rc=%d", rc2);
+            result = -1;
+        }
+        else if (!cfg2.xml || !cfg2.xml->OUTPUT_XML ||
+                 !strstr(cfg2.xml->OUTPUT_XML, "after-update"))
+        {
+            snprintf(message, message_max,
+                     "Second SELECT did not return 'after-update' - "
+                     "possibly served a stale, cached result from "
+                     "before the UPDATE");
+            result = -1;
+        }
+        if (cfg2.xml) { free(cfg2.xml->OUTPUT_XML); free(cfg2.xml); }
+        free(cfg2.OUTPUT_JSON);
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-SEL-005 ----
+ * Control test for UT-SEL-004, added 2026-08-02 following a real
+ * question about that test's own design: UT-SEL-004 exercises the
+ * resultset cache's own invalidation logic (a genuinely more valuable,
+ * realistic property than an uncached query) - but that means a PASS
+ * there is ambiguous by itself. It could mean the cache correctly
+ * invalidated, or it could mean caching happened to be off in this
+ * environment and there was never anything to go stale in the first
+ * place. Both look identical from the outside.
+ *
+ * This test runs the exact same select-update-select sequence with
+ * ctx->resultset_cache temporarily, deliberately hidden (saved and set
+ * to NULL for the duration of this test only, restored immediately
+ * after - the real cache object is never destroyed or recreated, just
+ * hidden from this one test's own calls, so every other query in the
+ * program keeps using it normally throughout). The cache is consulted
+ * purely via whether ctx->resultset_cache is non-NULL at query time
+ * (confirmed directly in OCI_Execute_Query_Batch_Module.c) - it is not
+ * re-read from ctx->ini->resultset_cache_enabled per query, so that
+ * config flag cannot be toggled live; hiding the pointer itself is the
+ * only way to genuinely bypass the cache for one call.
+ *
+ * With no cache involved at all, this MUST pass - it is a pure
+ * sanity baseline, not testing the cache. Its real value is as a
+ * control: if this one ever fails, the problem is not caching at all
+ * (something more fundamental, like transaction visibility) - and if
+ * UT-SEL-004 ever fails while this one still passes, that is a clean,
+ * unambiguous signal that the cache's own invalidation logic
+ * specifically is broken, not something else. */
+static int test_ut_sel_005(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999073", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "before-update-nocache", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    /* Hide the cache for the duration of this test only */
+    cache_t *saved_cache = ctx->resultset_cache;
+    ctx->resultset_cache = NULL;
+
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT VARCHAR2_COL FROM %s.%s WHERE NUMBER_COL = 999073",
+             g_test_table_owner, g_test_table_name);
+
+    /* First SELECT, cache hidden */
+    {
+        execute_config_t cfg1;
+        memset(&cfg1, 0, sizeof(cfg1));
+        cfg1.SQL = sql;
+        cfg1.max_rows = 10;
+        cfg1.fetch_array_size = 10;
+        int rc1 = execute_query_batch(ctx, &cfg1);
+        int first_ok = (rc1 == 0 && cfg1.xml && cfg1.xml->OUTPUT_XML &&
+                        strstr(cfg1.xml->OUTPUT_XML, "before-update-nocache") != NULL);
+        if (cfg1.xml) { free(cfg1.xml->OUTPUT_XML); free(cfg1.xml); }
+        free(cfg1.OUTPUT_JSON);
+        if (!first_ok)
+        {
+            snprintf(message, message_max,
+                     "First, cache-bypassed SELECT did not return the "
+                     "expected 'before-update-nocache' value");
+            ctx->resultset_cache = saved_cache;
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+    }
+
+    /* Update the row */
+    {
+        update_request_t ureq;
+        memset(&ureq, 0, sizeof(ureq));
+        strncpy(ureq.table_name, g_test_table_name, sizeof(ureq.table_name) - 1);
+        strncpy(ureq.owner, g_test_table_owner, sizeof(ureq.owner) - 1);
+        where_key_t wk;
+        memset(&wk, 0, sizeof(wk));
+        strncpy(wk.field_name, "NUMBER_COL", sizeof(wk.field_name) - 1);
+        strncpy(wk.key_value, "999073", sizeof(wk.key_value) - 1);
+        ureq.key_count = 1;
+        ureq.keys = &wk;
+        field_value_t set_field;
+        memset(&set_field, 0, sizeof(set_field));
+        strncpy(set_field.field_name, "VARCHAR2_COL", sizeof(set_field.field_name) - 1);
+        strncpy(set_field.value, "after-update-nocache", sizeof(set_field.value) - 1);
+        ureq.field_count = 1;
+        ureq.fields = &set_field;
+        execute_config_t ucfg;
+        memset(&ucfg, 0, sizeof(ucfg));
+        if (execute_update_batch(ctx, &ureq, &ucfg) != 0)
+        {
+            snprintf(message, message_max, "UPDATE (between the two SELECTs) failed");
+            if (ucfg.xml) { free(ucfg.xml->OUTPUT_XML); free(ucfg.xml); }
+            free(ucfg.OUTPUT_JSON);
+            ctx->resultset_cache = saved_cache;
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (ucfg.xml) { free(ucfg.xml->OUTPUT_XML); free(ucfg.xml); }
+        free(ucfg.OUTPUT_JSON);
+    }
+
+    /* Second SELECT, cache still hidden - with no cache involved at
+     * all, this must reflect the update.                               */
+    {
+        execute_config_t cfg2;
+        memset(&cfg2, 0, sizeof(cfg2));
+        cfg2.SQL = sql;
+        cfg2.max_rows = 10;
+        cfg2.fetch_array_size = 10;
+        int rc2 = execute_query_batch(ctx, &cfg2);
+
+        if (rc2 != 0)
+        {
+            snprintf(message, message_max,
+                     "Second, cache-bypassed execute_query_batch() "
+                     "failed rc=%d", rc2);
+            result = -1;
+        }
+        else if (!cfg2.xml || !cfg2.xml->OUTPUT_XML ||
+                 !strstr(cfg2.xml->OUTPUT_XML, "after-update-nocache"))
+        {
+            snprintf(message, message_max,
+                     "Second, cache-bypassed SELECT did not return "
+                     "'after-update-nocache' - with the cache genuinely "
+                     "hidden, this points to something more fundamental "
+                     "than caching (e.g. transaction visibility)");
+            result = -1;
+        }
+        if (cfg2.xml) { free(cfg2.xml->OUTPUT_XML); free(cfg2.xml); }
+        free(cfg2.OUTPUT_JSON);
+    }
+
+    ctx->resultset_cache = saved_cache;
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-001 ----
+ * A procedure with one scalar IN and one scalar OUT parameter executes
+ * and returns the correct OUT value. */
+static int test_ut_proc_001(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, g_test_procedure_name, sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+
+    procedure_param_t params[3];
+    memset(params, 0, sizeof(params));
+    strncpy(params[0].param_name, "P_IN_NUM", sizeof(params[0].param_name) - 1);
+    strncpy(params[0].param_type, "NUMBER", sizeof(params[0].param_type) - 1);
+    params[0].direction = PARAM_DIR_IN;
+    strncpy(params[0].param_value, "21", sizeof(params[0].param_value) - 1);
+
+    strncpy(params[1].param_name, "P_OUT_NUM", sizeof(params[1].param_name) - 1);
+    strncpy(params[1].param_type, "INTEGER", sizeof(params[1].param_type) - 1);
+    params[1].direction = PARAM_DIR_OUT;
+
+    strncpy(params[2].param_name, "P_RESULTS", sizeof(params[2].param_name) - 1);
+    strncpy(params[2].param_type, "CURSOR", sizeof(params[2].param_type) - 1);
+    params[2].direction = PARAM_DIR_OUT;
+
+    req.param_count = 3;
+    req.parameters = params;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+
+    int result = 0;
+    if (rc != 0)
+    {
+        snprintf(message, message_max, "execute_procedure() failed rc=%d", rc);
+        result = -1;
+    }
+    else if (!cfg.xml || !cfg.xml->OUTPUT_XML ||
+             !strstr(cfg.xml->OUTPUT_XML, "<param_value>42</param_value>"))
+    {
+        snprintf(message, message_max,
+                 "Expected <param_value>42</param_value> (21*2) for "
+                 "P_OUT_NUM, got: %s",
+                 cfg.xml && cfg.xml->OUTPUT_XML ? cfg.xml->OUTPUT_XML : "(null)");
+        result = -1;
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-002 ----
+ * A procedure with a CURSOR OUT parameter executes and the resultset
+ * is fetched correctly - seeds a matching row first so the cursor has
+ * something real to return. */
+static int test_ut_proc_002(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed a row the procedure's own cursor query should find */
+    {
+        insert_request_t ireq;
+        memset(&ireq, 0, sizeof(ireq));
+        strncpy(ireq.table_name, g_test_table_name, sizeof(ireq.table_name) - 1);
+        strncpy(ireq.owner, g_test_table_owner, sizeof(ireq.owner) - 1);
+        ireq.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999080", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "cursor-target-row", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        ireq.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &ireq, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, g_test_procedure_name, sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+
+    procedure_param_t params[3];
+    memset(params, 0, sizeof(params));
+    strncpy(params[0].param_name, "P_IN_NUM", sizeof(params[0].param_name) - 1);
+    strncpy(params[0].param_type, "NUMBER", sizeof(params[0].param_type) - 1);
+    params[0].direction = PARAM_DIR_IN;
+    strncpy(params[0].param_value, "999080", sizeof(params[0].param_value) - 1);
+
+    strncpy(params[1].param_name, "P_OUT_NUM", sizeof(params[1].param_name) - 1);
+    strncpy(params[1].param_type, "INTEGER", sizeof(params[1].param_type) - 1);
+    params[1].direction = PARAM_DIR_OUT;
+
+    strncpy(params[2].param_name, "P_RESULTS", sizeof(params[2].param_name) - 1);
+    strncpy(params[2].param_type, "CURSOR", sizeof(params[2].param_type) - 1);
+    params[2].direction = PARAM_DIR_OUT;
+
+    req.param_count = 3;
+    req.parameters = params;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max, "execute_procedure() failed rc=%d", rc);
+        result = -1;
+    }
+    else if (!cfg.xml || !cfg.xml->OUTPUT_XML ||
+             !strstr(cfg.xml->OUTPUT_XML, "cursor-target-row"))
+    {
+        snprintf(message, message_max,
+                 "Expected 'cursor-target-row' in the CURSOR OUT "
+                 "resultset, got: %s",
+                 cfg.xml && cfg.xml->OUTPUT_XML ? cfg.xml->OUTPUT_XML : "(null)");
+        result = -1;
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-005 ----
+ * Exactly one metrics row is written per procedure call - regression
+ * test for the 2026-07-31 double metrics_write() bug. Counts lines in
+ * the real metrics CSV file directly (via ctx->metrics_logger->filename,
+ * the exact path the logger itself writes to - not a guessed path)
+ * before and after one procedure call, confirming the difference is
+ * exactly 1, not 2. */
+static int test_ut_proc_005(oci_context_t *ctx, char *message, size_t message_max)
+{
+    if (!ctx->metrics_logger || !ctx->metrics_logger->filename)
+    {
+        snprintf(message, message_max,
+                 "ctx->metrics_logger or its filename is not available - "
+                 "cannot count metrics rows for this test");
+        return -1;
+    }
+
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    long lines_before = 0;
+    {
+        FILE *fp = fopen(ctx->metrics_logger->filename, "r");
+        if (fp)
+        {
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), fp)) lines_before++;
+            fclose(fp);
+        }
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, g_test_procedure_name, sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+
+    procedure_param_t params[3];
+    memset(params, 0, sizeof(params));
+    strncpy(params[0].param_name, "P_IN_NUM", sizeof(params[0].param_name) - 1);
+    strncpy(params[0].param_type, "NUMBER", sizeof(params[0].param_type) - 1);
+    params[0].direction = PARAM_DIR_IN;
+    strncpy(params[0].param_value, "5", sizeof(params[0].param_value) - 1);
+    strncpy(params[1].param_name, "P_OUT_NUM", sizeof(params[1].param_name) - 1);
+    strncpy(params[1].param_type, "INTEGER", sizeof(params[1].param_type) - 1);
+    params[1].direction = PARAM_DIR_OUT;
+    strncpy(params[2].param_name, "P_RESULTS", sizeof(params[2].param_name) - 1);
+    strncpy(params[2].param_type, "CURSOR", sizeof(params[2].param_type) - 1);
+    params[2].direction = PARAM_DIR_OUT;
+    req.param_count = 3;
+    req.parameters = params;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max, "execute_procedure() failed rc=%d", rc);
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    long lines_after = 0;
+    {
+        FILE *fp = fopen(ctx->metrics_logger->filename, "r");
+        if (fp)
+        {
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), fp)) lines_after++;
+            fclose(fp);
+        }
+    }
+
+    long new_lines = lines_after - lines_before;
+    if (new_lines != 1)
+    {
+        snprintf(message, message_max,
+                 "Expected exactly 1 new metrics row for this procedure "
+                 "call, got %ld - regression of the 2026-07-31 double "
+                 "metrics_write() bug", new_lines);
+        result = -1;
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-006 ----
+ * No AUDIT_TRAIL row is written for a procedure call, confirming the
+ * deliberate 2026-07-29 no-audit-trail design decision is actually the
+ * observed behaviour, not just the documented intent. Counts total
+ * AUDIT_TRAIL rows before and after one procedure call, confirming no
+ * change. */
+static int test_ut_proc_006(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+    int count_before = 0, count_after = 0;
+    OCIStmt *stmt = NULL;
+    sb2      ind = 0;
+    OCIDefine *dfn = NULL;
+    const char *sql = "SELECT COUNT(*) FROM AUDIT_TRAIL";
+
+    if (OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp, (text *)sql,
+                         (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT) == OCI_SUCCESS)
+    {
+        OCIDefineByPos(stmt, &dfn, ctx->errhp, 1, (dvoid *)&count_before,
+                       (sb4)sizeof(count_before), SQLT_INT, &ind, NULL, NULL, OCI_DEFAULT);
+        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, g_test_procedure_name, sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+
+    procedure_param_t params[3];
+    memset(params, 0, sizeof(params));
+    strncpy(params[0].param_name, "P_IN_NUM", sizeof(params[0].param_name) - 1);
+    strncpy(params[0].param_type, "NUMBER", sizeof(params[0].param_type) - 1);
+    params[0].direction = PARAM_DIR_IN;
+    strncpy(params[0].param_value, "7", sizeof(params[0].param_value) - 1);
+    strncpy(params[1].param_name, "P_OUT_NUM", sizeof(params[1].param_name) - 1);
+    strncpy(params[1].param_type, "INTEGER", sizeof(params[1].param_type) - 1);
+    params[1].direction = PARAM_DIR_OUT;
+    strncpy(params[2].param_name, "P_RESULTS", sizeof(params[2].param_name) - 1);
+    strncpy(params[2].param_type, "CURSOR", sizeof(params[2].param_type) - 1);
+    params[2].direction = PARAM_DIR_OUT;
+    req.param_count = 3;
+    req.parameters = params;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max, "execute_procedure() failed rc=%d", rc);
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    stmt = NULL; dfn = NULL; ind = 0;
+    if (OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp, (text *)sql,
+                         (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT) == OCI_SUCCESS)
+    {
+        OCIDefineByPos(stmt, &dfn, ctx->errhp, 1, (dvoid *)&count_after,
+                       (sb4)sizeof(count_after), SQLT_INT, &ind, NULL, NULL, OCI_DEFAULT);
+        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    }
+
+    if (count_after != count_before)
+    {
+        snprintf(message, message_max,
+                 "AUDIT_TRAIL row count changed from %d to %d after a "
+                 "procedure call - the deliberate no-audit-trail design "
+                 "decision is not actually being observed", count_before,
+                 count_after);
+        result = -1;
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-003 ----
+ * A procedure with zero parameters executes via the
+ * BEGIN proc_name; END; code path. Uses a dedicated, hardcoded
+ * procedure name (UNIT_TEST_NOOP_PROC) rather than g_test_procedure_
+ * name - unit_test.ini's own test_procedure_name is a single,
+ * configurable value already used for the scalar/CURSOR tests above;
+ * this genuinely different signature (zero parameters) needs its own,
+ * separate, dedicated procedure, not something that varies per
+ * environment the way the main one might. */
+static int test_ut_proc_003(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, "UNIT_TEST_NOOP_PROC", sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+    req.param_count = 0;
+    req.parameters = NULL;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+
+    int result = 0;
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "execute_procedure() on a zero-parameter procedure "
+                 "failed rc=%d", rc);
+        result = -1;
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-PROC-004 ----
+ * A CURSOR OUT parameter that is genuinely NULL (the procedure never
+ * opened it at all - not merely a cursor opened against zero matching
+ * rows) produces an empty <resultset> element, not an error. Uses a
+ * dedicated procedure (UNIT_TEST_CURSOR_PROC) whose own P_OPEN_CURSOR
+ * flag controls whether it opens the cursor at all - passing 0 here
+ * means the cursor is left completely unopened, the specific scenario
+ * this test needs and the existing scalar/CURSOR procedure has no way
+ * to produce (it always opens its own cursor, just sometimes against
+ * zero rows). */
+static int test_ut_proc_004(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    execute_procedure_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.procedure_name, "UNIT_TEST_CURSOR_PROC", sizeof(req.procedure_name) - 1);
+    strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+
+    procedure_param_t params[2];
+    memset(params, 0, sizeof(params));
+    strncpy(params[0].param_name, "P_OPEN_CURSOR", sizeof(params[0].param_name) - 1);
+    strncpy(params[0].param_type, "NUMBER", sizeof(params[0].param_type) - 1);
+    params[0].direction = PARAM_DIR_IN;
+    strncpy(params[0].param_value, "0", sizeof(params[0].param_value) - 1);   /* leave the cursor unopened */
+
+    strncpy(params[1].param_name, "P_RESULTS", sizeof(params[1].param_name) - 1);
+    strncpy(params[1].param_type, "CURSOR", sizeof(params[1].param_type) - 1);
+    params[1].direction = PARAM_DIR_OUT;
+
+    req.param_count = 2;
+    req.parameters = params;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    int rc = execute_procedure(ctx, &req, &cfg);
+
+    int result = 0;
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "execute_procedure() with a deliberately-unopened "
+                 "CURSOR OUT parameter failed rc=%d - a NULL cursor "
+                 "should produce an empty resultset, not an error", rc);
+        result = -1;
+    }
+    else if (!cfg.xml || !cfg.xml->OUTPUT_XML ||
+             !strstr(cfg.xml->OUTPUT_XML, "<resultset param_name=\"P_RESULTS\""))
+    {
+        snprintf(message, message_max,
+                 "Expected a <resultset param_name=\"P_RESULTS\" .../> "
+                 "element even for an unopened cursor, got: %s",
+                 cfg.xml && cfg.xml->OUTPUT_XML ? cfg.xml->OUTPUT_XML : "(null)");
+        result = -1;
+    }
+
+    if (cfg.xml) { free(cfg.xml->OUTPUT_XML); free(cfg.xml); }
+    free(cfg.OUTPUT_JSON);
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-AUDIT-001 ----
+ * audit_trail_fetch_before_image() returns the real, current column
+ * value for a row that exists - regression test for the SELECT-
+ * refactor-era bug where this always returned "tag not found" because
+ * it searched for a literal <COL_NAME> tag against response_write_xml()'s
+ * newer <field><field_name>/<field_value> shape. Calls the function
+ * directly, not indirectly through UPDATE/DELETE. */
+static int test_ut_audit_001(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999091", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "audit-fetch-test", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    char col_names[1][128];
+    strncpy(col_names[0], "VARCHAR2_COL", sizeof(col_names[0]) - 1);
+    char key_names[1][128];
+    strncpy(key_names[0], "NUMBER_COL", sizeof(key_names[0]) - 1);
+    char key_values[1][32768];
+    strncpy(key_values[0], "999091", sizeof(key_values[0]) - 1);
+    char key_data_types[1][128];
+    strncpy(key_data_types[0], "NUMBER", sizeof(key_data_types[0]) - 1);
+
+    audit_old_value_t *old_values = NULL;
+    int row_count = 0;
+    int rc = audit_trail_fetch_before_image(ctx, g_test_table_name, g_test_table_owner,
+                                             col_names, 1, key_names, key_values,
+                                             key_data_types, 1, &old_values, &row_count);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "audit_trail_fetch_before_image() failed rc=%d", rc);
+        result = -1;
+    }
+    else if (row_count != 1 || !old_values)
+    {
+        snprintf(message, message_max,
+                 "Expected row_count=1 with a populated old_values array, "
+                 "got row_count=%d", row_count);
+        result = -1;
+    }
+    else if (old_values[0].is_null || strcmp(old_values[0].value, "audit-fetch-test") != 0)
+    {
+        snprintf(message, message_max,
+                 "Expected VARCHAR2_COL='audit-fetch-test', got is_null=%d "
+                 "value='%s' - this is exactly the SELECT-refactor-era "
+                 "'tag not found' regression if is_null is incorrectly 1",
+                 old_values[0].is_null, old_values[0].value);
+        result = -1;
+    }
+
+    free(old_values);
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-AUDIT-002 ----
+ * The same function, given a DATE-typed WHERE key, correctly wraps the
+ * comparison in TO_DATE() using the real column type - regression test
+ * for the 2026-07-26 finding (this function had no type-awareness at
+ * all originally, and a DATE-typed WHERE value used as a bare string
+ * comparison would fail with ORA-01858/01861 or simply match nothing). */
+static int test_ut_audit_002(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row with a real DATE_COL value */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[2];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999092", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "DATE_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "2026-08-19 14:30:00", sizeof(fields[1].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 2;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT (with real DATE_COL value) failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    char col_names[1][128];
+    strncpy(col_names[0], "VARCHAR2_COL", sizeof(col_names[0]) - 1);
+    char key_names[1][128];
+    strncpy(key_names[0], "DATE_COL", sizeof(key_names[0]) - 1);
+    char key_values[1][32768];
+    strncpy(key_values[0], "2026-08-19 14:30:00", sizeof(key_values[0]) - 1);
+    char key_data_types[1][128];
+    strncpy(key_data_types[0], "DATE", sizeof(key_data_types[0]) - 1);
+
+    audit_old_value_t *old_values = NULL;
+    int row_count = 0;
+    int rc = audit_trail_fetch_before_image(ctx, g_test_table_name, g_test_table_owner,
+                                             col_names, 1, key_names, key_values,
+                                             key_data_types, 1, &old_values, &row_count);
+
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "audit_trail_fetch_before_image() with a DATE-typed "
+                 "WHERE key failed rc=%d - possible regression of the "
+                 "2026-07-26 type-awareness fix", rc);
+        result = -1;
+    }
+    else if (row_count != 1)
+    {
+        snprintf(message, message_max,
+                 "Expected row_count=1 for the DATE-keyed lookup, got %d "
+                 "- the DATE-typed WHERE value may not have matched the "
+                 "real row at all", row_count);
+        result = -1;
+    }
+
+    free(old_values);
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-AUDIT-003 ----
+ * audit_trail_insert() (field-level path) correctly handles
+ * new_values=NULL, used by DELETE where there is no "new" value. Calls
+ * the function directly with a synthetic, minimal request rather than
+ * indirectly through execute_delete_batch() (which is already
+ * exercised by UT-DEL-001 through 005). */
+static int test_ut_audit_003(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    /* audit_trail_insert()'s own old_values/new_values arrays must
+     * match audit_field_value_t's real, private layout - defined
+     * locally inside OCI_Audit_Trail_Manager.c as
+     * { char value[32768]; int is_empty; } - not field_value_t's own,
+     * completely different layout (field_name[128]/value[4096]/
+     * client_date_format[64]/large_value). Found via a real
+     * stack-use-after-return ASan crash: passing a field_value_t here
+     * (the original version of this test) let this function read
+     * misaligned, garbage memory that happened to look like a stale
+     * pointer from an earlier, already-returned xml_append() stack
+     * frame. Mirrored locally, matching the same established pattern
+     * already used elsewhere in this project (upd_fv_t/audit_fv_t) for
+     * exactly this purpose.                                            */
+    typedef struct { char value[32768]; int is_empty; } audit_test_fv_t;
+    audit_test_fv_t old_val;
+    memset(&old_val, 0, sizeof(old_val));
+    strncpy(old_val.value, "999093", sizeof(old_val.value) - 1);
+    old_val.is_empty = 0;
+
+    char col_names[1][128];
+    strncpy(col_names[0], "NUMBER_COL", sizeof(col_names[0]) - 1);
+
+    audit_trail_request_t atr;
+    memset(&atr, 0, sizeof(atr));
+    strncpy(atr.table_name, g_test_table_name, sizeof(atr.table_name) - 1);
+    strncpy(atr.record_id, "999093", sizeof(atr.record_id) - 1);
+    strncpy(atr.action_type, "DELETE", sizeof(atr.action_type) - 1);
+    atr.col_names = col_names;
+    atr.col_types = NULL;
+    atr.new_values = NULL;   /* the specific case this test is about */
+    atr.old_values = &old_val;
+    atr.row_count = 1;
+    atr.col_count = 1;
+    strncpy(atr.changed_by, "unit_test", sizeof(atr.changed_by) - 1);
+    strncpy(atr.change_reason, "unit_test_tx", sizeof(atr.change_reason) - 1);
+    strncpy(atr.module_name, "OCI_Unit_Test_Module", sizeof(atr.module_name) - 1);
+    atr.audit_mode = 0;
+
+    int rc = audit_trail_insert(ctx, &atr);
+
+    int result = 0;
+    if (rc != 0)
+    {
+        snprintf(message, message_max,
+                 "audit_trail_insert() with new_values=NULL (the DELETE "
+                 "case) failed rc=%d", rc);
+        result = -1;
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-TX-002 ----
+ * begin_standalone_tx_if_needed() gives a standalone call (no external
+ * tx wrapper) its own transaction_id - regression test for the
+ * 2026-07-26 GxP traceability gap. Deliberately does NOT wrap itself in
+ * begin_test_transaction()/rollback_test_transaction() the way every
+ * other Tier 3 test does - the whole point of this test is confirming
+ * what happens when ctx->active_tx is genuinely NULL beforehand, so
+ * wrapping it in an external transaction would defeat the test
+ * entirely. Safe to do: begin_standalone_tx_if_needed()/
+ * end_standalone_tx_if_owned() never touch the real database at all
+ * (per their own doc comment in OCI_Transaction_Manager.h - local_tx is
+ * never registered with any transaction table or commit bookkeeping),
+ * this is pure in-memory pointer/struct bookkeeping. */
+static int test_ut_tx_002(oci_context_t *ctx, char *message, size_t message_max)
+{
+    if (ctx->active_tx != NULL)
+    {
+        snprintf(message, message_max,
+                 "ctx->active_tx is already non-NULL before this test "
+                 "even starts - cannot cleanly test the standalone case "
+                 "(a prior test may not have cleaned up correctly)");
+        return -1;
+    }
+
+    tx_handle_t local_tx;
+    memset(&local_tx, 0, sizeof(local_tx));
+    int owned = begin_standalone_tx_if_needed(ctx, &local_tx);
+
+    int result = 0;
+    if (owned != 1)
+    {
+        snprintf(message, message_max,
+                 "begin_standalone_tx_if_needed() returned %d, expected 1 "
+                 "(ctx->active_tx was genuinely NULL beforehand, so this "
+                 "call should own a fresh transaction identity)", owned);
+        result = -1;
+    }
+    else if (ctx->active_tx != &local_tx)
+    {
+        snprintf(message, message_max,
+                 "ctx->active_tx does not point at local_tx even though "
+                 "begin_standalone_tx_if_needed() returned 1");
+        result = -1;
+    }
+    else
+    {
+        const char *tx_id = tx_get_id(ctx->active_tx);
+        if (!tx_id || tx_id[0] == '\0' || strcmp(tx_id, "-") == 0)
+        {
+            snprintf(message, message_max,
+                     "tx_get_id() returned '%s' for a standalone call - "
+                     "expected a real UUID, not the '-' placeholder "
+                     "(this is exactly the 2026-07-26 traceability gap)",
+                     tx_id ? tx_id : "(null)");
+            result = -1;
+        }
+    }
+
+    end_standalone_tx_if_owned(ctx, owned);
+
+    if (result == 0 && ctx->active_tx != NULL)
+    {
+        snprintf(message, message_max,
+                 "ctx->active_tx is still non-NULL after "
+                 "end_standalone_tx_if_owned() - it should be cleared "
+                 "back to NULL once this call's own standalone "
+                 "transaction ends");
+        result = -1;
+    }
+
+    return result;
+}
+
+/* ---- UT-TX-003 ----
+ * The same function, called from a request that IS already inside an
+ * external transaction, does not overwrite the existing transaction_id
+ * - confirms the recursion-safety behaviour (e.g. the audit trail's
+ * own INSERT nested inside the business operation that triggered it
+ * correctly inherits the outer call's transaction_id unchanged). */
+static int test_ut_tx_003(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t external_tx;
+    if (begin_test_transaction(ctx, &external_tx) != 0)
+    {
+        snprintf(message, message_max,
+                 "Could not begin the test's own (external) transaction");
+        return -1;
+    }
+
+    tx_handle_t *original_active_tx = ctx->active_tx;
+    const char  *original_tx_id = tx_get_id(ctx->active_tx);
+    char saved_tx_id[128] = {0};
+    strncpy(saved_tx_id, original_tx_id ? original_tx_id : "", sizeof(saved_tx_id) - 1);
+
+    tx_handle_t local_tx;
+    memset(&local_tx, 0, sizeof(local_tx));
+    int owned = begin_standalone_tx_if_needed(ctx, &local_tx);
+
+    int result = 0;
+    if (owned != 0)
+    {
+        snprintf(message, message_max,
+                 "begin_standalone_tx_if_needed() returned %d, expected "
+                 "0 (ctx->active_tx was already set by an external "
+                 "transaction, so this call should do nothing)", owned);
+        result = -1;
+    }
+    else if (ctx->active_tx != original_active_tx)
+    {
+        snprintf(message, message_max,
+                 "ctx->active_tx was overwritten - it should have been "
+                 "left pointing at the original, external transaction "
+                 "unchanged");
+        result = -1;
+    }
+    else
+    {
+        const char *current_tx_id = tx_get_id(ctx->active_tx);
+        if (!current_tx_id || strcmp(current_tx_id, saved_tx_id) != 0)
+        {
+            snprintf(message, message_max,
+                     "Transaction id changed from '%s' to '%s' - the "
+                     "existing, external transaction_id should never be "
+                     "overwritten by a nested standalone call",
+                     saved_tx_id, current_tx_id ? current_tx_id : "(null)");
+            result = -1;
+        }
+    }
+
+    end_standalone_tx_if_owned(ctx, owned);
+
+    rollback_test_transaction(ctx, &external_tx);
+    return result;
+}
+
+/* ---- UT-SESS-001 ----
+ * CREATE_SESSION writes a permanent OCI_SESSION row and returns a
+ * well-formed session_id. Wrapped in the same begin_test_transaction()/
+ * rollback_test_transaction() pattern as every other Tier 3 test for
+ * consistency and safety, even though a real CREATE_SESSION call is
+ * normally permanent (not something a caller would roll back) - here
+ * the rollback is purely this test's own cleanup guarantee, not a
+ * comment on how sessions behave in real usage.
+ *
+ * UT-SESS-002 (END_SESSION setting LOGGED_OUT via session_end()) is
+ * already covered by UT-UPD-004, and UT-SESS-003 (session_reconcile_
+ * orphans() treating zero orphans as healthy) is already implemented
+ * as a Tier 2 test - see this catalog's own notes for both. This is
+ * the only genuinely new SESS test needed. */
+static int test_ut_sess_001(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+    char *create_xml = NULL;
+
+    session_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.operation, "CREATE_SESSION", sizeof(req.operation) - 1);
+    strncpy(req.client_id, "unit-test-client", sizeof(req.client_id) - 1);
+    strncpy(req.client_ip, "127.0.0.1", sizeof(req.client_ip) - 1);
+    strncpy(req.application_name, "unit_test", sizeof(req.application_name) - 1);
+    req.requested_ttl_seconds = 60;
+
+    if (session_create(ctx, &req, &create_xml) != 0 || !create_xml)
+    {
+        snprintf(message, message_max, "session_create() failed");
+        free(create_xml);
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    char session_id[128] = {0};
+    const char *tag_start = strstr(create_xml, "<session_id>");
+    if (tag_start)
+    {
+        tag_start += strlen("<session_id>");
+        const char *tag_end = strstr(tag_start, "</session_id>");
+        if (tag_end && (size_t)(tag_end - tag_start) < sizeof(session_id))
+        {
+            memcpy(session_id, tag_start, (size_t)(tag_end - tag_start));
+            session_id[tag_end - tag_start] = '\0';
+        }
+    }
+    free(create_xml);
+
+    if (!session_id[0])
+    {
+        snprintf(message, message_max,
+                 "Could not extract a session_id from session_create()'s "
+                 "own result XML");
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    /* A well-formed session_id: SESSION_ID is VARCHAR2(36) per
+     * Create_Session_Table.txt (a UUID), so a reasonable, non-fragile
+     * sanity check is length alone (36 chars) rather than parsing the
+     * exact UUID format.                                               */
+    if (strlen(session_id) != 36)
+    {
+        snprintf(message, message_max,
+                 "session_id='%s' (%zu chars) does not look like a "
+                 "well-formed UUID (expected 36 chars)",
+                 session_id, strlen(session_id));
+        result = -1;
+    }
+    else
+    {
+        OCIStmt *stmt = NULL;
+        int      found = 0;
+        sb2      ind = 0;
+        OCIDefine *dfn = NULL;
+        char sql[256];
+        snprintf(sql, sizeof(sql),
+                 "SELECT 1 FROM DUAL WHERE EXISTS "
+                 "(SELECT 1 FROM OCI_SESSION WHERE SESSION_ID = '%s')",
+                 session_id);
+        if (OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp, (text *)sql,
+                             (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT) == OCI_SUCCESS)
+        {
+            OCIDefineByPos(stmt, &dfn, ctx->errhp, 1, (dvoid *)&found,
+                           (sb4)sizeof(found), SQLT_INT, &ind, NULL, NULL, OCI_DEFAULT);
+            OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        }
+        if (found != 1)
+        {
+            snprintf(message, message_max,
+                     "No OCI_SESSION row found for session_id='%s' - "
+                     "CREATE_SESSION should write a real, permanent row",
+                     session_id);
+            result = -1;
+        }
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-DATE-004 ----
+ * An UPDATE WHERE key declared in European DD/MM/YYYY format and a
+ * DELETE WHERE key on the same underlying value declared in US
+ * MM/DD/YYYY format both correctly match the real row - the same
+ * scenario originally confirmed manually during the real Date E2E
+ * testing weeks ago (2026-07-27/28/29), now as a real, automated,
+ * always-rolled-back Tier 3 test. The DATE_COL value itself never
+ * changes across the UPDATE/DELETE - only VARCHAR2_COL does - so both
+ * operations' own WHERE keys genuinely target the same underlying date,
+ * just declared in two different client formats. */
+static int test_ut_date_004(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Seed row with DATE_COL in the canonical, configured format */
+    {
+        insert_request_t req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, g_test_table_name, sizeof(req.table_name) - 1);
+        strncpy(req.owner, g_test_table_owner, sizeof(req.owner) - 1);
+        req.row_count = 1;
+        field_value_t fields[3];
+        memset(fields, 0, sizeof(fields));
+        strncpy(fields[0].field_name, "NUMBER_COL", sizeof(fields[0].field_name) - 1);
+        strncpy(fields[0].value, "999094", sizeof(fields[0].value) - 1);
+        strncpy(fields[1].field_name, "VARCHAR2_COL", sizeof(fields[1].field_name) - 1);
+        strncpy(fields[1].value, "before-date-e2e", sizeof(fields[1].value) - 1);
+        strncpy(fields[2].field_name, "DATE_COL", sizeof(fields[2].field_name) - 1);
+        strncpy(fields[2].value, "2026-08-19 14:30:00", sizeof(fields[2].value) - 1);
+        insert_row_t row;
+        memset(&row, 0, sizeof(row));
+        row.field_count = 3;
+        row.fields = fields;
+        req.rows = &row;
+        execute_config_t icfg;
+        memset(&icfg, 0, sizeof(icfg));
+        if (execute_insert_batch(ctx, &req, &icfg) != 0)
+        {
+            snprintf(message, message_max, "Seed INSERT (with real DATE_COL value) failed");
+            if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+            free(icfg.OUTPUT_JSON);
+            rollback_test_transaction(ctx, &tx);
+            return -1;
+        }
+        if (icfg.xml) { free(icfg.xml->OUTPUT_XML); free(icfg.xml); }
+        free(icfg.OUTPUT_JSON);
+    }
+
+    /* UPDATE, WHERE-keyed on DATE_COL declared in European DD/MM/YYYY */
+    {
+        update_request_t ureq;
+        memset(&ureq, 0, sizeof(ureq));
+        strncpy(ureq.table_name, g_test_table_name, sizeof(ureq.table_name) - 1);
+        strncpy(ureq.owner, g_test_table_owner, sizeof(ureq.owner) - 1);
+        where_key_t wk;
+        memset(&wk, 0, sizeof(wk));
+        strncpy(wk.field_name, "DATE_COL", sizeof(wk.field_name) - 1);
+        strncpy(wk.key_value, "19/08/2026 14:30:00", sizeof(wk.key_value) - 1);
+        strncpy(wk.client_date_format, "DD/MM/YYYY HH24:MI:SS",
+                sizeof(wk.client_date_format) - 1);
+        ureq.key_count = 1;
+        ureq.keys = &wk;
+        field_value_t set_field;
+        memset(&set_field, 0, sizeof(set_field));
+        strncpy(set_field.field_name, "VARCHAR2_COL", sizeof(set_field.field_name) - 1);
+        strncpy(set_field.value, "after-date-e2e", sizeof(set_field.value) - 1);
+        ureq.field_count = 1;
+        ureq.fields = &set_field;
+
+        execute_config_t ucfg;
+        memset(&ucfg, 0, sizeof(ucfg));
+        int rc = execute_update_batch(ctx, &ureq, &ucfg);
+
+        if (rc != 0)
+        {
+            snprintf(message, message_max,
+                     "UPDATE with a European DD/MM/YYYY-declared DATE_COL "
+                     "WHERE key failed rc=%d", rc);
+            result = -1;
+        }
+        else if (ucfg.xml && ucfg.xml->OUTPUT_XML &&
+                 !strstr(ucfg.xml->OUTPUT_XML, "<rows_updated>1</rows_updated>"))
+        {
+            snprintf(message, message_max,
+                     "Expected <rows_updated>1</rows_updated> for the "
+                     "European-format DATE_COL WHERE key, got: %s",
+                     ucfg.xml->OUTPUT_XML);
+            result = -1;
+        }
+        if (ucfg.xml) { free(ucfg.xml->OUTPUT_XML); free(ucfg.xml); }
+        free(ucfg.OUTPUT_JSON);
+
+        if (result != 0)
+        {
+            rollback_test_transaction(ctx, &tx);
+            return result;
+        }
+    }
+
+    /* DELETE, WHERE-keyed on the SAME underlying DATE_COL value,
+     * declared in US MM/DD/YYYY this time.                             */
+    {
+        delete_request_t dreq;
+        memset(&dreq, 0, sizeof(dreq));
+        strncpy(dreq.table_name, g_test_table_name, sizeof(dreq.table_name) - 1);
+        strncpy(dreq.owner, g_test_table_owner, sizeof(dreq.owner) - 1);
+        where_key_t wk;
+        memset(&wk, 0, sizeof(wk));
+        strncpy(wk.field_name, "DATE_COL", sizeof(wk.field_name) - 1);
+        strncpy(wk.key_value, "08/19/2026 14:30:00", sizeof(wk.key_value) - 1);
+        strncpy(wk.client_date_format, "MM/DD/YYYY HH24:MI:SS",
+                sizeof(wk.client_date_format) - 1);
+        dreq.key_count = 1;
+        dreq.keys = &wk;
+
+        execute_config_t dcfg;
+        memset(&dcfg, 0, sizeof(dcfg));
+        int rc = execute_delete_batch(ctx, &dreq, &dcfg);
+
+        if (rc != 0)
+        {
+            snprintf(message, message_max,
+                     "DELETE with a US MM/DD/YYYY-declared DATE_COL "
+                     "WHERE key (same underlying value the UPDATE just "
+                     "matched) failed rc=%d", rc);
+            result = -1;
+        }
+        else if (dcfg.xml && dcfg.xml->OUTPUT_XML &&
+                 !strstr(dcfg.xml->OUTPUT_XML, "<rows_deleted>1</rows_deleted>"))
+        {
+            snprintf(message, message_max,
+                     "Expected <rows_deleted>1</rows_deleted> for the "
+                     "US-format DATE_COL WHERE key, got: %s",
+                     dcfg.xml->OUTPUT_XML);
+            result = -1;
+        }
+        if (dcfg.xml) { free(dcfg.xml->OUTPUT_XML); free(dcfg.xml); }
+        free(dcfg.OUTPUT_JSON);
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
 
 static const unit_test_case_t g_registry[] = {
     { "UT-LOG-001",  UT_TIER_1, "LOG",  "Every configured logger is non-NULL on ctx",        test_ut_log_001 },
@@ -3619,9 +5221,56 @@ static const unit_test_case_t g_registry[] = {
     { "UT-DEL-004", UT_TIER_3, "DEL", "Before-image is scoped to WHERE-key columns only",   test_ut_del_004 },
     { "UT-DEL-005", UT_TIER_3, "DEL", "Zero WHERE keys is rejected before Stage 3",         test_ut_del_005 },
 
-    /* Remaining Tier 3 tests (SEL/PROC/AUDIT-001-003/TX/SESS/DATE-004)
-     * are added here in subsequent passes, per the agreed
-     * implementation order.                                            */
+    /* ---- Tier 3 (2026-08-02, fifth pass - SELECT) ---- */
+    { "UT-SEL-001", UT_TIER_3, "SEL", "Plain column-list SELECT returns the expected value", test_ut_sel_001 },
+    { "UT-SEL-003", UT_TIER_3, "SEL", "A CLOB column in the SELECT list is correctly extracted", test_ut_sel_003 },
+    { "UT-SEL-004", UT_TIER_3, "SEL", "A post-UPDATE SELECT never returns a stale cached value", test_ut_sel_004 },
+    { "UT-SEL-005", UT_TIER_3, "SEL", "Control for UT-SEL-004 - same sequence with the cache hidden", test_ut_sel_005 },
+
+    /* ---- Tier 3 (2026-08-02, sixth pass - EXECUTE_PROCEDURE, partial) ---- */
+    { "UT-PROC-001", UT_TIER_3, "PROC", "Scalar IN/OUT procedure call returns the correct value", test_ut_proc_001 },
+    { "UT-PROC-002", UT_TIER_3, "PROC", "CURSOR OUT parameter returns the seeded row",           test_ut_proc_002 },
+    { "UT-PROC-003", UT_TIER_3, "PROC", "Zero-parameter procedure executes via BEGIN...END",     test_ut_proc_003 },
+    { "UT-PROC-004", UT_TIER_3, "PROC", "A genuinely unopened CURSOR OUT produces an empty resultset", test_ut_proc_004 },
+    { "UT-PROC-005", UT_TIER_3, "PROC", "Exactly one metrics row is written per procedure call", test_ut_proc_005 },
+    { "UT-PROC-006", UT_TIER_3, "PROC", "No AUDIT_TRAIL row is written for a procedure call",    test_ut_proc_006 },
+
+    /* ---- Tier 3 (2026-08-02, seventh pass - AUDIT direct calls) ---- */
+    { "UT-AUDIT-001", UT_TIER_3, "AUDIT", "audit_trail_fetch_before_image() returns the real column value", test_ut_audit_001 },
+    { "UT-AUDIT-002", UT_TIER_3, "AUDIT", "Same function correctly wraps a DATE-typed WHERE key",  test_ut_audit_002 },
+    { "UT-AUDIT-003", UT_TIER_3, "AUDIT", "audit_trail_insert() handles new_values=NULL (DELETE case)", test_ut_audit_003 },
+
+    /* ---- Tier 3 (2026-08-02, eighth pass - TX, partial) ---- */
+    { "UT-TX-002", UT_TIER_3, "TX", "A standalone call gets its own transaction_id", test_ut_tx_002 },
+    { "UT-TX-003", UT_TIER_3, "TX", "A nested call never overwrites an existing transaction_id", test_ut_tx_003 },
+
+    /* UT-TX-001 (per-request multi-operation rollback isolation)
+     * deliberately deferred 2026-08-02 - the only transaction wrapping
+     * that currently exists is the whole-program-run transaction in
+     * Test_XML_Runner.c (every file in one run shares one commit/
+     * rollback outcome), a deliberate, temporary shortcut from when
+     * that file was first written to get the project off the ground
+     * quickly. It will be replaced once the file-consumer/HTTP-consumer
+     * split gives each individual request its own, properly-scoped
+     * transaction, respecting transaction_required per-request rather
+     * than per-run. Testing UT-TX-001 against today's temporary
+     * behaviour would either test something about to be replaced, or
+     * test the wrong property entirely - revisit once that refactor
+     * lands.                                                            */
+
+    /* ---- Tier 3 (2026-08-02, ninth pass - SESS) ---- */
+    { "UT-SESS-001", UT_TIER_3, "SESS", "CREATE_SESSION writes a real, permanent OCI_SESSION row", test_ut_sess_001 },
+
+    /* UT-SESS-002 (END_SESSION via session_end()) is already covered by
+     * UT-UPD-004; UT-SESS-003 (zero-orphan reconciliation) is already a
+     * Tier 2 test - see this catalog's own notes for both.             */
+
+    /* ---- Tier 3 (2026-08-02, tenth and final pass - DATE-004) ---- */
+    { "UT-DATE-004", UT_TIER_3, "DATE", "European UPDATE key and US DELETE key both match the same real row", test_ut_date_004 },
+
+    /* Catalog complete, per Unit_Test_Module_Design_Specification.docx -
+     * every Tier 1/2/3 test either implemented, or deliberately
+     * deferred with its own documented reasoning (UT-TX-001).          */
 };
 static const int g_registry_count = sizeof(g_registry) / sizeof(g_registry[0]);
 

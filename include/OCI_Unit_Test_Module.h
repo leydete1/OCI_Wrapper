@@ -64,6 +64,14 @@ typedef struct {
     char test_table_owner[128];
     char test_procedure_name[128];
     int  unit_test_log_summary_enabled;
+
+    /* 2026-08-02: the self-test's own dedicated log file, so its
+     * results are immediately visible in one place rather than mixed
+     * into Data_Manager.log's own, much larger stream. */
+    char   unit_test_log_file_name[256];
+    double unit_test_log_file_max_size;
+    int    unit_test_log_file_rotation_number;
+    char   unit_test_log_level[16];
 } unit_test_config_t;
 
 /*

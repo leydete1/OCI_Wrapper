@@ -13,8 +13,7 @@
 startup_self_test_enabled=1
 
 # Highest tier run automatically at startup: 1, 2, or 3.
-# All three tiers are now fully implemented (65 tests total, as of
-# 2026-08-02) - 3 runs the complete catalog.
+# Start with 1 - Tier 2/3 tests are not yet implemented (2026-08-01).
 startup_max_tier=3
 
 # Recommended defaults - see the spec's own Test Tiers section for the
@@ -24,20 +23,12 @@ startup_halt_on_tier2_fail=1
 startup_halt_on_tier3_fail=0
 
 # Dedicated table/procedure Tier 3 tests use - never the same objects
-# real business data lives in.
+# real business data lives in. Not yet consumed by any implemented
+# test (Tier 3 is a later pass), but set here ready for when it is.
 test_table_name=UNIT_TEST_FIELD_TEST
 test_table_owner=DATA_MANAGER
 test_procedure_name=UNIT_TEST_SAMPLE_PROC
 
-# Whether a consolidated PASS/FAIL summary is written to the unit
-# test's own dedicated log file (see unit_test_log_file_name below),
-# in addition to the detailed per-test messages.
+# Whether a consolidated PASS/FAIL summary is written to Data_Manager.log
+# in addition to the detailed per-test log.
 unit_test_log_summary_enabled=1
-
-# The self-test's own dedicated log file (added 2026-08-02) - keeps
-# results immediately visible in one place, rather than mixed into
-# Data_Manager.log's own, much larger stream.
-unit_test_log_file_name=/home/leyden100/eclipse-workspace/OCI_Wrapper/logs/start_unit_tests.log
-unit_test_log_file_max_size=10485760
-unit_test_log_file_rotation_number=5
-unit_test_log_level=DEBUG
