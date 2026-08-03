@@ -410,6 +410,31 @@ typedef struct
     int  session_log_create;
     int  session_log_end;
     int  session_log_reconcile;
+    
+    /* ================================================================
+     * File Consumer / Dispatcher parameters (File_Consumer_proposal v1.2)
+     * consumer_type selects which consumer ini gets loaded as a second
+     * load_ini() pass in main() - see patch_main_c_snippet.txt.
+     * ================================================================ */
+    char consumer_type[32];              /* FILE | HTTP | MQ */
+    char consumer_ini_path[256];         /* full path to the consumer_type-specific
+                                             ini file, e.g. .../Props/consumer_file.ini -
+                                             read here so it's available before
+                                             load_consumer_ini() is called            */
+
+    int  dispatcher_queue_count;         /* == worker thread count      */
+    int  dispatcher_queue_depth;         /* items/queue before QUEUE_FULL */
+    char dispatcher_algorithm[32];       /* round_robin (Defined) | least_busy (Pending) */
+
+    char file_consumer_input_xml_dir     [256];
+    char file_consumer_processing_xml_dir[256];
+    char file_consumer_output_xml_dir    [256];
+    char file_consumer_error_xml_dir     [256];
+
+    char file_consumer_input_json_dir     [256];
+    char file_consumer_processing_json_dir[256];
+    char file_consumer_output_json_dir    [256];
+    char file_consumer_error_json_dir     [256];
 
 } app_config_t;
 
@@ -422,6 +447,7 @@ double      ini_get_double(const ini_file_t *ini, const char *name, double defau
 int         ini_get_bool (const ini_file_t *ini, const char *name, int default_val);
 void        ini_dump     (const ini_file_t *ini);
 int         load_ini     (const char *filename, app_config_t *config, oci_context_t *ctx);
+int         load_consumer_ini(const char *filename, app_config_t *config);
 int         populate_ctx_from_ini(app_config_t *ini);
 
 #endif /* INI_READER_H */

@@ -408,6 +408,19 @@ static ctx_config_map_t ctx_map[] = {
 	    { "session_log_end",                CFG_BOOL,   offsetof(app_config_t, session_log_end),                NULL, 1      },
 	    { "session_log_reconcile",          CFG_BOOL,   offsetof(app_config_t, session_log_reconcile),          NULL, 1      },
 
+
+		   /* ----------------------------------------------------------------
+		     * File Consumer / Dispatcher (File_Consumer_proposal v1.2)
+		     * Only consumer_type lives here - it belongs to config.ini and
+		     * selects which consumer ini to load. The other 10 dispatcher/
+		     * file_consumer keys live in their own consumer_map[] below and
+		     * are validated independently by load_consumer_ini() against
+		     * consumer_file.ini - see that function's own comment for why
+		     * they can't share ctx_map/load_ini() with config.ini's keys.
+		     * ---------------------------------------------------------------- */
+		    { "consumer_type",          CFG_STRING, offsetof(app_config_t, consumer_type),          "FILE", 0 },
+		    { "consumer_ini_path",      CFG_STRING, offsetof(app_config_t, consumer_ini_path),      "", 0 },
+
 };
 
 static size_t ctx_map_count = sizeof(ctx_map) / sizeof(ctx_map[0]);
@@ -751,6 +764,11 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                     else if (!strcmp(m->name,"nls_characterset"))             maxlen=sizeof(config->nls_characterset);
                     else if (!strcmp(m->name,"nls_session_timezone"))         maxlen=sizeof(config->nls_session_timezone);
 
+
+                    else if (!strcmp(m->name,"consumer_type"))                     maxlen=sizeof(config->consumer_type);
+                    else if (!strcmp(m->name,"consumer_ini_path"))                 maxlen=sizeof(config->consumer_ini_path);
+
+
                     if (maxlen == 0)
                     {
                         /* No branch above matched - the real destination
@@ -879,3 +897,176 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
     return 0;
 }
 
+
+/* ======================================================================
+ * File Consumer / Dispatcher configuration (File_Consumer_proposal v1.2)
+ *
+ * Deliberately NOT part of ctx_map[]/load_ini(): that loader's missing-
+ * key validation checks its FULL map against whichever single file it's
+ * given, so a key belonging to config.ini and a key belonging to
+ * consumer_file.ini can never both pass in the same shared map - one
+ * file will always be reported as missing the other's keys. These 10
+ * keys get their own map and their own loader instead, validated
+ * independently against consumer_file.ini. consumer_type itself stays
+ * in ctx_map/config.ini - it's what selects this file in the first
+ * place, so it has to be readable before this function is ever called.
+ * ====================================================================== */
+
+typedef struct {
+    const char *name;
+    cfg_type_t  type;
+    size_t      offset;
+    size_t      maxlen;        /* CFG_STRING only, via sizeof() below -
+                                   no name-matching chain needed here   */
+    const char *default_str;
+    int         default_int;
+} consumer_config_map_t;
+
+static consumer_config_map_t consumer_map[] = {
+
+    { "dispatcher.queue_count", CFG_INT,    offsetof(app_config_t, dispatcher_queue_count), 0,
+        NULL, 5   },
+    { "dispatcher.queue_depth", CFG_INT,    offsetof(app_config_t, dispatcher_queue_depth), 0,
+        NULL, 500 },
+    { "dispatcher.algorithm",   CFG_STRING, offsetof(app_config_t, dispatcher_algorithm),
+        sizeof(((app_config_t *)0)->dispatcher_algorithm), "round_robin", 0 },
+
+    { "file_consumer.input_xml_dir",      CFG_STRING, offsetof(app_config_t, file_consumer_input_xml_dir),
+        sizeof(((app_config_t *)0)->file_consumer_input_xml_dir),      "./Input_XML",      0 },
+    { "file_consumer.processing_xml_dir", CFG_STRING, offsetof(app_config_t, file_consumer_processing_xml_dir),
+        sizeof(((app_config_t *)0)->file_consumer_processing_xml_dir), "./Processing_XML", 0 },
+    { "file_consumer.output_xml_dir",     CFG_STRING, offsetof(app_config_t, file_consumer_output_xml_dir),
+        sizeof(((app_config_t *)0)->file_consumer_output_xml_dir),     "./Output_XML",     0 },
+    { "file_consumer.error_xml_dir",      CFG_STRING, offsetof(app_config_t, file_consumer_error_xml_dir),
+        sizeof(((app_config_t *)0)->file_consumer_error_xml_dir),      "./Error_XML",      0 },
+
+    { "file_consumer.input_json_dir",      CFG_STRING, offsetof(app_config_t, file_consumer_input_json_dir),
+        sizeof(((app_config_t *)0)->file_consumer_input_json_dir),      "./Input_JSON",      0 },
+    { "file_consumer.processing_json_dir", CFG_STRING, offsetof(app_config_t, file_consumer_processing_json_dir),
+        sizeof(((app_config_t *)0)->file_consumer_processing_json_dir), "./Processing_JSON", 0 },
+    { "file_consumer.output_json_dir",     CFG_STRING, offsetof(app_config_t, file_consumer_output_json_dir),
+        sizeof(((app_config_t *)0)->file_consumer_output_json_dir),     "./Output_JSON",     0 },
+    { "file_consumer.error_json_dir",      CFG_STRING, offsetof(app_config_t, file_consumer_error_json_dir),
+        sizeof(((app_config_t *)0)->file_consumer_error_json_dir),      "./Error_JSON",      0 },
+};
+
+static size_t consumer_map_count = sizeof(consumer_map) / sizeof(consumer_map[0]);
+
+int load_consumer_ini(const char *filename, app_config_t *config)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return -1;
+
+    ini_file_t ini;
+    size_t capacity = 16;
+    ini.entries = malloc(capacity * sizeof(ini_entry_t));
+    ini.count   = 0;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp))
+    {
+        char *p = trim(line);
+        if (*p == '#' || (p[0] == '/' && p[1] == '/')) continue;
+        if (*p == '\0') continue;
+
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = '\0';
+
+        char *name  = trim(p);
+        char *value = trim(eq + 1);
+
+        {
+            char *cp = value;
+            while (*cp)
+            {
+                if ((cp[0] == '#') ||
+                    (cp[0] == '/' && cp[1] == '/'))
+                { *cp = '\0'; break; }
+                cp++;
+            }
+            value = trim(value);
+        }
+
+        if (ini.count >= capacity)
+        {
+            capacity *= 2;
+            ini.entries = realloc(ini.entries, capacity * sizeof(ini_entry_t));
+        }
+        ini.entries[ini.count].name  = strdup(name);
+        ini.entries[ini.count].value = strdup(value);
+        ini.count++;
+    }
+    fclose(fp);
+
+    int *loaded = calloc(consumer_map_count, sizeof(int));
+
+    for (size_t i = 0; i < consumer_map_count; i++)
+    {
+        consumer_config_map_t *m = &consumer_map[i];
+        char *field_ptr = (char *)config + m->offset;
+
+        loaded[i] = ini_has_key(&ini, m->name);
+
+        switch (m->type)
+        {
+            case CFG_INT:
+            {
+                int val = ini_get_int(&ini, m->name, m->default_int);
+                *((int *)field_ptr) = val;
+                break;
+            }
+            case CFG_STRING:
+            {
+                const char *val = ini_get_str(&ini, m->name, m->default_str);
+                if (val && m->maxlen > 0)
+                {
+                    strncpy(field_ptr, val, m->maxlen - 1);
+                    field_ptr[m->maxlen - 1] = '\0';
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    int missing_count = 0;
+    for (size_t i = 0; i < consumer_map_count; i++)
+        if (!loaded[i]) missing_count++;
+
+    if (missing_count > 0)
+    {
+        printf("\n");
+        printf("================================================================\n");
+        printf("CONSUMER CONFIG VALIDATION FAILED: %d expected setting(s) missing from %s\n",
+               missing_count, filename);
+        printf("================================================================\n");
+
+        for (size_t i = 0; i < consumer_map_count; i++)
+        {
+            if (loaded[i]) continue;
+            consumer_config_map_t *m = &consumer_map[i];
+            if (m->type == CFG_STRING)
+                printf("  MISSING: %-40s (would default to: \"%s\")\n",
+                       m->name, m->default_str ? m->default_str : "");
+            else
+                printf("  MISSING: %-40s (would default to: %d)\n",
+                       m->name, m->default_int);
+        }
+
+        printf("================================================================\n");
+        printf("Refusing to start with %d missing consumer configuration key(s).\n",
+               missing_count);
+        printf("Add the key(s) above to %s and try again.\n", filename);
+        printf("================================================================\n\n");
+
+        free(loaded);
+        ini_free(&ini);
+        return -1;
+    }
+
+    free(loaded);
+    ini_free(&ini);
+    return 0;
+}

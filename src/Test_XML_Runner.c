@@ -1368,6 +1368,20 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+
+
+    /* In main(), after load_ini(config_ini_path, &config, &ctx) succeeds,
+     * config.consumer_ini_path is already populated - just pass it straight
+     * through instead of building/hardcoding a path: */
+
+    if (load_consumer_ini(config.consumer_ini_path, &config) != 0)
+    {
+        printf("Failed to load consumer ini file: %s\n", config.consumer_ini_path);
+        return -1;
+    }
+
+
+
     /* Record the real config.ini path for UT-INI-002's own re-run of
      * load_ini() against this same known-good file - see
      * unit_test_set_ini_path()'s own doc comment in
