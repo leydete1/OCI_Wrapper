@@ -14,6 +14,11 @@
  * purely a file split, verified line-for-line against the original
  * before being wired in. See File_Consumer_Implementation_Plan.md,
  * Stage 1.
+ *
+ * Logs to ctx->dispatcher_logger (its own dedicated log file,
+ * dispatcher_log_file_name in config.ini) rather than borrowing
+ * connectionpool_logger as it did at first - added post-Stage-2 so
+ * dispatch activity is easy to isolate for review.
  * ====================================================================== */
 
 #include "OCI_Connection.h"   /* oci_context_t */

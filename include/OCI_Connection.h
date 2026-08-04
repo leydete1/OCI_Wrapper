@@ -52,6 +52,18 @@ typedef struct oci_context_t {
    logger_t		 *audit_logger;
    logger_t      *session_logger;
    logger_t      *sql_parser_logger;
+   logger_t      *file_consumer_logger;  /* File_Consumer_proposal v1.2,
+                                             Stage 2 - file_consumer.c   */
+   logger_t      *dispatcher_logger;     /* File_Consumer_proposal v1.2,
+                                             Stage 1 - dispatcher.c.
+                                             worker_logger will follow
+                                             the same pattern once
+                                             worker.c exists (Stage 5) -
+                                             not added yet since a
+                                             shared-vs-per-worker logger
+                                             design call is better made
+                                             when that code is actually
+                                             being written.             */
     app_config_t *ini;
     char         *NLS_DATE_FORMAT;       /* e.g. "YYYY-MM-DD HH24:MI:SS"  */
     char         *log_file_name;

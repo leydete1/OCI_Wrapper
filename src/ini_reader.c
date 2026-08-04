@@ -73,6 +73,16 @@ static ctx_config_map_t ctx_map[] = {
     { "select_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, select_log_file_rotation_number),NULL, 5 },
     { "select_log_level",              CFG_STRING, offsetof(app_config_t, select_log_level),               "DEBUG", 0 },
 
+    { "file_consumer_log_file_name",          CFG_STRING, offsetof(app_config_t, file_consumer_log_file_name),          "file_consumer_app.log", 0 },
+    { "file_consumer_log_file_max_size",      CFG_INT,    offsetof(app_config_t, file_consumer_log_file_max_size),       NULL, 10485760 },
+    { "file_consumer_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, file_consumer_log_file_rotation_number),NULL, 5 },
+    { "file_consumer_log_level",              CFG_STRING, offsetof(app_config_t, file_consumer_log_level),               "DEBUG", 0 },
+
+    { "dispatcher_log_file_name",          CFG_STRING, offsetof(app_config_t, dispatcher_log_file_name),          "dispatcher_app.log", 0 },
+    { "dispatcher_log_file_max_size",      CFG_INT,    offsetof(app_config_t, dispatcher_log_file_max_size),       NULL, 10485760 },
+    { "dispatcher_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, dispatcher_log_file_rotation_number),NULL, 5 },
+    { "dispatcher_log_level",              CFG_STRING, offsetof(app_config_t, dispatcher_log_level),               "DEBUG", 0 },
+
 
 	/* ----------------------------------------------------------------
      * Logging cache log
@@ -642,6 +652,10 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                     else if (!strcmp(m->name,"log_level"))                  maxlen=sizeof(config->log_level);
                     else if      (!strcmp(m->name,"select_log_file_name"))              maxlen=sizeof(config->select_log_file_name);
 					else if (!strcmp(m->name,"select_log_level"))                  maxlen=sizeof(config->select_log_level);
+					else if (!strcmp(m->name,"file_consumer_log_file_name"))       maxlen=sizeof(config->file_consumer_log_file_name);
+					else if (!strcmp(m->name,"file_consumer_log_level"))           maxlen=sizeof(config->file_consumer_log_level);
+					else if (!strcmp(m->name,"dispatcher_log_file_name"))          maxlen=sizeof(config->dispatcher_log_file_name);
+					else if (!strcmp(m->name,"dispatcher_log_level"))              maxlen=sizeof(config->dispatcher_log_level);
 					else if      (!strcmp(m->name,"cache_log_file_name"))              maxlen=sizeof(config->cache_log_file_name);
 				     else if (!strcmp(m->name,"cache_log_level"))                  maxlen=sizeof(config->cache_log_level);
 				     else if      (!strcmp(m->name,"Metadata_log_file_name"))              maxlen=sizeof(config->Metadata_log_file_name);

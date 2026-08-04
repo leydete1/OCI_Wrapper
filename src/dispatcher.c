@@ -140,21 +140,21 @@ static int dispatch_select(oci_context_t *ctx,
                             const char    *filename,
                             const char    *xml)
 {
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                  "Dispatching SELECT: %s", filename);
 
 
     /*Comment out these lines to remove tester for the parser*/
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                   "***********Calling Test_sql_dependency_extractor ***********************");
     /*TL 21-June comment out this test as invalid sql has an issue with returing 0 when a previous phase of test fail*/
     /*test_sql_dependency_extractor(ctx);*/
 
 
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                    "***********Finished Test_sql_dependency_extractor ***********************");
 
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                   "****** Calling get_table_metadata OCI_FIELD_TEST ******");
 
     table_metadata_alltabs_t *tm = get_table_metadata(ctx,
@@ -162,7 +162,7 @@ static int dispatch_select(oci_context_t *ctx,
                                                 "OCI_FIELD_TEST");
      if (tm)
      {
-         logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+         logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                       "get_table_metadata OK: owner='%s' table='%s' "
                       "status='%s' num_rows=%.0f compression='%s' "
                       "partitioned='%s' last_analyzed='%s'",
@@ -179,18 +179,18 @@ static int dispatch_select(oci_context_t *ctx,
      }
      else
      {
-         logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                       "get_table_metadata FAILED for OCI_FIELD_TEST "
                       "- check Metadata_Data_Manager.log");
      }
 
-     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+     logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                   "****** Finished get_table_metadata ******");
 
     char sql_buf[8192] = {0};
     if (!extract_tag(xml, "sql", sql_buf, sizeof(sql_buf)))
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT]: %s - no <sql> element found",
                      filename);
         return -1;
@@ -209,15 +209,15 @@ static int dispatch_select(oci_context_t *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [SELECT]: %s", filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT]: %s (rc=%d)", filename, rc);
     }
 
@@ -246,7 +246,7 @@ static int dispatch_select_new(oci_context_t       *ctx,
 
     if (!req)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT/new]: %s - no select_request_t payload",
                      filename);
         return -1;
@@ -290,19 +290,19 @@ static int dispatch_select_new(oci_context_t       *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [SELECT/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
         if (cfg.OUTPUT_JSON)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
     }
@@ -338,7 +338,7 @@ static int dispatch_insert_new(oci_context_t       *ctx,
 
     if (!req)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [INSERT/new]: %s - no insert_request_t payload",
                      filename);
         return -1;
@@ -358,19 +358,19 @@ static int dispatch_insert_new(oci_context_t       *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [INSERT/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
         if (cfg.OUTPUT_JSON)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [INSERT/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
     }
@@ -402,7 +402,7 @@ static int dispatch_update_new(oci_context_t       *ctx,
 
     if (!req)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [UPDATE/new]: %s - no update_request_t payload",
                      filename);
         return -1;
@@ -422,19 +422,19 @@ static int dispatch_update_new(oci_context_t       *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [UPDATE/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
         if (cfg.OUTPUT_JSON)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [UPDATE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
     }
@@ -466,7 +466,7 @@ static int dispatch_delete_new(oci_context_t       *ctx,
 
     if (!req)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [DELETE/new]: %s - no delete_request_t payload",
                      filename);
         return -1;
@@ -486,19 +486,19 @@ static int dispatch_delete_new(oci_context_t       *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [DELETE/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
         if (cfg.OUTPUT_JSON)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [DELETE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
     }
@@ -530,7 +530,7 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 
     if (!req)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [EXECUTE_PROCEDURE/new]: %s - no "
                      "execute_procedure_request_t payload",
                      filename);
@@ -551,19 +551,19 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 
     if (rc == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [EXECUTE_PROCEDURE/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
         if (cfg.OUTPUT_JSON)
-            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
     }
     else
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [EXECUTE_PROCEDURE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
     }
@@ -592,12 +592,12 @@ int process_xml_file(oci_context_t *ctx,
 
     if (!xml)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "Failed to read file: %s", filepath);
         return -1;
     }
     if (xml) {
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "Read file: %s.  Updating ctx->INPUT_XML", filepath);
         free(ctx->INPUT_XML);                  /* clear any previous value  */
         ctx->INPUT_XML = strdup(xml);          /* heap copy - ctx owns it   */
@@ -625,14 +625,14 @@ int process_xml_file(oci_context_t *ctx,
 
         if (level1_rc != LEVEL1_OK)
         {
-            logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+            logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                          "FAIL [Level1] %s error_code=%s error_text=%s",
                          filename, level1_error.error_code, level1_error.error_text);
             free(xml);
             return -1;
         }
 
-        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "File='%s' matched new request format - audit_id=%s "
                      "operations=%d", filename, new_request.external_audit_id,
                      new_request.operation_count);
@@ -677,7 +677,7 @@ int process_xml_file(oci_context_t *ctx,
                      * anyway. Logged clearly rather than silently
                      * skipped, so it's obvious in the log why nothing
                      * happened for this operation.                     */
-                    logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                    logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                                  "File='%s' operation[%d] type=%d - new "
                                  "pipeline only implements SELECT/INSERT/"
                                  "UPDATE/DELETE/EXECUTE_PROCEDURE so far, "
@@ -693,7 +693,7 @@ int process_xml_file(oci_context_t *ctx,
                 { failed_op = i; break; }
 
             if (failed_op >= 0)
-                logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+                logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                              "FAIL [Level2] %s operation[%d] error_code=%s error_text=%s",
                              filename, failed_op,
                              new_request.operations[failed_op].validation_status.error_code,
@@ -711,14 +711,14 @@ int process_xml_file(oci_context_t *ctx,
     char operation[MAX_OPERATION_LEN] = {0};
     if (!extract_tag(xml, "operation", operation, sizeof(operation)))
     {
-        logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                      "No <operation> found in %s - skipping", filename);
         free(xml);
         return 0;
     }
     upper(operation);
 
-    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                  "File='%s' operation='%s' size=%ld bytes",
                  filename, operation, len);
 
@@ -726,7 +726,7 @@ int process_xml_file(oci_context_t *ctx,
 
     if      (strcmp(operation, "INSERT") == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "File='%s' is old flat-XML INSERT format - no longer "
                      "supported (execute_insert_batch() now requires "
                      "insert_request_t via the new pipeline). Convert this "
@@ -738,7 +738,7 @@ int process_xml_file(oci_context_t *ctx,
         rc = dispatch_select(ctx, filename, xml);
     else if (strcmp(operation, "UPDATE") == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "File='%s' is old flat-XML UPDATE format - no longer "
                      "supported (execute_update_batch() now requires "
                      "update_request_t via the new pipeline). Convert this "
@@ -748,7 +748,7 @@ int process_xml_file(oci_context_t *ctx,
     }
     else if (strcmp(operation, "DELETE") == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "File='%s' is old flat-XML DELETE format - no longer "
                      "supported (execute_delete_batch() now requires "
                      "delete_request_t via the new pipeline). Convert this "
@@ -758,7 +758,7 @@ int process_xml_file(oci_context_t *ctx,
     }
     else if (strcmp(operation, "EXECUTE_PROCEDURE") == 0)
     {
-        logger_write(ctx->connectionpool_logger, LOG_ERROR, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "File='%s' is old flat-XML EXECUTE_PROCEDURE format - "
                      "no longer supported (execute_procedure() now requires "
                      "execute_procedure_request_t via the new pipeline). "
@@ -767,7 +767,7 @@ int process_xml_file(oci_context_t *ctx,
         rc = -1;
     }
     else
-        logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+        logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                      "Unknown operation '%s' in %s - skipping",
                      operation, filename);
 

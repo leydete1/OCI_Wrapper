@@ -90,6 +90,7 @@
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Execute_Query_Batch_Module.h"
 #include "dispatcher.h"
+#include "file_consumer.h"
 
 /* looks_like_new_request_format()'s own forward declaration removed
  * 2026-08-01 - now level1_looks_like_new_format(), declared in
@@ -231,6 +232,13 @@ static dep_test_case_t test_cases[] = {
 
 /* MAX_XML_FILE_SIZE / MAX_OPERATION_LEN moved to dispatcher.c (Stage 1
  * extraction) - both were only used by code that moved with them.     */
+
+/* Stage 2 test-only knob: how many one-shot file_consumer_run_once()
+ * passes to run per invocation, purely to generate a decent volume of
+ * log output for review. Not a real polling interval - a continuous
+ * loop is a later, separate decision. Safe to bump up/down or drop
+ * entirely once Stage 2 is done being eyeballed.                      */
+#define FILE_CONSUMER_TEST_PASSES  4
 
 
 /* ================================================================== */
@@ -563,7 +571,9 @@ static int initialise_loggers(oci_context_t *ctx,
 							   logger_t		 *crypt_logger,
 							   logger_t		 *audit_logger,
 							   logger_t      *session_logger,
-							   logger_t      *sql_parser_logger)
+							   logger_t      *sql_parser_logger,
+							   logger_t      *file_consumer_logger,
+							   logger_t      *dispatcher_logger)
 {
 
     /* ---- error logger MUST BE initialized first---- */
@@ -631,6 +641,42 @@ static int initialise_loggers(oci_context_t *ctx,
     ctx->select_logger = select_logger;
     printf("Initialize select logger name =%s complete successful.\n",
            ctx->ini->select_log_file_name);
+
+    /* ---- File Consumer logger (File_Consumer_proposal v1.2, Stage 2) ---- */
+    printf("Initialize file_consumer logger name =%sx\n",
+           ctx->ini->file_consumer_log_file_name);
+    if (logger_init_str2(file_consumer_logger,
+                        ctx->ini->file_consumer_log_file_name,
+                        ctx->ini->file_consumer_log_file_max_size,
+                        ctx->ini->file_consumer_log_file_rotation_number,
+                        ctx->ini->file_consumer_log_level,
+						ctx->error_logger) != 0)
+    {
+        printf("Failed to initialise file_consumer logger: %s\n",
+               ctx->ini->file_consumer_log_file_name);
+        return -1;
+    }
+    ctx->file_consumer_logger = file_consumer_logger;
+    printf("Initialize file_consumer logger name =%s complete successful.\n",
+           ctx->ini->file_consumer_log_file_name);
+
+    /* ---- Dispatcher logger (File_Consumer_proposal v1.2, Stage 1) ---- */
+    printf("Initialize dispatcher logger name =%sx\n",
+           ctx->ini->dispatcher_log_file_name);
+    if (logger_init_str2(dispatcher_logger,
+                        ctx->ini->dispatcher_log_file_name,
+                        ctx->ini->dispatcher_log_file_max_size,
+                        ctx->ini->dispatcher_log_file_rotation_number,
+                        ctx->ini->dispatcher_log_level,
+						ctx->error_logger) != 0)
+    {
+        printf("Failed to initialise dispatcher logger: %s\n",
+               ctx->ini->dispatcher_log_file_name);
+        return -1;
+    }
+    ctx->dispatcher_logger = dispatcher_logger;
+    printf("Initialize dispatcher logger name =%s complete successful.\n",
+           ctx->ini->dispatcher_log_file_name);
 
     /* ---- Cache logger ---- */
     printf("Initialize cache logger name =%sx\n",
@@ -973,6 +1019,8 @@ int main(int argc, char *argv[])
     logger_t	  audit_logger;
     logger_t	  session_logger;
     logger_t	  sql_parser_logger;
+    logger_t	  file_consumer_logger;
+    logger_t	  dispatcher_logger;
 
 
 
@@ -986,6 +1034,16 @@ int main(int argc, char *argv[])
     if (load_ini(argv[1], &config, &ctx) != 0)
     {
         printf("Failed to load ini file: %s\n", argv[1]);
+        return -1;
+    }
+
+    /* ---- Load consumer-type-specific ini (File_Consumer_proposal v1.2).
+     * config.consumer_ini_path is already populated by load_ini() above
+     * (it's a plain config.ini key) - just pass it straight through.
+     * ---- */
+    if (load_consumer_ini(config.consumer_ini_path, &config) != 0)
+    {
+        printf("Failed to load consumer ini file: %s\n", config.consumer_ini_path);
         return -1;
     }
 
@@ -1016,7 +1074,9 @@ int main(int argc, char *argv[])
 							&crypt_logger,
 							&audit_logger,
 							&session_logger,
-							&sql_parser_logger
+							&sql_parser_logger,
+							&file_consumer_logger,
+							&dispatcher_logger
     				) != 0)
     {
         printf("Failed to initialise loggers - exiting\n");
@@ -1324,6 +1384,8 @@ int main(int argc, char *argv[])
         worker_ctx.audit_logger          = ctx.audit_logger;
         worker_ctx.session_logger        = ctx.session_logger;
         worker_ctx.sql_parser_logger     = ctx.sql_parser_logger;
+        worker_ctx.file_consumer_logger  = ctx.file_consumer_logger;
+        worker_ctx.dispatcher_logger     = ctx.dispatcher_logger;
         worker_ctx.metadata_cache        = ctx.metadata_cache;
         worker_ctx.session_cache        = ctx.session_cache;
 
@@ -1365,6 +1427,72 @@ int main(int argc, char *argv[])
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "Pinned pool session slot=%d for the duration of "
                      "the transaction", worker_ctx.pool_slot_index);
+    }
+
+    /* ================================================================
+     * consumer_type=FILE (File_Consumer_proposal v1.2, Stage 2)
+     *
+     * One-shot for now - a single scan-validate-move-dispatch pass over
+     * Input_XML/Input_JSON, then exit. No polling loop yet (that's a
+     * later decision, not this stage's job) and no continuation into
+     * the fixture-directory test harness below: that harness wraps
+     * every file in one shared tx_begin/tx_commit spanning the whole
+     * batch, which is a completely different session/transaction model
+     * than the File Consumer's "one request, one atomic session, then
+     * the session goes back to the pool" design (Payload Ownership
+     * addendum). The two are not meant to run in the same pass.
+     * ================================================================ */
+    if (strcasecmp(config.consumer_type, "FILE") == 0)
+    {
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "consumer_type=FILE - running File Consumer "
+                     "(Stage 2, %d one-shot passes)", FILE_CONSUMER_TEST_PASSES);
+
+        int fc_total = 0;
+        int fc_had_failure = 0;
+
+        for (int pass = 1; pass <= FILE_CONSUMER_TEST_PASSES; pass++)
+        {
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "File Consumer pass %d/%d", pass, FILE_CONSUMER_TEST_PASSES);
+
+            int fc_rc = file_consumer_run_once(tx_ctx, &config);
+
+            if (fc_rc < 0)
+            {
+                logger_write(&logger, LOG_ERROR, __func__, 0,
+                             "File Consumer pass %d failed - see log above",
+                             pass);
+                fc_had_failure = 1;
+            }
+            else
+            {
+                logger_write(&logger, LOG_INFO, __func__, 0,
+                             "File Consumer pass %d complete - %d file(s) "
+                             "dispatched", pass, fc_rc);
+                fc_total += fc_rc;
+            }
+        }
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "File Consumer test run complete - %d pass(es), "
+                     "%d file(s) dispatched total", FILE_CONSUMER_TEST_PASSES,
+                     fc_total);
+
+        if (use_pool)
+        {
+            OCI_Pool_release_session(&ctx, tx_ctx);
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Released pinned pool session back to pool");
+            OCI_Disconnect_pool(&ctx);
+        }
+        else
+        {
+            OCI_Disconnect(&ctx);
+        }
+
+        logger_close(&logger);
+        return fc_had_failure ? -1 : 0;
     }
 
     /*TL June 13 : For a test,  lets encase every test in 1 transaction, using transaction manager*/

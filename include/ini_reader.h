@@ -51,6 +51,21 @@ typedef struct
     char select_log_level[20];
     int  select_log_level_num;
 
+	/* File Consumer log file (File_Consumer_proposal v1.2, Stage 2) -
+	 * file_consumer.c's own dedicated log, separate from the shared
+	 * connectionpool_logger it was borrowing before. */
+	char file_consumer_log_file_name[256];
+    int  file_consumer_log_file_max_size;
+    int  file_consumer_log_file_rotation_number;
+    char file_consumer_log_level[20];
+
+	/* Dispatcher log file (File_Consumer_proposal v1.2, Stage 1) -
+	 * dispatcher.c's own dedicated log, same reasoning as above. */
+	char dispatcher_log_file_name[256];
+    int  dispatcher_log_file_max_size;
+    int  dispatcher_log_file_rotation_number;
+    char dispatcher_log_level[20];
+
 
 	/*Metadata log file*/
 	char Metadata_log_file_name[256];
