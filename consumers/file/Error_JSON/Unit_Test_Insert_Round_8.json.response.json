@@ -1,1 +1,1 @@
-{"status":"ERROR","audit_id":"audit_stub_insert_round_8","operation":"-","error_code":"LEVEL2_FIELD_INVALID","error_text":"Row 1: NOT NULL column 'CHANGE_REASON' (no default) was not supplied"}
+{"status":"ERROR","audit_id":"-","operation":"-","error_code":"QUEUE_FULL","error_text":"All dispatcher queues are at capacity - rejected without blocking or retry"}

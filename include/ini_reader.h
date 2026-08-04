@@ -66,6 +66,15 @@ typedef struct
     int  dispatcher_log_file_rotation_number;
     char dispatcher_log_level[20];
 
+	/* Worker log file (File_Consumer_proposal v1.2, Stage 4) - worker.c's
+	 * own dedicated log. Single shared log across however many workers
+	 * eventually write to it - see OCI_Connection.h's worker_logger
+	 * field for the thread-safety reasoning. */
+	char worker_log_file_name[256];
+    int  worker_log_file_max_size;
+    int  worker_log_file_rotation_number;
+    char worker_log_level[20];
+
 
 	/*Metadata log file*/
 	char Metadata_log_file_name[256];

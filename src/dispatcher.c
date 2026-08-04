@@ -203,7 +203,7 @@ static char *json_escape_alloc(const char *s)
 /*  structured detail yet). Always leaves resp in a valid, writable     */
 /*  state - response_body is guaranteed non-NULL after this returns.    */
 /* ------------------------------------------------------------------ */
-static void build_error_envelope(response_object_t *resp,
+void build_error_envelope(response_object_t *resp,
                                   const char         *audit_id,
                                   const char         *operation,
                                   const char         *error_code,
@@ -904,28 +904,34 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 /*  Read file, extract operation, dispatch to correct handler.         */
 /* ================================================================== */
 int process_xml_file(oci_context_t      *ctx,
-                      const char         *filepath,
+                      const char         *payload,
+                      long                payload_length,
                       const char         *filename,
                       response_object_t  *resp)
 {
-    long  len = 0;
+    /* xml/len aliases keep the rest of this function's body (which
+     * pervasively used these names when it did its own read_file()
+     * call) unchanged below - payload is caller-owned now, not
+     * allocated here, so there's deliberately no free(xml) anywhere
+     * in this function anymore (Stage 4 - see dispatcher.h's own doc
+     * comment on the Payload Ownership addendum).                     */
+    const char *xml = payload;
+    long        len = payload_length;
 
-    char *xml = read_file(filepath, &len);
-
-    if (!xml)
+    if (!xml || len <= 0)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
-                     "Failed to read file: %s", filepath);
-        /* Format unknown at this point (couldn't even read the file to
-         * sniff it) - default to XML, matching the format most existing
-         * fixtures use. */
-        build_error_envelope(resp, "-", "-", "FILE_READ_FAILED",
-                              "Failed to read input file - see dispatcher log", 0);
+                     "process_xml_file() called with empty/NULL payload "
+                     "for '%s' - this violates the caller's contract",
+                     filename ? filename : "-");
+        build_error_envelope(resp, "-", "-", "EMPTY_PAYLOAD",
+                              "process_xml_file() received an empty payload", 0);
         return -1;
     }
-    if (xml) {
+
+    {
         logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                     "Read file: %s.  Updating ctx->INPUT_XML", filepath);
+                     "Processing '%s'.  Updating ctx->INPUT_XML", filename);
         free(ctx->INPUT_XML);                  /* clear any previous value  */
         ctx->INPUT_XML = strdup(xml);          /* heap copy - ctx owns it   */
     }
@@ -961,7 +967,6 @@ int process_xml_file(oci_context_t      *ctx,
              * above). */
             build_error_envelope(resp, "-", "-", level1_error.error_code,
                                   level1_error.error_text, 0);
-            free(xml);
             return -1;
         }
 
@@ -1064,7 +1069,6 @@ int process_xml_file(oci_context_t      *ctx,
         }
 
         level1_free_request(&new_request);
-        free(xml);
         return rc;
     }
 
@@ -1086,7 +1090,6 @@ int process_xml_file(oci_context_t      *ctx,
             "<output_xml><execution_envelope><status>SKIPPED</status>"
             "<note>No &lt;operation&gt; element found in input</note>"
             "</execution_envelope></output_xml>\n");
-        free(xml);
         return 0;
     }
     upper(operation);
@@ -1179,6 +1182,5 @@ int process_xml_file(oci_context_t      *ctx,
         free(esc_op);
     }
 
-    free(xml);
     return rc;
 }

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Update Scalar Test
+ WHERE NUMBER_COL=42 identifies the row (created by Insert Round 1).
+ SET VARCHAR2_COL and DATE_COL - scalar-only update, no LOBs.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+ No per-row concept for SET - flat <set>, not <row number="1"> (an
+ UPDATE applies one SET list to however many rows the WHERE clause
+ matches).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_update_scalar</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="UPDATE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>42</key_value></key>
+            </where>
+            <set>
+                <field><field_name>VARCHAR2_COL</field_name><value>Updated by Test_XML_Runner - scalar test</value></field>
+                <field><field_name>DATE_COL</field_name><value>2026-05-23 00:00:00</value></field>
+            </set>
+        </operation>
+    </transaction>
+</request>

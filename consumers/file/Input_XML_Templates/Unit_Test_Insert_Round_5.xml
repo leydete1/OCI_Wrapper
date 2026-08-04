@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 5 - Mixed bulk: scalar + CLOB
+ CLOB present -> CLOB guard fires -> execute_count=1
+ Watch for "forcing execute_count=1" in log.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_5</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>501</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 5 mixed row 1</value></field>
+                <field><field_name>CLOB_COL</field_name><value>CLOB content row 1 - mixed bulk test</value></field>
+            </row>
+            <row number="2">
+                <field><field_name>NUMBER_COL</field_name><value>502</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 5 mixed row 2</value></field>
+                <field><field_name>CLOB_COL</field_name><value>CLOB content row 2 - mixed bulk test</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

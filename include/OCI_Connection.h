@@ -55,15 +55,18 @@ typedef struct oci_context_t {
    logger_t      *file_consumer_logger;  /* File_Consumer_proposal v1.2,
                                              Stage 2 - file_consumer.c   */
    logger_t      *dispatcher_logger;     /* File_Consumer_proposal v1.2,
-                                             Stage 1 - dispatcher.c.
-                                             worker_logger will follow
-                                             the same pattern once
-                                             worker.c exists (Stage 5) -
-                                             not added yet since a
-                                             shared-vs-per-worker logger
-                                             design call is better made
-                                             when that code is actually
-                                             being written.             */
+                                             Stage 1 - dispatcher.c   */
+   logger_t      *worker_logger;         /* File_Consumer_proposal v1.2,
+                                             Stage 4 - worker.c. Single
+                                             shared logger across however
+                                             many callers eventually use
+                                             it (one synchronous caller
+                                             today, N threads from Stage
+                                             5 on) - logger.c's global
+                                             log_mutex already makes this
+                                             safe under real concurrency,
+                                             per the 2026-08-04 design
+                                             discussion.                  */
     app_config_t *ini;
     char         *NLS_DATE_FORMAT;       /* e.g. "YYYY-MM-DD HH24:MI:SS"  */
     char         *log_file_name;

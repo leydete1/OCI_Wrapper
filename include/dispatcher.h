@@ -17,6 +17,15 @@
  * actually write it to Output_* / Error_*. See response_object.h for the
  * full shape and an honest note on error-path content availability.
  *
+ * Stage 4 update: process_xml_file() no longer touches the filesystem
+ * itself - it now takes an already-read payload/payload_length instead
+ * of a filepath, per the Payload Ownership addendum (File Consumer
+ * alone reads files; the Dispatcher/queue/Worker layer works only with
+ * the payload it's handed). read_file() itself is unchanged and still
+ * exported (File Consumer calls it directly now to build each
+ * RequestObject, and dispatch_create_session() in Test_XML_Runner.c
+ * still needs it too).
+ *
  * Logs to ctx->dispatcher_logger (its own dedicated log file,
  * dispatcher_log_file_name in config.ini) rather than borrowing
  * connectionpool_logger as it did at first - added post-Stage-2 so
@@ -29,11 +38,15 @@
 /*
  * process_xml_file()
  *
- * Reads filepath, detects new-format vs legacy flat-XML, and dispatches
- * to the correct handler (level1/level2 pipeline for new-format
+ * Takes an already-read payload (NUL-terminated, payload_length bytes
+ * not counting the terminator - same convention read_file() already
+ * used), detects new-format vs legacy flat-XML, and dispatches to the
+ * correct handler (level1/level2 pipeline for new-format
  * SELECT/INSERT/UPDATE/DELETE/EXECUTE_PROCEDURE; legacy dispatch_select()
  * for old-format SELECT; INSERT/UPDATE/DELETE/EXECUTE_PROCEDURE in
  * legacy flat-XML format are no longer supported and log an error).
+ * filename is metadata only (used in logging and in the response
+ * envelope), not looked up on disk - this function never opens a file.
  *
  * resp must point to a response_object_t the caller has already run
  * through response_object_init() (a stack local is fine). On return,
@@ -48,12 +61,31 @@
  * to inspect the struct.
  *
  * Exported (was static in Test_XML_Runner.c) so both the existing
- * test-runner main() and the File Consumer can call it directly.
+ * test-runner main() and worker.c (via the queue) can call it directly.
  */
 int process_xml_file(oci_context_t      *ctx,
-                      const char         *filepath,
+                      const char         *payload,
+                      long                payload_length,
                       const char         *filename,
                       response_object_t  *resp);
+
+/*
+ * build_error_envelope()
+ *
+ * Synthesizes resp->response_body as a generic error envelope (XML or
+ * JSON per is_json), setting resp->status = RESPONSE_STATUS_ERROR and
+ * the audit_id/operation/error_code/error_text fields. Exported
+ * (originally private to dispatcher.c) specifically so file_consumer.c
+ * can build a QUEUE_FULL response (Stage 4) without duplicating the
+ * XML/JSON escaping logic - see the Queue-Full Behavior addendum,
+ * File_Consumer_proposal v1.2.
+ */
+void build_error_envelope(response_object_t *resp,
+                           const char         *audit_id,
+                           const char         *operation,
+                           const char         *error_code,
+                           const char         *error_text,
+                           int                 is_json);
 
 /*
  * read_file()

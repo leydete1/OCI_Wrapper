@@ -5,18 +5,21 @@
  * file_consumer.h
  *
  * Stage 2 (File_Consumer_proposal v1.2) - single-threaded File Consumer.
- * Scans file_consumer_input_xml_dir / file_consumer_input_json_dir,
- * moves each file it finds into the matching Processing_* folder, then
- * calls process_xml_file() (dispatcher.h) directly - no queue, no
- * worker threads, no Dispatcher round-robin yet. Those come in Stages
- * 4-5 once this stage is proven correct on its own.
+ * Scans file_consumer_input_xml_dir / file_consumer_input_json_dir.
  *
- * Stage 3 update: process_xml_file() now hands back a populated
- * response_object_t instead of just a pass/fail int, and
- * response_manager_write() (response_manager.h) writes that response
- * to Output_* / Error_* and moves the original file there alongside it
- * - Processing_* is transient now rather than an ever-growing pile
- * (Terry's call, 2026-08-04).
+ * Stage 3 update: process_xml_file() hands back a populated
+ * response_object_t, and response_manager_write() (response_manager.h)
+ * writes it to Output_* / Error_* and moves the original file there
+ * alongside it.
+ *
+ * Stage 4 update: File Consumer now reads each file's payload itself
+ * and round-robin enqueues a RequestObject (request_object.h) via
+ * queue_manager, rather than calling process_xml_file() directly - a
+ * single synchronous worker (worker.h) drains everything once the scan
+ * is done. Queue-Full rejections and read failures both skip
+ * Processing_* entirely and go straight from Input_* to Error_*, per
+ * the Queue-Full Behavior addendum. Still no real threads - that's
+ * Stage 5.
  *
  * Logs to ctx->file_consumer_logger (its own dedicated log file,
  * file_consumer_log_file_name in config.ini) rather than borrowing

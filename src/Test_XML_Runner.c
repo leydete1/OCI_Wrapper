@@ -574,7 +574,8 @@ static int initialise_loggers(oci_context_t *ctx,
 							   logger_t      *session_logger,
 							   logger_t      *sql_parser_logger,
 							   logger_t      *file_consumer_logger,
-							   logger_t      *dispatcher_logger)
+							   logger_t      *dispatcher_logger,
+							   logger_t      *worker_logger)
 {
 
     /* ---- error logger MUST BE initialized first---- */
@@ -678,6 +679,24 @@ static int initialise_loggers(oci_context_t *ctx,
     ctx->dispatcher_logger = dispatcher_logger;
     printf("Initialize dispatcher logger name =%s complete successful.\n",
            ctx->ini->dispatcher_log_file_name);
+
+    /* ---- Worker logger (File_Consumer_proposal v1.2, Stage 4) ---- */
+    printf("Initialize worker logger name =%sx\n",
+           ctx->ini->worker_log_file_name);
+    if (logger_init_str2(worker_logger,
+                        ctx->ini->worker_log_file_name,
+                        ctx->ini->worker_log_file_max_size,
+                        ctx->ini->worker_log_file_rotation_number,
+                        ctx->ini->worker_log_level,
+						ctx->error_logger) != 0)
+    {
+        printf("Failed to initialise worker logger: %s\n",
+               ctx->ini->worker_log_file_name);
+        return -1;
+    }
+    ctx->worker_logger = worker_logger;
+    printf("Initialize worker logger name =%s complete successful.\n",
+           ctx->ini->worker_log_file_name);
 
     /* ---- Cache logger ---- */
     printf("Initialize cache logger name =%sx\n",
@@ -1022,6 +1041,7 @@ int main(int argc, char *argv[])
     logger_t	  sql_parser_logger;
     logger_t	  file_consumer_logger;
     logger_t	  dispatcher_logger;
+    logger_t	  worker_logger;
 
 
 
@@ -1077,7 +1097,8 @@ int main(int argc, char *argv[])
 							&session_logger,
 							&sql_parser_logger,
 							&file_consumer_logger,
-							&dispatcher_logger
+							&dispatcher_logger,
+							&worker_logger
     				) != 0)
     {
         printf("Failed to initialise loggers - exiting\n");
@@ -1387,6 +1408,7 @@ int main(int argc, char *argv[])
         worker_ctx.sql_parser_logger     = ctx.sql_parser_logger;
         worker_ctx.file_consumer_logger  = ctx.file_consumer_logger;
         worker_ctx.dispatcher_logger     = ctx.dispatcher_logger;
+        worker_ctx.worker_logger         = ctx.worker_logger;
         worker_ctx.metadata_cache        = ctx.metadata_cache;
         worker_ctx.session_cache        = ctx.session_cache;
 
@@ -1568,11 +1590,30 @@ int main(int argc, char *argv[])
          * Manager - this loop's own tx_begin/tx_commit-per-batch model
          * doesn't match the File Consumer's one-request-one-session
          * design anyway (see the consumer_type=FILE branch above,
-         * which is where Response Manager wiring actually lives).      */
+         * which is where Response Manager wiring actually lives).
+         *
+         * Stage 4 note: process_xml_file() no longer reads the file
+         * itself (Payload Ownership addendum - only File Consumer does
+         * that now, everything else works on payload). This harness
+         * isn't the File Consumer, but it still needs to read the file
+         * before calling process_xml_file() now that the function no
+         * longer does it internally.                                   */
+        long  harness_payload_len = 0;
+        char *harness_payload = read_file(filepath, &harness_payload_len);
+        if (!harness_payload)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "Failed to read file: %s", filepath);
+            failed_ops++;
+            continue;
+        }
+
         response_object_t harness_resp;
         response_object_init(&harness_resp);
-        rc = process_xml_file(tx_ctx, filepath, name, &harness_resp);
+        rc = process_xml_file(tx_ctx, harness_payload, harness_payload_len,
+                               name, &harness_resp);
         response_object_free(&harness_resp);
+        free(harness_payload);
         if (rc == 0)
             passed++;
         else
