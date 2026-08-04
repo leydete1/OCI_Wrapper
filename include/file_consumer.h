@@ -11,12 +11,12 @@
  * worker threads, no Dispatcher round-robin yet. Those come in Stages
  * 4-5 once this stage is proven correct on its own.
  *
- * Scope deliberately stops short of Output_XML/Output_JSON and
- * Error_XML/Error_JSON: writing an actual response body there needs
- * ResponseObject + the Response Manager, which is Stage 3. For now,
- * dispatch pass/fail is logged and the file is left sitting in
- * Processing_* - see file_consumer.c's header comment for the exact
- * reasoning.
+ * Stage 3 update: process_xml_file() now hands back a populated
+ * response_object_t instead of just a pass/fail int, and
+ * response_manager_write() (response_manager.h) writes that response
+ * to Output_* / Error_* and moves the original file there alongside it
+ * - Processing_* is transient now rather than an ever-growing pile
+ * (Terry's call, 2026-08-04).
  *
  * Logs to ctx->file_consumer_logger (its own dedicated log file,
  * file_consumer_log_file_name in config.ini) rather than borrowing

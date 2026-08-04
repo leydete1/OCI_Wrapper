@@ -1,35 +1,26 @@
 /* ======================================================================
  * file_consumer.c
  *
- * Stage 2 (File_Consumer_proposal v1.2).
+ * Stage 2 (File_Consumer_proposal v1.2) scan/validate/move/dispatch
+ * loop, extended in Stage 3 to wire in the ResponseObject + Response
+ * Manager: process_xml_file() now hands back real response content
+ * instead of just a pass/fail int, and response_manager_write() writes
+ * it to Output_* / Error_* and moves the original file there alongside
+ * it (per Terry's call on 2026-08-04 - Processing_* stays transient,
+ * not an ever-growing pile).
  *
- * Deliberately minimal for this stage: no threads, no queues, no
- * Dispatcher round-robin - just prove the scan -> validate -> move ->
- * dispatch loop is correct on its own before Stage 4 wraps it in
- * concurrency. Per the plan's own reasoning (see
- * File_Consumer_Implementation_Plan.md), every stage gets proven
- * single-threaded first.
+ * Still deliberately minimal beyond that: no threads, no queues, no
+ * Dispatcher round-robin - those are Stage 4-5. Per the plan's own
+ * reasoning (File_Consumer_Implementation_Plan.md), every stage gets
+ * proven single-threaded first.
  *
  * What "validate" means at this stage: a lightweight stat()-based
  * check (regular file, non-zero size) before the move to Processing.
  * Deeper read failures (permissions, file vanished, truncated writes
  * between the stat() and the actual read) are still caught - just one
  * layer down, inside process_xml_file()'s own read_file() call, which
- * already logs a clear FAIL and returns -1. This stage doesn't
- * duplicate that check; it just needs to notice the -1 and log it as a
- * File Consumer-level outcome too.
- *
- * What's explicitly NOT here yet: moving the file on to Output_* or
- * Error_* based on the dispatch result. Per the Payload Ownership and
- * Queue-Full Behavior addenda (both merged into the proposal, v1.2),
- * a failed request needs an actual ResponseObject with status=ERROR
- * written to Error_* - not just the original input file relocated
- * there unexplained. That machinery is ResponseObject + Response
- * Manager, which is Stage 3. Until then, dispatched files - pass or
- * fail - are left sitting in Processing_*, and the outcome is only
- * visible in the log. Terry: worth knowing before running this against
- * a real inbox, since Processing_* will just accumulate until Stage 3
- * lands.
+ * now surfaces as a FILE_READ_FAILED error response rather than just a
+ * log line.
  * ====================================================================== */
 
 #define _POSIX_C_SOURCE 200809L
@@ -42,6 +33,8 @@
 
 #include "file_consumer.h"
 #include "dispatcher.h"
+#include "response_object.h"
+#include "response_manager.h"
 #include "logger.h"
 
 /* ------------------------------------------------------------------ */
@@ -53,6 +46,8 @@
 static int process_directory(oci_context_t *ctx,
                               const char    *input_dir,
                               const char    *processing_dir,
+                              const char    *output_dir,
+                              const char    *error_dir,
                               const char    *format_label)
 {
     DIR *dir = opendir(input_dir);
@@ -131,22 +126,33 @@ static int process_directory(oci_context_t *ctx,
                      "File Consumer: dispatching %s file '%s'",
                      format_label, name);
 
-        int rc = process_xml_file(ctx, processing_path, name);
+        response_object_t resp;
+        response_object_init(&resp);
+
+        int rc = process_xml_file(ctx, processing_path, name, &resp);
 
         if (rc == 0)
         {
             logger_write(ctx->file_consumer_logger, LOG_INFO, __func__, 0,
-                         "File Consumer: PASS '%s' (still in %s pending "
-                         "Stage 3's Output/Error file writer)",
-                         name, processing_dir);
+                         "File Consumer: PASS '%s'", name);
         }
         else
         {
             logger_write(ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
-                         "File Consumer: FAIL '%s' (rc=%d, still in %s "
-                         "pending Stage 3's Output/Error file writer)",
-                         name, rc, processing_dir);
+                         "File Consumer: FAIL '%s' (rc=%d, error_code=%s)",
+                         name, rc, resp.error_code);
         }
+
+        if (response_manager_write(ctx, &resp, name, processing_path,
+                                    output_dir, error_dir) != 0)
+        {
+            logger_write(ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
+                         "File Consumer: Response Manager reported a problem "
+                         "writing/moving '%s' - see log above for detail",
+                         name);
+        }
+
+        response_object_free(&resp);
 
         processed++;
     }
@@ -163,10 +169,14 @@ int file_consumer_run_once(oci_context_t *ctx, app_config_t *config)
     int xml_result  = process_directory(ctx,
                                          config->file_consumer_input_xml_dir,
                                          config->file_consumer_processing_xml_dir,
+                                         config->file_consumer_output_xml_dir,
+                                         config->file_consumer_error_xml_dir,
                                          "XML");
     int json_result = process_directory(ctx,
                                          config->file_consumer_input_json_dir,
                                          config->file_consumer_processing_json_dir,
+                                         config->file_consumer_output_json_dir,
+                                         config->file_consumer_error_json_dir,
                                          "JSON");
 
     if (xml_result < 0 && json_result < 0)

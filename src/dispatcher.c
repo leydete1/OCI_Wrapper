@@ -31,6 +31,7 @@
 #include <stdint.h>
 
 #include "dispatcher.h"
+#include "response_object.h"
 
 #include "OCI_Connection.h"
 #include "OCI_Insert_Execute_Module.h"
@@ -122,6 +123,160 @@ static void upper(char *s)
     for (; *s; s++) *s = (char)toupper((unsigned char)*s);
 }
 
+/* ------------------------------------------------------------------ */
+/*  xml_escape_alloc() / json_escape_alloc()                           */
+/*                                                                      */
+/*  Stage 3 helpers. error_text often echoes back field names or SQL    */
+/*  fragments (see e.g. level2_validate_insert()'s "Field 'X': ..."     */
+/*  messages) - those can legitimately contain <, >, &, ", or \, any    */
+/*  of which would corrupt the envelope they're being embedded in if    */
+/*  written verbatim. Both return a heap-allocated buffer the caller    */
+/*  must free(); never return NULL (worst case, an empty string).       */
+/* ------------------------------------------------------------------ */
+static char *xml_escape_alloc(const char *s)
+{
+    if (!s) s = "";
+    size_t len = strlen(s);
+    /* Worst case every byte becomes "&quot;" (6 bytes) */
+    char *out = malloc(len * 6 + 1);
+    if (!out) return strdup("");
+
+    char *w = out;
+    for (const char *p = s; *p; p++)
+    {
+        switch (*p)
+        {
+            case '&':  memcpy(w, "&amp;",  5); w += 5; break;
+            case '<':  memcpy(w, "&lt;",   4); w += 4; break;
+            case '>':  memcpy(w, "&gt;",   4); w += 4; break;
+            case '"':  memcpy(w, "&quot;", 6); w += 6; break;
+            case '\'': memcpy(w, "&apos;", 6); w += 6; break;
+            default:   *w++ = *p; break;
+        }
+    }
+    *w = '\0';
+    return out;
+}
+
+static char *json_escape_alloc(const char *s)
+{
+    if (!s) s = "";
+    size_t len = strlen(s);
+    /* Worst case every byte becomes "\u00XX" (6 bytes) */
+    char *out = malloc(len * 6 + 1);
+    if (!out) return strdup("");
+
+    char *w = out;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+    {
+        switch (*p)
+        {
+            case '"':  memcpy(w, "\\\"", 2); w += 2; break;
+            case '\\': memcpy(w, "\\\\", 2); w += 2; break;
+            case '\n': memcpy(w, "\\n",  2); w += 2; break;
+            case '\r': memcpy(w, "\\r",  2); w += 2; break;
+            case '\t': memcpy(w, "\\t",  2); w += 2; break;
+            default:
+                if (*p < 0x20)
+                {
+                    w += sprintf(w, "\\u%04x", *p);
+                }
+                else
+                {
+                    *w++ = (char)*p;
+                }
+                break;
+        }
+    }
+    *w = '\0';
+    return out;
+}
+
+/* ------------------------------------------------------------------ */
+/*  build_error_envelope()                                              */
+/*                                                                      */
+/*  Stage 3. Synthesizes resp->response_body as a generic error         */
+/*  envelope (XML or JSON, matching is_json) for any failure path that  */
+/*  doesn't already have a real result body to hand back - which today  */
+/*  is every failure path except none (see response_object.h's own      */
+/*  doc comment on why execute_*_batch() failures don't carry           */
+/*  structured detail yet). Always leaves resp in a valid, writable     */
+/*  state - response_body is guaranteed non-NULL after this returns.    */
+/* ------------------------------------------------------------------ */
+static void build_error_envelope(response_object_t *resp,
+                                  const char         *audit_id,
+                                  const char         *operation,
+                                  const char         *error_code,
+                                  const char         *error_text,
+                                  int                 is_json)
+{
+    resp->status = RESPONSE_STATUS_ERROR;
+    resp->is_json = is_json;
+
+    strncpy(resp->audit_id,  audit_id  ? audit_id  : "-", sizeof(resp->audit_id)  - 1);
+    strncpy(resp->operation, operation ? operation : "-", sizeof(resp->operation) - 1);
+    strncpy(resp->error_code, error_code ? error_code : "UNKNOWN_ERROR",
+            sizeof(resp->error_code) - 1);
+    strncpy(resp->error_text, error_text ? error_text : "-",
+            sizeof(resp->error_text) - 1);
+
+    if (resp->response_body) { free(resp->response_body); resp->response_body = NULL; }
+
+    if (is_json)
+    {
+        char *esc_audit = json_escape_alloc(resp->audit_id);
+        char *esc_op    = json_escape_alloc(resp->operation);
+        char *esc_code  = json_escape_alloc(resp->error_code);
+        char *esc_text  = json_escape_alloc(resp->error_text);
+
+        size_t bufsize = strlen(esc_audit) + strlen(esc_op) +
+                          strlen(esc_code) + strlen(esc_text) + 128;
+        resp->response_body = malloc(bufsize);
+        if (resp->response_body)
+            snprintf(resp->response_body, bufsize,
+                     "{\"status\":\"ERROR\",\"audit_id\":\"%s\","
+                     "\"operation\":\"%s\",\"error_code\":\"%s\","
+                     "\"error_text\":\"%s\"}",
+                     esc_audit, esc_op, esc_code, esc_text);
+
+        free(esc_audit); free(esc_op); free(esc_code); free(esc_text);
+    }
+    else
+    {
+        char *esc_audit = xml_escape_alloc(resp->audit_id);
+        char *esc_op    = xml_escape_alloc(resp->operation);
+        char *esc_code  = xml_escape_alloc(resp->error_code);
+        char *esc_text  = xml_escape_alloc(resp->error_text);
+
+        size_t bufsize = strlen(esc_audit) + strlen(esc_op) +
+                          strlen(esc_code) + strlen(esc_text) + 256;
+        resp->response_body = malloc(bufsize);
+        if (resp->response_body)
+            snprintf(resp->response_body, bufsize,
+                     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                     "<output_xml>\n<execution_envelope>\n"
+                     "<status>ERROR</status>\n"
+                     "<audit_id>%s</audit_id>\n"
+                     "<operation>%s</operation>\n"
+                     "<error_code>%s</error_code>\n"
+                     "<error_text>%s</error_text>\n"
+                     "</execution_envelope>\n</output_xml>\n",
+                     esc_audit, esc_op, esc_code, esc_text);
+
+        free(esc_audit); free(esc_op); free(esc_code); free(esc_text);
+    }
+
+    /* malloc() above could theoretically fail on a genuinely starved
+     * system - don't hand back a NULL body in that case, since every
+     * caller (Response Manager included) relies on response_body
+     * always being non-NULL per response_object.h's contract.         */
+    if (!resp->response_body)
+        resp->response_body = strdup(is_json ? "{\"status\":\"ERROR\"}"
+                                              : "<output_xml><execution_envelope>"
+                                                "<status>ERROR</status>"
+                                                "</execution_envelope></output_xml>");
+}
+
 /* ================================================================== */
 /* dispatch_insert (legacy, flat-XML <operation>INSERT</operation>
  * format) removed - unlike SELECT, where execute_query_batch()'s
@@ -136,9 +291,10 @@ static void upper(char *s)
 /* ================================================================== */
 /*  dispatch_select                                                     */
 /* ================================================================== */
-static int dispatch_select(oci_context_t *ctx,
-                            const char    *filename,
-                            const char    *xml)
+static int dispatch_select(oci_context_t      *ctx,
+                            const char         *filename,
+                            const char         *xml,
+                            response_object_t  *resp)
 {
     logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                  "Dispatching SELECT: %s", filename);
@@ -193,6 +349,9 @@ static int dispatch_select(oci_context_t *ctx,
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT]: %s - no <sql> element found",
                      filename);
+        build_error_envelope(resp, "-", "SELECT", "NO_SQL_ELEMENT",
+                              "No <sql> element found in legacy-format request",
+                              0);
         return -1;
     }
 
@@ -212,13 +371,30 @@ static int dispatch_select(oci_context_t *ctx,
         logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [SELECT]: %s", filename);
         if (cfg.xml && cfg.xml->OUTPUT_XML)
+        {
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+            resp->status = RESPONSE_STATUS_PASS;
+            resp->is_json = 0;
+            strncpy(resp->operation, "SELECT", sizeof(resp->operation) - 1);
+            resp->response_body = cfg.xml->OUTPUT_XML;  /* ownership transferred */
+            cfg.xml->OUTPUT_XML = NULL;                 /* don't double-free below */
+        }
+        else
+        {
+            build_error_envelope(resp, "-", "SELECT", "NO_RESULT_BODY",
+                                  "execute_query_batch succeeded but produced no XML body",
+                                  0);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT]: %s (rc=%d)", filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_query_batch failed (rc=%d) - see select_Data_Manager.log", rc);
+        build_error_envelope(resp, "-", "SELECT", "EXECUTE_FAILED", errtext, 0);
     }
 
     if (cfg.xml)
@@ -240,15 +416,20 @@ static int dispatch_select(oci_context_t *ctx,
 static int dispatch_select_new(oci_context_t       *ctx,
                                 const char          *filename,
                                 input_c_request_t   *request,
-                                input_c_operation_t *op)
+                                input_c_operation_t *op,
+                                response_object_t   *resp)
 {
     select_request_t *req = (select_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
 
     if (!req)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT/new]: %s - no select_request_t payload",
                      filename);
+        build_error_envelope(resp, request->external_audit_id, "SELECT",
+                              "NO_PAYLOAD", "No select_request_t payload after Level 1/2",
+                              is_json);
         return -1;
     }
 
@@ -283,8 +464,7 @@ static int dispatch_select_new(oci_context_t       *ctx,
      * (cache hit serving, response_writer_cache_store(), the metrics
      * output_response fix) always evaluated as "not JSON" regardless
      * of what was actually requested.                                  */
-    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
-                        ? "JSON" : "XML";
+    cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
     int rc = execute_query_batch(ctx, &cfg);
 
@@ -299,12 +479,37 @@ static int dispatch_select_new(oci_context_t       *ctx,
         if (cfg.OUTPUT_JSON)
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
+
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
+        {
+            resp->status  = RESPONSE_STATUS_PASS;
+            resp->is_json = is_json;
+            strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+            strncpy(resp->operation, "SELECT", sizeof(resp->operation) - 1);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
+        }
+        else
+        {
+            build_error_envelope(resp, request->external_audit_id, "SELECT",
+                                  "NO_RESULT_BODY",
+                                  "execute_query_batch succeeded but produced no result body",
+                                  is_json);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [SELECT/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_query_batch failed (rc=%d) - see select_Data_Manager.log", rc);
+        build_error_envelope(resp, request->external_audit_id, "SELECT",
+                              "EXECUTE_FAILED", errtext, is_json);
     }
 
     if (cfg.xml)
@@ -332,15 +537,20 @@ static int dispatch_select_new(oci_context_t       *ctx,
 static int dispatch_insert_new(oci_context_t       *ctx,
                                 const char          *filename,
                                 input_c_request_t   *request,
-                                input_c_operation_t *op)
+                                input_c_operation_t *op,
+                                response_object_t   *resp)
 {
     insert_request_t *req = (insert_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
 
     if (!req)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [INSERT/new]: %s - no insert_request_t payload",
                      filename);
+        build_error_envelope(resp, request->external_audit_id, "INSERT",
+                              "NO_PAYLOAD", "No insert_request_t payload after Level 1/2",
+                              is_json);
         return -1;
     }
 
@@ -351,8 +561,7 @@ static int dispatch_insert_new(oci_context_t       *ctx,
     /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
      * without this, JSON-format INSERT requests would silently only
      * ever get an XML response back.                                  */
-    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
-                        ? "JSON" : "XML";
+    cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
     int rc = execute_insert_batch(ctx, req, &cfg);
 
@@ -367,12 +576,37 @@ static int dispatch_insert_new(oci_context_t       *ctx,
         if (cfg.OUTPUT_JSON)
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
+
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
+        {
+            resp->status  = RESPONSE_STATUS_PASS;
+            resp->is_json = is_json;
+            strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+            strncpy(resp->operation, "INSERT", sizeof(resp->operation) - 1);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
+        }
+        else
+        {
+            build_error_envelope(resp, request->external_audit_id, "INSERT",
+                                  "NO_RESULT_BODY",
+                                  "execute_insert_batch succeeded but produced no result body",
+                                  is_json);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [INSERT/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_insert_batch failed (rc=%d) - see insert_Data_Manager.log", rc);
+        build_error_envelope(resp, request->external_audit_id, "INSERT",
+                              "EXECUTE_FAILED", errtext, is_json);
     }
 
     if (cfg.xml)
@@ -396,15 +630,20 @@ static int dispatch_insert_new(oci_context_t       *ctx,
 static int dispatch_update_new(oci_context_t       *ctx,
                                 const char          *filename,
                                 input_c_request_t   *request,
-                                input_c_operation_t *op)
+                                input_c_operation_t *op,
+                                response_object_t   *resp)
 {
     update_request_t *req = (update_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
 
     if (!req)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [UPDATE/new]: %s - no update_request_t payload",
                      filename);
+        build_error_envelope(resp, request->external_audit_id, "UPDATE",
+                              "NO_PAYLOAD", "No update_request_t payload after Level 1/2",
+                              is_json);
         return -1;
     }
 
@@ -415,8 +654,7 @@ static int dispatch_update_new(oci_context_t       *ctx,
     /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
      * without this, JSON-format UPDATE requests would silently only
      * ever get an XML response back.                                  */
-    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
-                        ? "JSON" : "XML";
+    cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
     int rc = execute_update_batch(ctx, req, &cfg);
 
@@ -431,12 +669,37 @@ static int dispatch_update_new(oci_context_t       *ctx,
         if (cfg.OUTPUT_JSON)
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
+
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
+        {
+            resp->status  = RESPONSE_STATUS_PASS;
+            resp->is_json = is_json;
+            strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+            strncpy(resp->operation, "UPDATE", sizeof(resp->operation) - 1);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
+        }
+        else
+        {
+            build_error_envelope(resp, request->external_audit_id, "UPDATE",
+                                  "NO_RESULT_BODY",
+                                  "execute_update_batch succeeded but produced no result body",
+                                  is_json);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [UPDATE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_update_batch failed (rc=%d) - see update_Data_Manager.log", rc);
+        build_error_envelope(resp, request->external_audit_id, "UPDATE",
+                              "EXECUTE_FAILED", errtext, is_json);
     }
 
     if (cfg.xml)
@@ -460,15 +723,20 @@ static int dispatch_update_new(oci_context_t       *ctx,
 static int dispatch_delete_new(oci_context_t       *ctx,
                                 const char          *filename,
                                 input_c_request_t   *request,
-                                input_c_operation_t *op)
+                                input_c_operation_t *op,
+                                response_object_t   *resp)
 {
     delete_request_t *req = (delete_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
 
     if (!req)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [DELETE/new]: %s - no delete_request_t payload",
                      filename);
+        build_error_envelope(resp, request->external_audit_id, "DELETE",
+                              "NO_PAYLOAD", "No delete_request_t payload after Level 1/2",
+                              is_json);
         return -1;
     }
 
@@ -479,8 +747,7 @@ static int dispatch_delete_new(oci_context_t       *ctx,
     /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
      * without this, JSON-format DELETE requests would silently only
      * ever get an XML response back.                                  */
-    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
-                        ? "JSON" : "XML";
+    cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
     int rc = execute_delete_batch(ctx, req, &cfg);
 
@@ -495,12 +762,37 @@ static int dispatch_delete_new(oci_context_t       *ctx,
         if (cfg.OUTPUT_JSON)
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
+
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
+        {
+            resp->status  = RESPONSE_STATUS_PASS;
+            resp->is_json = is_json;
+            strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+            strncpy(resp->operation, "DELETE", sizeof(resp->operation) - 1);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
+        }
+        else
+        {
+            build_error_envelope(resp, request->external_audit_id, "DELETE",
+                                  "NO_RESULT_BODY",
+                                  "execute_delete_batch succeeded but produced no result body",
+                                  is_json);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [DELETE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_delete_batch failed (rc=%d) - see delete_Data_Manager.log", rc);
+        build_error_envelope(resp, request->external_audit_id, "DELETE",
+                              "EXECUTE_FAILED", errtext, is_json);
     }
 
     if (cfg.xml)
@@ -524,9 +816,11 @@ static int dispatch_delete_new(oci_context_t       *ctx,
 static int dispatch_procedure_new(oci_context_t       *ctx,
                                    const char          *filename,
                                    input_c_request_t   *request,
-                                   input_c_operation_t *op)
+                                   input_c_operation_t *op,
+                                   response_object_t   *resp)
 {
     execute_procedure_request_t *req = (execute_procedure_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
 
     if (!req)
     {
@@ -534,6 +828,9 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
                      "FAIL [EXECUTE_PROCEDURE/new]: %s - no "
                      "execute_procedure_request_t payload",
                      filename);
+        build_error_envelope(resp, request->external_audit_id, "EXECUTE_PROCEDURE",
+                              "NO_PAYLOAD", "No execute_procedure_request_t payload after Level 1/2",
+                              is_json);
         return -1;
     }
 
@@ -544,8 +841,7 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
     /* Same reasoning as dispatch_select_new()'s own ReturnFormat note -
      * without this, JSON-format EXECUTE_PROCEDURE requests would
      * silently only ever get an XML response back.                     */
-    cfg.ReturnFormat = (request->source_format == INPUT_FORMAT_JSON)
-                        ? "JSON" : "XML";
+    cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
     int rc = execute_procedure(ctx, req, &cfg);
 
@@ -560,12 +856,37 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
         if (cfg.OUTPUT_JSON)
             logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                          "Result JSON:\n%s", cfg.OUTPUT_JSON);
+
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
+        {
+            resp->status  = RESPONSE_STATUS_PASS;
+            resp->is_json = is_json;
+            strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+            strncpy(resp->operation, "EXECUTE_PROCEDURE", sizeof(resp->operation) - 1);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
+        }
+        else
+        {
+            build_error_envelope(resp, request->external_audit_id, "EXECUTE_PROCEDURE",
+                                  "NO_RESULT_BODY",
+                                  "execute_procedure succeeded but produced no result body",
+                                  is_json);
+        }
     }
     else
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "FAIL [EXECUTE_PROCEDURE/new] audit_id=%s: %s (rc=%d)",
                      request->external_audit_id, filename, rc);
+        char errtext[256];
+        snprintf(errtext, sizeof(errtext),
+                 "execute_procedure failed (rc=%d) - see procedure_Data_Manager.log", rc);
+        build_error_envelope(resp, request->external_audit_id, "EXECUTE_PROCEDURE",
+                              "EXECUTE_FAILED", errtext, is_json);
     }
 
     if (cfg.xml)
@@ -582,9 +903,10 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 /*  process_xml_file                                                    */
 /*  Read file, extract operation, dispatch to correct handler.         */
 /* ================================================================== */
-int process_xml_file(oci_context_t *ctx,
-                      const char    *filepath,
-                      const char    *filename)
+int process_xml_file(oci_context_t      *ctx,
+                      const char         *filepath,
+                      const char         *filename,
+                      response_object_t  *resp)
 {
     long  len = 0;
 
@@ -594,6 +916,11 @@ int process_xml_file(oci_context_t *ctx,
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                      "Failed to read file: %s", filepath);
+        /* Format unknown at this point (couldn't even read the file to
+         * sniff it) - default to XML, matching the format most existing
+         * fixtures use. */
+        build_error_envelope(resp, "-", "-", "FILE_READ_FAILED",
+                              "Failed to read input file - see dispatcher log", 0);
         return -1;
     }
     if (xml) {
@@ -628,6 +955,12 @@ int process_xml_file(oci_context_t *ctx,
             logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                          "FAIL [Level1] %s error_code=%s error_text=%s",
                          filename, level1_error.error_code, level1_error.error_text);
+            /* Genuinely don't know XML vs JSON here - level1_parse()
+             * failed before format-specific parsing got anywhere, so
+             * default to XML (same reasoning as the read-failure case
+             * above). */
+            build_error_envelope(resp, "-", "-", level1_error.error_code,
+                                  level1_error.error_text, 0);
             free(xml);
             return -1;
         }
@@ -637,6 +970,8 @@ int process_xml_file(oci_context_t *ctx,
                      "operations=%d", filename, new_request.external_audit_id,
                      new_request.operation_count);
 
+        int is_json = (new_request.source_format == INPUT_FORMAT_JSON);
+
         uint64_t level2_start = metrics_now_us();
         int level2_rc = level2_validate(ctx, &new_request);
         ctx->level2_parse_us = metrics_now_us() - level2_start;
@@ -644,29 +979,38 @@ int process_xml_file(oci_context_t *ctx,
 
         if (level2_rc == LEVEL2_OK)
         {
+            /* Note: a request can carry multiple operations
+             * (operation_count > 1), but ResponseObject is one-per-file.
+             * Same pre-existing limitation as rc itself already had
+             * before Stage 3 (rc was only ever the *last* operation's
+             * result too) - resp ends up reflecting the last operation
+             * dispatched, not a merge of all of them. Worth revisiting
+             * if multi-operation files turn out to matter in practice;
+             * not changed here since Stage 3's job is wiring the
+             * Response Manager, not redesigning multi-op semantics.    */
             for (int i = 0; i < new_request.operation_count; i++)
             {
                 input_c_operation_t *op = &new_request.operations[i];
 
                 if (op->type == OP_SELECT)
                 {
-                    rc = dispatch_select_new(ctx, filename, &new_request, op);
+                    rc = dispatch_select_new(ctx, filename, &new_request, op, resp);
                 }
                 else if (op->type == OP_INSERT)
                 {
-                    rc = dispatch_insert_new(ctx, filename, &new_request, op);
+                    rc = dispatch_insert_new(ctx, filename, &new_request, op, resp);
                 }
                 else if (op->type == OP_UPDATE)
                 {
-                    rc = dispatch_update_new(ctx, filename, &new_request, op);
+                    rc = dispatch_update_new(ctx, filename, &new_request, op, resp);
                 }
                 else if (op->type == OP_DELETE)
                 {
-                    rc = dispatch_delete_new(ctx, filename, &new_request, op);
+                    rc = dispatch_delete_new(ctx, filename, &new_request, op, resp);
                 }
                 else if (op->type == OP_EXECUTE_PROCEDURE)
                 {
-                    rc = dispatch_procedure_new(ctx, filename, &new_request, op);
+                    rc = dispatch_procedure_new(ctx, filename, &new_request, op, resp);
                 }
                 else
                 {
@@ -682,6 +1026,11 @@ int process_xml_file(oci_context_t *ctx,
                                  "pipeline only implements SELECT/INSERT/"
                                  "UPDATE/DELETE/EXECUTE_PROCEDURE so far, "
                                  "skipping", filename, i, (int)op->type);
+                    build_error_envelope(resp, new_request.external_audit_id, "-",
+                                         "UNSUPPORTED_OPERATION_TYPE",
+                                         "This operation type isn't implemented by the "
+                                         "new dispatch pipeline yet", is_json);
+                    rc = -1;
                 }
             }
         }
@@ -693,11 +1042,24 @@ int process_xml_file(oci_context_t *ctx,
                 { failed_op = i; break; }
 
             if (failed_op >= 0)
+            {
                 logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
                              "FAIL [Level2] %s operation[%d] error_code=%s error_text=%s",
                              filename, failed_op,
                              new_request.operations[failed_op].validation_status.error_code,
                              new_request.operations[failed_op].validation_status.error_text);
+                build_error_envelope(resp, new_request.external_audit_id, "-",
+                                     new_request.operations[failed_op].validation_status.error_code,
+                                     new_request.operations[failed_op].validation_status.error_text,
+                                     is_json);
+            }
+            else
+            {
+                build_error_envelope(resp, new_request.external_audit_id, "-",
+                                     "LEVEL2_VALIDATION_FAILED",
+                                     "Level 2 validation failed - see dispatcher log",
+                                     is_json);
+            }
             rc = -1;
         }
 
@@ -707,12 +1069,23 @@ int process_xml_file(oci_context_t *ctx,
     }
 
 
-
     char operation[MAX_OPERATION_LEN] = {0};
     if (!extract_tag(xml, "operation", operation, sizeof(operation)))
     {
         logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                      "No <operation> found in %s - skipping", filename);
+        /* rc==0 here (not a failure) - resp needs to agree, so this is
+         * a minimal PASS envelope rather than an error one, honestly
+         * reflecting "nothing to dispatch" rather than fabricating a
+         * failure that didn't happen. */
+        resp->status = RESPONSE_STATUS_PASS;
+        resp->is_json = 0;
+        strncpy(resp->operation, "-", sizeof(resp->operation) - 1);
+        resp->response_body = strdup(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<output_xml><execution_envelope><status>SKIPPED</status>"
+            "<note>No &lt;operation&gt; element found in input</note>"
+            "</execution_envelope></output_xml>\n");
         free(xml);
         return 0;
     }
@@ -732,10 +1105,13 @@ int process_xml_file(oci_context_t *ctx,
                      "insert_request_t via the new pipeline). Convert this "
                      "fixture to the new <request version=\"1.0\">...<operation "
                      "type=\"INSERT\"> format.", filename);
+        build_error_envelope(resp, "-", "INSERT", "LEGACY_FORMAT_UNSUPPORTED",
+                              "Old flat-XML INSERT format is no longer supported - "
+                              "convert to the new <request version=\"1.0\"> format", 0);
         rc = -1;
     }
     else if (strcmp(operation, "SELECT") == 0)
-        rc = dispatch_select(ctx, filename, xml);
+        rc = dispatch_select(ctx, filename, xml, resp);
     else if (strcmp(operation, "UPDATE") == 0)
     {
         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
@@ -744,6 +1120,9 @@ int process_xml_file(oci_context_t *ctx,
                      "update_request_t via the new pipeline). Convert this "
                      "fixture to the new <request version=\"1.0\">...<operation "
                      "type=\"UPDATE\"> format.", filename);
+        build_error_envelope(resp, "-", "UPDATE", "LEGACY_FORMAT_UNSUPPORTED",
+                              "Old flat-XML UPDATE format is no longer supported - "
+                              "convert to the new <request version=\"1.0\"> format", 0);
         rc = -1;
     }
     else if (strcmp(operation, "DELETE") == 0)
@@ -754,6 +1133,9 @@ int process_xml_file(oci_context_t *ctx,
                      "delete_request_t via the new pipeline). Convert this "
                      "fixture to the new <request version=\"1.0\">...<operation "
                      "type=\"DELETE\"> format.", filename);
+        build_error_envelope(resp, "-", "DELETE", "LEGACY_FORMAT_UNSUPPORTED",
+                              "Old flat-XML DELETE format is no longer supported - "
+                              "convert to the new <request version=\"1.0\"> format", 0);
         rc = -1;
     }
     else if (strcmp(operation, "EXECUTE_PROCEDURE") == 0)
@@ -764,12 +1146,38 @@ int process_xml_file(oci_context_t *ctx,
                      "execute_procedure_request_t via the new pipeline). "
                      "Convert this fixture to the new <request version=\"1.0\">"
                      "...<operation type=\"EXECUTE_PROCEDURE\"> format.", filename);
+        build_error_envelope(resp, "-", "EXECUTE_PROCEDURE", "LEGACY_FORMAT_UNSUPPORTED",
+                              "Old flat-XML EXECUTE_PROCEDURE format is no longer "
+                              "supported - convert to the new <request version=\"1.0\"> "
+                              "format", 0);
         rc = -1;
     }
     else
+    {
         logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                      "Unknown operation '%s' in %s - skipping",
                      operation, filename);
+        /* rc stays 0 (not a failure) - same reasoning as the missing
+         * <operation> case above: PASS envelope, not a fabricated
+         * error. */
+        resp->status = RESPONSE_STATUS_PASS;
+        resp->is_json = 0;
+        strncpy(resp->operation, operation, sizeof(resp->operation) - 1);
+        char *esc_op = xml_escape_alloc(operation);
+        size_t bufsize = strlen(esc_op) + 200;
+        resp->response_body = malloc(bufsize);
+        if (resp->response_body)
+            snprintf(resp->response_body, bufsize,
+                     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                     "<output_xml><execution_envelope><status>SKIPPED</status>"
+                     "<note>Unknown operation '%s'</note>"
+                     "</execution_envelope></output_xml>\n", esc_op);
+        else
+            resp->response_body = strdup("<output_xml><execution_envelope>"
+                                          "<status>SKIPPED</status></execution_envelope>"
+                                          "</output_xml>");
+        free(esc_op);
+    }
 
     free(xml);
     return rc;

@@ -90,6 +90,7 @@
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Execute_Query_Batch_Module.h"
 #include "dispatcher.h"
+#include "response_object.h"
 #include "file_consumer.h"
 
 /* looks_like_new_request_format()'s own forward declaration removed
@@ -1559,8 +1560,19 @@ int main(int argc, char *argv[])
          * the single session pinned for the lifetime of this
          * transaction.  No per-file borrow/release: that is exactly
          * the pattern that silently dropped committed work before.
-         */
-        rc = process_xml_file(tx_ctx, filepath, name);
+         *
+         * Stage 3 note: process_xml_file() now takes a response_object_t
+         * out-param. This harness only ever cared about pass/fail
+         * counts, not response content, so the response is built and
+         * immediately discarded here rather than wired to the Response
+         * Manager - this loop's own tx_begin/tx_commit-per-batch model
+         * doesn't match the File Consumer's one-request-one-session
+         * design anyway (see the consumer_type=FILE branch above,
+         * which is where Response Manager wiring actually lives).      */
+        response_object_t harness_resp;
+        response_object_init(&harness_resp);
+        rc = process_xml_file(tx_ctx, filepath, name, &harness_resp);
+        response_object_free(&harness_resp);
         if (rc == 0)
             passed++;
         else

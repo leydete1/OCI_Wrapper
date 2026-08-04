@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<sql_query>SELECT float_col FROM OCI_FIELD_TEST</sql_query>
+</execution_envelope>
+<resultset>
+<row number="1">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="2">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="3">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="4">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="5">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="6">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="7">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="8">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="9">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="10">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="11">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="12">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="13">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="14">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="15">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="16">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="17">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="18">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="19">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="20">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="21">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="22">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="23">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="24">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="25">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="26">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="27">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="28">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="29">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="30">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="31">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="32">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="33">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="34">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="35">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="36">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="37">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="38">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="39">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="40">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="41">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="42">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="43">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="44">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="45">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="46">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="47">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="48">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="49">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="50">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="51">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="52">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="53">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="54">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="55">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="56">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="57">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="58">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="59">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="60">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="61">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="62">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="63">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="64">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="65">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="66">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="67">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="68">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="69">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="70">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="71">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="72">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+</resultset>
+<execution_envelope>
+<num_rows>72</num_rows>
+<execution_time_total>0.005658</execution_time_total>
+<fetch_batch_size>5</fetch_batch_size>
+<blobs_extracted>0</blobs_extracted>
+<clobs_extracted>0</clobs_extracted>
+</execution_envelope>
+</output_xml>
