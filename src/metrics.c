@@ -25,6 +25,27 @@
 #include "metrics.h"
 
 /* ------------------------------------------------------------------ */
+/*  Stage 5 (File_Consumer_proposal v1.2) - metrics.c thread safety.
+ *
+ *  metrics_write() previously had an unguarded ftell()-then-fprintf()
+ *  sequence: two threads could both see pos==0 and both write the CSV
+ *  header (or interleave a header write with a row write from another
+ *  thread), and nothing serialised the row-write fprintf() itself
+ *  against a concurrent header-write from another caller. Flagged as a
+ *  hard prerequisite for Stage 5 back when the File Consumer project
+ *  started - now that worker threads genuinely run concurrently, this
+ *  fixes it before it can bite.
+ *
+ *  Same approach logger.c already uses for its own log_mutex: one
+ *  static mutex guarding the entire write (header-check included) as
+ *  a single critical section per call, rather than trying to protect
+ *  the ftell() and fprintf() as separate finer-grained pieces - the
+ *  header-check-then-maybe-write and the row-write need to be atomic
+ *  together, not just individually safe.
+ * ------------------------------------------------------------------ */
+static pthread_mutex_t metrics_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* ------------------------------------------------------------------ */
 /*  Internal: CSV-safe string                                           */
 /*  If the value contains a comma or double-quote, wrap in quotes and  */
 /*  escape internal double-quotes.  dest must be at least dest_max.   */
@@ -297,6 +318,8 @@ void metrics_write(logger_t         *metrics_logger,
 {
     if (!metrics_logger || !m) return;
 
+    pthread_mutex_lock(&metrics_mutex);
+
     /* ---- Write header if the log file is empty ---- */
     if (metrics_logger->file)
     {
@@ -478,6 +501,8 @@ void metrics_write(logger_t         *metrics_logger,
     free(m->input_file_name);  m->input_file_name = NULL;
     free(m->input_request);    m->input_request   = NULL;
     free(m->output_response);  m->output_response  = NULL;
+
+    pthread_mutex_unlock(&metrics_mutex);
 }
 
 
