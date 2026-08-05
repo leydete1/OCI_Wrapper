@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_update_scalar</audit_id>
+<operation>-</operation>
+<error_code>LEVEL2_FIELD_INVALID</error_code>
+<error_text>SET field &apos;DATE_COL&apos;: Internal error preparing date normalization query</error_text>
+</execution_envelope>
+</output_xml>

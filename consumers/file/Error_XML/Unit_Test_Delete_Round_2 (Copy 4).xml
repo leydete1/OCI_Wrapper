@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Unit_Test_Delete_Round_2.xml
+ Compound-key DELETE: NUMBER_COL AND VARCHAR2_COL must both match.
+ Exercises the multi-key AND chain in build_delete_sql().
+ Watch log for "rows_deleted=1" (or 0 if row not present) and the
+ AUDIT_TRAIL rows for both WHERE-key columns.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_delete_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="DELETE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>502</key_value></key>
+                <key><field_name>VARCHAR2_COL</field_name><key_value>Round 5 mixed row 2</key_value></key>
+            </where>
+        </operation>
+    </transaction>
+</request>

@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_update_clob","operation":"UPDATE","error_code":"EXECUTE_FAILED","error_text":"execute_update_batch failed (rc=-1) - see update_Data_Manager.log"}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 7 - Unknown column
+ NOT_A_REAL_COLUMN does not exist on OCI_FIELD_TEST.
+ Level 1 has no way to catch this (it doesn't know the schema) -
+ Level 2 must resolve the real column list via metadata_cache and
+ reject this before it ever reaches an OCI bind call.
+ Expect: LEVEL2_ERR_FIELD_INVALID / FIELD_UNKNOWN_COLUMN.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_7</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>701</value></field>
+                <field><field_name>NOT_A_REAL_COLUMN</field_name><value>whatever</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

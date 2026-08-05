@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_select_1_clobs</audit_id>
+<operation>SELECT</operation>
+<error_code>EXECUTE_FAILED</error_code>
+<error_text>execute_query_batch failed (rc=-1) - see select_Data_Manager.log</error_text>
+</execution_envelope>
+</output_xml>

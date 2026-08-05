@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<operation>DELETE</operation>
+<table_name>OCI_FIELD_TEST</table_name>
+<owner>DATA_MANAGER</owner>
+<rows_deleted>0</rows_deleted>
+<lobs_written>0</lobs_written>
+<execution_time>0.000706</execution_time>
+</execution_envelope>
+</output_xml>

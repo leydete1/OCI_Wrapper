@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_delete_round_2","operation":"DELETE","error_code":"EXECUTE_FAILED","error_text":"execute_delete_batch failed (rc=-1) - see delete_Data_Manager.log"}

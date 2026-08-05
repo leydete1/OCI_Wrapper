@@ -1,0 +1,15 @@
+{
+    "external_audit_id": "audit_stub_procedure_round_4",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "EXECUTE_PROCEDURE",
+                "procedure_name": "PURGE_OLD_ROWS",
+                "owner": "DATA_MANAGER",
+                "parameters": []
+            }
+        ]
+    }
+}

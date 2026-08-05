@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_procedure_round_2","operation":"EXECUTE_PROCEDURE","error_code":"EXECUTE_FAILED","error_text":"execute_procedure failed (rc=-1) - see procedure_Data_Manager.log"}
