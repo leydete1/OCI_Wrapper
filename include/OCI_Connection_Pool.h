@@ -58,9 +58,31 @@ typedef enum {
 
 /* ------------------------------------------------------------------ */
 /*  Per-slot descriptor - one authenticated OCI session                */
+/*                                                                      */
+/*  Fix (2026-08-06): srvhp moved here from oci_pool_handle_t. It used  */
+/*  to be one server attachment (one physical connection) shared by     */
+/*  every slot - fine when only one thread ever used the pool, but      */
+/*  once real concurrent worker threads existed (Stage 5), multiple     */
+/*  sessions genuinely reading/writing over that one shared physical    */
+/*  connection at the same time caused a full ORA-03114 "not connected" */
+/*  cascade across every session simultaneously, confirmed via a live   */
+/*  A/B test (disabling OCI_ATTR_RECEIVE_TIMEOUT/SEND_TIMEOUT on the     */
+/*  shared handle made the cascade disappear, though the underlying      */
+/*  mechanism is believed to be the shared connection itself under real */
+/*  concurrent I/O, not those attributes specifically). Each slot now   */
+/*  gets its own independent OCIServerAttach() - a genuine separate     */
+/*  physical connection per slot, not just a separate session       */
+/*  multiplexed onto one shared connection. This also means the        */
+/*  OCI_ATTR_RECEIVE_TIMEOUT/SEND_TIMEOUT fix from 2026-08-06 is safe   */
+/*  to re-enable, now applied per-slot in open_slot() instead of once   */
+/*  on a shared handle.                                                  */
 /* ------------------------------------------------------------------ */
 typedef struct {
     pool_slot_state_t  state;
+    OCIServer         *srvhp;      /* this slot's OWN server attachment -
+                                       a genuinely independent physical
+                                       connection, not shared with any
+                                       other slot (see comment above)   */
     OCISvcCtx         *svchp;      /* service context for this slot   */
     OCISession        *authp;      /* session handle for this slot    */
     OCIError          *errhp;      /* error handle (per-slot)         */
@@ -74,8 +96,11 @@ typedef struct {
 typedef struct {
     /* Shared OCI handles (safe to share across threads per OCI docs) */
     OCIEnv    *envhp;
-    OCIError  *errhp;        /* pool-level error handle               */
-    OCIServer *srvhp;        /* single server attachment              */
+    OCIError  *errhp;        /* pool-level error handle (init-time and
+                                 other non-slot-specific operations only -
+                                 NOT used for any slot's own OCI calls)  */
+    /* No pool-level srvhp any more - see pool_slot_t's own srvhp field
+     * and its comment above for why. */
 
     /* Slot array */
     pool_slot_t *slots;      /* [pool_max_size] heap array            */

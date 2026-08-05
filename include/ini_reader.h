@@ -450,6 +450,15 @@ typedef struct
     int  dispatcher_queue_depth;         /* items/queue before QUEUE_FULL */
     char dispatcher_algorithm[32];       /* round_robin (Defined) | least_busy (Pending) */
 
+    /* File Consumer thread lifecycle (Terry's proposal, 2026-08-05
+     * "Findings and lessons" doc, section 1b) - replaces the hardcoded
+     * FILE_CONSUMER_TEST_PASSES/INTERVAL test-only C constants with
+     * real config, now that File Consumer runs as its own dedicated
+     * thread (file_consumer_runner.c) rather than inline on main().  */
+    int  dispatcher_poll_interval_seconds; /* seconds between scan passes */
+    int  dispatcher_lifetime_seconds;      /* 0 = run forever, else stop
+                                               after this many seconds  */
+
     char file_consumer_input_xml_dir     [256];
     char file_consumer_processing_xml_dir[256];
     char file_consumer_output_xml_dir    [256];

@@ -124,72 +124,6 @@ static int open_slot(oci_pool_handle_t *pool,
                        OCI_HTYPE_ERROR, 0, NULL),
         logger, Cleanup);
 
-    /* ---- Per-slot server handle + attach (2026-08-06) ----
-     * Each slot gets its own genuinely independent physical connection
-     * now, rather than attaching to one connection shared by every
-     * slot - see pool_slot_t's own doc comment in OCI_Connection_Pool.h
-     * for the full story (a real ORA-03114 cascade under concurrent
-     * worker threads, traced to the shared-connection design). This is
-     * an extra OCIServerAttach() (and its own TCP handshake) per slot
-     * rather than once for the whole pool - the necessary cost of
-     * genuine per-slot isolation.                                      */
-    CHECK_OCI_POOL(slot->errhp,
-        OCIHandleAlloc(pool->envhp, (void **)&slot->srvhp,
-                       OCI_HTYPE_SERVER, 0, NULL),
-        logger, Cleanup);
-
-    logger_write(logger, LOG_INFO, __func__, 0,
-                 "Calling OCIServerAttach for this slot, dbname='%s'",
-                 pool->dbname);
-    CHECK_OCI_POOL(slot->errhp,
-        OCIServerAttach(slot->srvhp, slot->errhp,
-                        (text *)pool->dbname,
-                        (sb4)strlen(pool->dbname),
-                        OCI_DEFAULT),
-        logger, Cleanup);
-    logger_write(logger, LOG_INFO, __func__, 0,
-                 "OCIServerAttach OK for this slot");
-
-    /* ---- Bound how long any call on THIS slot's own connection will
-     * wait for a response (including a call blocked on another
-     * session's row lock). Safe to set per-slot now that each slot has
-     * its own independent physical connection - see the header comment
-     * above for why this previously caused problems when applied to a
-     * connection shared by every slot. Not fatal if unsupported
-     * (older Oracle Client) - logged as WARN, slot still opens.        */
-    {
-        ub4 recv_timeout = (ub4)pool->network_read_write_timeout;
-        ub4 send_timeout = (ub4)pool->network_read_write_timeout;
-
-        sword recv_rc = OCIAttrSet(slot->srvhp, OCI_HTYPE_SERVER,
-                                    &recv_timeout, 0,
-                                    OCI_ATTR_RECEIVE_TIMEOUT, slot->errhp);
-        if (recv_rc != OCI_SUCCESS && recv_rc != OCI_SUCCESS_WITH_INFO)
-            logger_write(logger, LOG_WARN, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT failed (rc=%d) "
-                         "for this slot - blocked calls on it will NOT time "
-                         "out client-side (requires Oracle Client 18c+)",
-                         (int)recv_rc);
-        else
-            logger_write(logger, LOG_INFO, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT=%us OK for "
-                         "this slot", recv_timeout);
-
-        sword send_rc = OCIAttrSet(slot->srvhp, OCI_HTYPE_SERVER,
-                                    &send_timeout, 0,
-                                    OCI_ATTR_SEND_TIMEOUT, slot->errhp);
-        if (send_rc != OCI_SUCCESS && send_rc != OCI_SUCCESS_WITH_INFO)
-            logger_write(logger, LOG_WARN, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT failed (rc=%d) "
-                         "for this slot - blocked calls on it will NOT time "
-                         "out client-side (requires Oracle Client 18c+)",
-                         (int)send_rc);
-        else
-            logger_write(logger, LOG_INFO, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT=%us OK for "
-                         "this slot", send_timeout);
-    }
-
     /* ---- Service context ---- */
     CHECK_OCI_POOL(slot->errhp,
         OCIHandleAlloc(pool->envhp, (void **)&slot->svchp,
@@ -202,11 +136,10 @@ static int open_slot(oci_pool_handle_t *pool,
                        OCI_HTYPE_SESSION, 0, NULL),
         logger, Cleanup);
 
-    /* ---- Attach THIS slot's own server handle to its service context
-     * (was pool->srvhp - the one shared connection - before 2026-08-06) */
+    /* ---- Attach shared server handle to service context ---- */
     CHECK_OCI_POOL(slot->errhp,
         OCIAttrSet(slot->svchp, OCI_HTYPE_SVCCTX,
-                   slot->srvhp, 0,
+                   pool->srvhp, 0,
                    OCI_ATTR_SERVER, slot->errhp),
         logger, Cleanup);
 
@@ -303,12 +236,6 @@ Cleanup:
     /* Partial cleanup on failure */
     if (slot->authp) { OCIHandleFree(slot->authp, OCI_HTYPE_SESSION); slot->authp = NULL; }
     if (slot->svchp) { OCIHandleFree(slot->svchp, OCI_HTYPE_SVCCTX);  slot->svchp = NULL; }
-    if (slot->srvhp)
-    {
-        OCIServerDetach(slot->srvhp, slot->errhp, OCI_DEFAULT);
-        OCIHandleFree(slot->srvhp, OCI_HTYPE_SERVER);
-        slot->srvhp = NULL;
-    }
     if (slot->errhp) { OCIHandleFree(slot->errhp, OCI_HTYPE_ERROR);   slot->errhp = NULL; }
     return rc;
 }
@@ -337,18 +264,6 @@ static void close_slot(pool_slot_t *slot, logger_t *logger)
 
     if (slot->authp) { OCIHandleFree(slot->authp, OCI_HTYPE_SESSION); slot->authp = NULL; }
     if (slot->svchp) { OCIHandleFree(slot->svchp, OCI_HTYPE_SVCCTX);  slot->svchp = NULL; }
-
-    /* Detach/free this slot's own server connection (2026-08-06 - was
-     * pool-level and only detached once for the whole pool before).
-     * Must happen before errhp is freed below - OCIServerDetach needs
-     * a valid error handle to report any error from the detach itself. */
-    if (slot->srvhp)
-    {
-        OCIServerDetach(slot->srvhp, slot->errhp, OCI_DEFAULT);
-        OCIHandleFree(slot->srvhp, OCI_HTYPE_SERVER);
-        slot->srvhp = NULL;
-    }
-
     if (slot->errhp) { OCIHandleFree(slot->errhp, OCI_HTYPE_ERROR);   slot->errhp = NULL; }
     slot->state = POOL_SLOT_FREE;
 
@@ -580,20 +495,87 @@ int OCI_Connect_pool(oci_context_t *ctx)
     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
                  "OCIEnvCreate OK");
 
-    /* ---- Pool-level error handle (init-time / non-slot-specific
-     * operations only - see OCI_Connection_Pool.h) ---- */
+    /* ---- Pool-level error handle ---- */
     CHECK_OCI_POOL(pool->envhp,
         OCIHandleAlloc(pool->envhp, (void **)&pool->errhp,
                        OCI_HTYPE_ERROR, 0, NULL),
         ctx->connectionpool_logger, Cleanup);
 
-    /* No pool-level server handle/attach any more (2026-08-06) - each
-     * slot now does its own OCIServerAttach() inside open_slot(), a
-     * genuinely independent physical connection per slot rather than
-     * one shared by all of them. See OCI_Connection_Pool.h's own
-     * comment on pool_slot_t for the full story (ORA-03114 cascade
-     * under real concurrent worker threads, traced to the shared
-     * connection). */
+    /* ---- Server handle ---- */
+    CHECK_OCI_POOL(pool->errhp,
+        OCIHandleAlloc(pool->envhp, (void **)&pool->srvhp,
+                       OCI_HTYPE_SERVER, 0, NULL),
+        ctx->connectionpool_logger, Cleanup);
+
+    /* ---- Attach to Oracle server (shared by all slots) ---- */
+    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                 "Calling OCIServerAttach dbname='%s'", pool->dbname);
+
+    CHECK_OCI_POOL(pool->errhp,
+        OCIServerAttach(pool->srvhp, pool->errhp,
+                        (text *)pool->dbname,
+                        (sb4)strlen(pool->dbname),
+                        OCI_DEFAULT),
+        ctx->connectionpool_logger, Cleanup);
+
+    logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                 "OCIServerAttach OK");
+
+    /* ---- Bound how long any call on this shared server handle will
+     * wait for a response, including a call blocked waiting on
+     * another session's row lock.
+     *
+     * Fix (2026-08-06): network_read_write_timeout was read from
+     * config.ini and printed in the pool summary above but never
+     * actually applied anywhere - confirmed during live debugging of a
+     * genuine cross-session lock-contention hang that neither this
+     * setting nor query_execution_timeout (also dead config, same
+     * problem) had any effect on. OCI_ATTR_RECEIVE_TIMEOUT and
+     * OCI_ATTR_SEND_TIMEOUT (Oracle Client 18c+) are the real
+     * mechanism: set once here on the shared server handle, they
+     * bound every subsequent call made through any session (svchp)
+     * built on top of it - srvhp itself is shared by every pool slot,
+     * so this is the one place that needs setting, not per-session.
+     * A blocked call now fails with an OCI timeout error after
+     * network_read_write_timeout seconds instead of hanging
+     * indefinitely - the difference between a normal FAIL response
+     * and a permanently stuck worker thread and its whole queue.
+     *
+     * Deliberately not using CHECK_OCI_POOL's Cleanup-jump here - an
+     * older Oracle Client that doesn't support these attributes
+     * shouldn't prevent the pool from starting at all, just lose this
+     * protection. Logged as WARN (not fatal) if either attribute
+     * can't be set, so it's visible rather than silently absent.      */
+    {
+        ub4 recv_timeout = (ub4)pool->network_read_write_timeout;
+        ub4 send_timeout = (ub4)pool->network_read_write_timeout;
+
+        sword recv_rc = OCIAttrSet(pool->srvhp, OCI_HTYPE_SERVER,
+                                    &recv_timeout, 0,
+                                    OCI_ATTR_RECEIVE_TIMEOUT, pool->errhp);
+        if (recv_rc != OCI_SUCCESS && recv_rc != OCI_SUCCESS_WITH_INFO)
+            logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT failed (rc=%d) "
+                         "- blocked calls will NOT time out client-side "
+                         "(requires Oracle Client 18c+)", (int)recv_rc);
+        else
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT=%us OK",
+                         recv_timeout);
+
+        sword send_rc = OCIAttrSet(pool->srvhp, OCI_HTYPE_SERVER,
+                                    &send_timeout, 0,
+                                    OCI_ATTR_SEND_TIMEOUT, pool->errhp);
+        if (send_rc != OCI_SUCCESS && send_rc != OCI_SUCCESS_WITH_INFO)
+            logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT failed (rc=%d) "
+                         "- blocked calls will NOT time out client-side "
+                         "(requires Oracle Client 18c+)", (int)send_rc);
+        else
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT=%us OK",
+                         send_timeout);
+    }
 
     /* ---- Open pool_min_size slots ---- */
     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
@@ -680,8 +662,11 @@ Cleanup:
         free(pool->slots);
     }
 
-    /* No pool-level srvhp to detach/free any more - close_slot() above
-     * already detached each open slot's own server connection. */
+    if (pool->srvhp)
+    {
+        OCIServerDetach(pool->srvhp, pool->errhp, OCI_DEFAULT);
+        OCIHandleFree(pool->srvhp, OCI_HTYPE_SERVER);
+    }
     if (pool->errhp) OCIHandleFree(pool->errhp, OCI_HTYPE_ERROR);
     if (pool->envhp) OCIHandleFree(pool->envhp, OCI_HTYPE_ENV);
 
@@ -722,9 +707,14 @@ void OCI_Disconnect_pool(oci_context_t *ctx)
 
     pthread_mutex_unlock(&pool->mutex);
 
-    /* No pool-level srvhp to detach/free any more (2026-08-06) -
-     * close_slot() above already detached each open slot's own server
-     * connection individually. */
+    if (pool->srvhp)
+    {
+        logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                     "Calling OCIServerDetach");
+        OCIServerDetach(pool->srvhp, pool->errhp, OCI_DEFAULT);
+        OCIHandleFree(pool->srvhp, OCI_HTYPE_SERVER);
+        pool->srvhp = NULL;
+    }
     if (pool->errhp) { OCIHandleFree(pool->errhp, OCI_HTYPE_ERROR); pool->errhp = NULL; }
     if (pool->envhp) { OCIHandleFree(pool->envhp, OCI_HTYPE_ENV);   pool->envhp = NULL; }
 

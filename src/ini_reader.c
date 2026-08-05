@@ -952,6 +952,11 @@ static consumer_config_map_t consumer_map[] = {
     { "dispatcher.algorithm",   CFG_STRING, offsetof(app_config_t, dispatcher_algorithm),
         sizeof(((app_config_t *)0)->dispatcher_algorithm), "round_robin", 0 },
 
+    { "dispatcher.poll_interval_seconds", CFG_INT, offsetof(app_config_t, dispatcher_poll_interval_seconds), 0,
+        NULL, 5 },
+    { "dispatcher.lifetime_seconds",      CFG_INT, offsetof(app_config_t, dispatcher_lifetime_seconds), 0,
+        NULL, 0 },
+
     { "file_consumer.input_xml_dir",      CFG_STRING, offsetof(app_config_t, file_consumer_input_xml_dir),
         sizeof(((app_config_t *)0)->file_consumer_input_xml_dir),      "./Input_XML",      0 },
     { "file_consumer.processing_xml_dir", CFG_STRING, offsetof(app_config_t, file_consumer_processing_xml_dir),

@@ -62,8 +62,10 @@
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>    /* sleep() - Stage 5 pass-interval pause */
-#include <time.h>      /* nanosleep() - Stage 5 drain-wait loop.
+#include <unistd.h>    /* readdir()-adjacent declarations; sleep() itself
+                          moved to file_consumer_runner.c along with the
+                          scan loop it used to pace */
+#include <time.h>      /* nanosleep() - drain-wait visibility poll below.
                           usleep() was tried first but needs feature-test
                           macros (_XOPEN_SOURCE/_DEFAULT_SOURCE) that
                           weren't reliably in effect for this translation
@@ -100,6 +102,7 @@
 #include "dispatcher.h"
 #include "response_object.h"
 #include "file_consumer.h"
+#include "file_consumer_runner.h"
 #include "queue_manager.h"
 #include "worker.h"
 
@@ -244,16 +247,15 @@ static dep_test_case_t test_cases[] = {
 /* MAX_XML_FILE_SIZE / MAX_OPERATION_LEN moved to dispatcher.c (Stage 1
  * extraction) - both were only used by code that moved with them.     */
 
-/* Test-only knobs: how many scan passes to run per invocation, how
- * long to pause between them (simulates files arriving over time
- * rather than all at once), and how long to wait for the worker pool
- * to finish draining before shutting it down. Not real production
- * polling/timeout values - a continuous run is a later, separate
- * decision. Safe to bump up/down or drop entirely once Stage 5 is
- * done being eyeballed.                                                */
-#define FILE_CONSUMER_TEST_PASSES                  4
-#define FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS   2
-#define FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS        30
+/* File Consumer's scan interval and lifetime are now real config
+ * (dispatcher.poll_interval_seconds / dispatcher.lifetime_seconds in
+ * consumer_file.ini - see file_consumer_runner.c), not hardcoded test
+ * knobs - Terry's proposal, 2026-08-05 "Findings and lessons" doc,
+ * section 1b. This one constant is purely about shutdown-wait
+ * visibility (see the consumer_type=FILE branch below) - not a
+ * behavioural timeout, worker_pool_shutdown_and_join() always fully
+ * drains regardless of how long that takes.                           */
+#define FILE_CONSUMER_DRAIN_POLL_WARN_SECONDS       30
 
 
 /* ================================================================== */
@@ -1542,73 +1544,81 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "Worker pool started - running %d scan pass(es), %d "
-                     "second(s) apart", FILE_CONSUMER_TEST_PASSES,
-                     FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS);
-
-        int fc_total = 0;
-        int fc_had_failure = 0;
-
-        for (int pass = 1; pass <= FILE_CONSUMER_TEST_PASSES; pass++)
+        /* File Consumer now gets its own dedicated thread too, rather
+         * than main() running its scan-sleep-scan loop directly - see
+         * file_consumer_runner.h. This is the fix for the main()
+         * inconsistency Terry flagged (worker pool had proper threads,
+         * File Consumer didn't) - main()'s job here shrinks down to
+         * pure orchestration: start both, wait, shut both down.        */
+        file_consumer_runner_t *fc_runner = file_consumer_runner_start(&ctx, &config, qm);
+        if (!fc_runner)
         {
-            logger_write(&logger, LOG_INFO, __func__, 0,
-                         "File Consumer scan pass %d/%d", pass, FILE_CONSUMER_TEST_PASSES);
-
-            int fc_rc = file_consumer_scan_once(&ctx, &config, qm);
-
-            if (fc_rc < 0)
-            {
-                logger_write(&logger, LOG_ERROR, __func__, 0,
-                             "File Consumer scan pass %d failed - see log "
-                             "above", pass);
-                fc_had_failure = 1;
-            }
-            else
-            {
-                logger_write(&logger, LOG_INFO, __func__, 0,
-                             "File Consumer scan pass %d complete - %d "
-                             "file(s) enqueued", pass, fc_rc);
-                fc_total += fc_rc;
-            }
-
-            if (pass < FILE_CONSUMER_TEST_PASSES)
-                sleep(FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS);
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "file_consumer_runner_start() failed - shutting "
+                         "down the worker pool that already started, "
+                         "nothing will ever be enqueued for it to drain");
+            worker_pool_shutdown_and_join(pool, qm);
+            queue_manager_destroy(qm);
+            OCI_Disconnect_pool(&ctx);
+            logger_close(&logger);
+            return -1;
         }
 
         logger_write(&logger, LOG_INFO, __func__, 0,
-                     "File Consumer test run complete - %d pass(es), %d "
-                     "file(s) enqueued total. Waiting up to %d second(s) "
-                     "for the worker pool to finish draining before "
-                     "shutdown...", FILE_CONSUMER_TEST_PASSES, fc_total,
-                     FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS);
+                     "Worker pool and File Consumer thread both started - "
+                     "waiting for File Consumer to stop (lifetime=%s)",
+                     config.dispatcher_lifetime_seconds > 0
+                     ? "bounded, see file_consumer log for the exact value"
+                     : "forever - this run will not return on its own");
 
-        /* Poll for the real condition (queues empty) rather than
-         * guessing a fixed sleep duration, with a bounded timeout so a
-         * stuck worker can't hang the whole test run forever.          */
+        /* Blocks until the File Consumer thread stops on its own -
+         * i.e. once dispatcher.lifetime_seconds have elapsed. With
+         * lifetime_seconds=0 this call - and therefore this whole
+         * process - blocks here indefinitely, matching "0 = run
+         * forever" as a real long-running service rather than a
+         * bounded test pass (no signal handling is wired up yet, so
+         * today that means an actual process kill to stop it, not a
+         * graceful in-process shutdown). Set
+         * dispatcher.lifetime_seconds > 0 in consumer_file.ini for a
+         * bounded test run instead.
+         *
+         * Deliberately file_consumer_runner_join() here, NOT
+         * stop_and_join() - stop_and_join() actively requests the
+         * thread stop immediately, which is exactly the bug behind the
+         * "exits after 0 scan passes" report on 2026-08-05: calling it
+         * unconditionally right after start() told the thread to stop
+         * before it ever ran a single pass.                           */
+        file_consumer_runner_join(fc_runner);
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "File Consumer thread stopped - waiting for the "
+                     "worker pool to finish draining whatever's still "
+                     "queued before shutdown...");
+
+        /* Poll for visibility/logging only - worker_pool_shutdown_and_join()
+         * below still fully drains every queue regardless of how long
+         * that takes, this loop just gives an early WARN if it's
+         * taking a while so it's visible in the log rather than a
+         * silent long wait.                                            */
         int waited_ms = 0;
         while (queue_manager_total_count(qm) > 0 &&
-               waited_ms < FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS * 1000)
+               waited_ms < FILE_CONSUMER_DRAIN_POLL_WARN_SECONDS * 1000)
         {
             struct timespec drain_wait_ts = {0, 200000000L};   /* 200ms */
             nanosleep(&drain_wait_ts, NULL);
             waited_ms += 200;
         }
 
-        int remaining_at_poll_timeout = queue_manager_total_count(qm);
-        if (remaining_at_poll_timeout > 0)
+        int remaining_at_poll_warn = queue_manager_total_count(qm);
+        if (remaining_at_poll_warn > 0)
             logger_write(&logger, LOG_WARN, __func__, 0,
-                         "Drain wait poll gave up after %d second(s) with %d "
-                         "item(s) still queued - this is just the poll timing "
-                         "out, NOT abandoning that work: "
-                         "worker_pool_shutdown_and_join() below still blocks "
-                         "until every queued item is genuinely processed by "
-                         "its worker, however long that takes. This just means "
-                         "the run is taking longer than %d second(s) - nothing "
-                         "is lost, but shutdown will take a while longer than "
-                         "expected.",
-                         FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS, remaining_at_poll_timeout,
-                         FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS);
+                         "Still %d item(s) queued after %d second(s) of "
+                         "waiting - this is just a visibility WARN, NOT "
+                         "abandoning that work: worker_pool_shutdown_and_join() "
+                         "below still blocks until every queued item is "
+                         "genuinely processed by its worker, however long "
+                         "that takes.",
+                         remaining_at_poll_warn, FILE_CONSUMER_DRAIN_POLL_WARN_SECONDS);
         else
             logger_write(&logger, LOG_INFO, __func__, 0,
                          "All queued items drained - shutting down worker "
@@ -1629,13 +1639,7 @@ int main(int argc, char *argv[])
 
         OCI_Disconnect_pool(&ctx);
         logger_close(&logger);
-        /* Not using remaining_at_poll_timeout here - it's a stale
-         * snapshot from before the blocking join, which by this point
-         * has already guaranteed every queued item was genuinely
-         * processed (successfully or not - that's reflected in each
-         * item's own response file, not in this aggregate exit code).
-         * Only a real scan-level failure should make this return -1.  */
-        return fc_had_failure ? -1 : 0;
+        return 0;
     }
 
     /*TL June 13 : For a test,  lets encase every test in 1 transaction, using transaction manager*/
