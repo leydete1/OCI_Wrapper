@@ -1,1 +1,1 @@
-{"status":"ERROR","audit_id":"-","operation":"-","error_code":"QUEUE_FULL","error_text":"All dispatcher queues are at capacity - rejected without blocking or retry"}
+{"status":"ERROR","audit_id":"audit_stub_procedure_round_4","operation":"EXECUTE_PROCEDURE","error_code":"EXECUTE_FAILED","error_text":"execute_procedure failed (rc=-1) - see procedure_Data_Manager.log"}

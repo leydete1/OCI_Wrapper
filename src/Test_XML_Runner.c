@@ -62,6 +62,14 @@
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>    /* sleep() - Stage 5 pass-interval pause */
+#include <time.h>      /* nanosleep() - Stage 5 drain-wait loop.
+                          usleep() was tried first but needs feature-test
+                          macros (_XOPEN_SOURCE/_DEFAULT_SOURCE) that
+                          weren't reliably in effect for this translation
+                          unit - nanosleep() is more portably declared
+                          under the _POSIX_C_SOURCE this file already
+                          expects, so switched rather than chase macros. */
 #include <ctype.h>
 
 #include "OCI_Connection.h"
@@ -92,6 +100,8 @@
 #include "dispatcher.h"
 #include "response_object.h"
 #include "file_consumer.h"
+#include "queue_manager.h"
+#include "worker.h"
 
 /* looks_like_new_request_format()'s own forward declaration removed
  * 2026-08-01 - now level1_looks_like_new_format(), declared in
@@ -234,12 +244,16 @@ static dep_test_case_t test_cases[] = {
 /* MAX_XML_FILE_SIZE / MAX_OPERATION_LEN moved to dispatcher.c (Stage 1
  * extraction) - both were only used by code that moved with them.     */
 
-/* Stage 2 test-only knob: how many one-shot file_consumer_run_once()
- * passes to run per invocation, purely to generate a decent volume of
- * log output for review. Not a real polling interval - a continuous
- * loop is a later, separate decision. Safe to bump up/down or drop
- * entirely once Stage 2 is done being eyeballed.                      */
-#define FILE_CONSUMER_TEST_PASSES  4
+/* Test-only knobs: how many scan passes to run per invocation, how
+ * long to pause between them (simulates files arriving over time
+ * rather than all at once), and how long to wait for the worker pool
+ * to finish draining before shutting it down. Not real production
+ * polling/timeout values - a continuous run is a later, separate
+ * decision. Safe to bump up/down or drop entirely once Stage 5 is
+ * done being eyeballed.                                                */
+#define FILE_CONSUMER_TEST_PASSES                  4
+#define FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS   2
+#define FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS        30
 
 
 /* ================================================================== */
@@ -1453,23 +1467,85 @@ int main(int argc, char *argv[])
     }
 
     /* ================================================================
-     * consumer_type=FILE (File_Consumer_proposal v1.2, Stage 2)
+     * consumer_type=FILE (File_Consumer_proposal v1.2)
      *
-     * One-shot for now - a single scan-validate-move-dispatch pass over
-     * Input_XML/Input_JSON, then exit. No polling loop yet (that's a
-     * later decision, not this stage's job) and no continuation into
-     * the fixture-directory test harness below: that harness wraps
-     * every file in one shared tx_begin/tx_commit spanning the whole
-     * batch, which is a completely different session/transaction model
-     * than the File Consumer's "one request, one atomic session, then
-     * the session goes back to the pool" design (Payload Ownership
-     * addendum). The two are not meant to run in the same pass.
+     * Stage 5 update: real worker threads. main() now owns the
+     * queue_manager and a long-running worker pool - created once,
+     * kept alive across every scan pass, shut down only at the end of
+     * this run. Each worker thread borrows its own session from the
+     * pool independently, so this path requires connection pool mode;
+     * direct mode's single shared connection can't support that.
+     *
+     * Doesn't continue into the fixture-directory test harness below:
+     * that harness wraps every file in one shared tx_begin/tx_commit
+     * spanning the whole batch, which is a completely different
+     * session/transaction model than the File Consumer's "one request,
+     * one atomic session, then the session goes back to the pool"
+     * design (Payload Ownership addendum / Session Model decision).
+     * The two are not meant to run in the same pass.
      * ================================================================ */
     if (strcasecmp(config.consumer_type, "FILE") == 0)
     {
+        if (!use_pool)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "consumer_type=FILE requires connection pool mode "
+                         "(use_connection_pool=1 in config.ini) - each "
+                         "worker thread needs its own independently-"
+                         "borrowed session, which direct mode's single "
+                         "shared connection can't provide. Refusing to "
+                         "start.");
+            OCI_Disconnect(&ctx);
+            logger_close(&logger);
+            return -1;
+        }
+
+        /* The session pinned into tx_ctx above was only needed for
+         * session_reconcile_orphans()/dispatch_create_session() during
+         * startup - the File Consumer path itself never touches the
+         * database directly (file_consumer.c only reads files off
+         * disk and enqueues RequestObjects; ctx there is used purely
+         * for its logger pointers), and every worker thread below
+         * borrows its own independent session anyway. Release this one
+         * now rather than holding it uselessly for the whole run.      */
+        OCI_Pool_release_session(&ctx, tx_ctx);
         logger_write(&logger, LOG_INFO, __func__, 0,
-                     "consumer_type=FILE - running File Consumer "
-                     "(Stage 2, %d one-shot passes)", FILE_CONSUMER_TEST_PASSES);
+                     "Released the startup-only pinned session - each "
+                     "worker thread borrows its own below");
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "consumer_type=FILE - starting worker pool (%d "
+                     "thread(s), one per queue)", config.dispatcher_queue_count);
+
+        queue_manager_t *qm = queue_manager_create(config.dispatcher_queue_count,
+                                                    config.dispatcher_queue_depth);
+        if (!qm)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "queue_manager_create() failed - check "
+                         "dispatcher_queue_count/dispatcher_queue_depth in "
+                         "consumer_file.ini (both must be > 0)");
+            OCI_Disconnect_pool(&ctx);
+            logger_close(&logger);
+            return -1;
+        }
+
+        worker_pool_t *pool = worker_pool_start(&ctx, qm, config.dispatcher_queue_count);
+        if (!pool)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "worker_pool_start() failed - see worker log above "
+                         "for detail. Refusing to run with no workers.");
+            queue_manager_destroy(qm);
+            OCI_Disconnect_pool(&ctx);
+            logger_close(&logger);
+            return -1;
+        }
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "Worker pool started - running %d scan pass(es), %d "
+                     "second(s) apart", FILE_CONSUMER_TEST_PASSES,
+                     FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS);
 
         int fc_total = 0;
         int fc_had_failure = 0;
@@ -1477,44 +1553,88 @@ int main(int argc, char *argv[])
         for (int pass = 1; pass <= FILE_CONSUMER_TEST_PASSES; pass++)
         {
             logger_write(&logger, LOG_INFO, __func__, 0,
-                         "File Consumer pass %d/%d", pass, FILE_CONSUMER_TEST_PASSES);
+                         "File Consumer scan pass %d/%d", pass, FILE_CONSUMER_TEST_PASSES);
 
-            int fc_rc = file_consumer_run_once(tx_ctx, &config);
+            int fc_rc = file_consumer_scan_once(&ctx, &config, qm);
 
             if (fc_rc < 0)
             {
                 logger_write(&logger, LOG_ERROR, __func__, 0,
-                             "File Consumer pass %d failed - see log above",
-                             pass);
+                             "File Consumer scan pass %d failed - see log "
+                             "above", pass);
                 fc_had_failure = 1;
             }
             else
             {
                 logger_write(&logger, LOG_INFO, __func__, 0,
-                             "File Consumer pass %d complete - %d file(s) "
-                             "dispatched", pass, fc_rc);
+                             "File Consumer scan pass %d complete - %d "
+                             "file(s) enqueued", pass, fc_rc);
                 fc_total += fc_rc;
             }
+
+            if (pass < FILE_CONSUMER_TEST_PASSES)
+                sleep(FILE_CONSUMER_TEST_PASS_INTERVAL_SECONDS);
         }
 
         logger_write(&logger, LOG_INFO, __func__, 0,
-                     "File Consumer test run complete - %d pass(es), "
-                     "%d file(s) dispatched total", FILE_CONSUMER_TEST_PASSES,
-                     fc_total);
+                     "File Consumer test run complete - %d pass(es), %d "
+                     "file(s) enqueued total. Waiting up to %d second(s) "
+                     "for the worker pool to finish draining before "
+                     "shutdown...", FILE_CONSUMER_TEST_PASSES, fc_total,
+                     FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS);
 
-        if (use_pool)
+        /* Poll for the real condition (queues empty) rather than
+         * guessing a fixed sleep duration, with a bounded timeout so a
+         * stuck worker can't hang the whole test run forever.          */
+        int waited_ms = 0;
+        while (queue_manager_total_count(qm) > 0 &&
+               waited_ms < FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS * 1000)
         {
-            OCI_Pool_release_session(&ctx, tx_ctx);
-            logger_write(&logger, LOG_INFO, __func__, 0,
-                         "Released pinned pool session back to pool");
-            OCI_Disconnect_pool(&ctx);
+            struct timespec drain_wait_ts = {0, 200000000L};   /* 200ms */
+            nanosleep(&drain_wait_ts, NULL);
+            waited_ms += 200;
         }
+
+        int remaining_at_poll_timeout = queue_manager_total_count(qm);
+        if (remaining_at_poll_timeout > 0)
+            logger_write(&logger, LOG_WARN, __func__, 0,
+                         "Drain wait poll gave up after %d second(s) with %d "
+                         "item(s) still queued - this is just the poll timing "
+                         "out, NOT abandoning that work: "
+                         "worker_pool_shutdown_and_join() below still blocks "
+                         "until every queued item is genuinely processed by "
+                         "its worker, however long that takes. This just means "
+                         "the run is taking longer than %d second(s) - nothing "
+                         "is lost, but shutdown will take a while longer than "
+                         "expected.",
+                         FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS, remaining_at_poll_timeout,
+                         FILE_CONSUMER_DRAIN_TIMEOUT_SECONDS);
         else
-        {
-            OCI_Disconnect(&ctx);
-        }
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "All queued items drained - shutting down worker "
+                         "pool");
 
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "Calling worker_pool_shutdown_and_join() - this call "
+                     "blocks until every worker has fully drained its own "
+                     "queue and exited, regardless of how long that takes");
+
+        worker_pool_shutdown_and_join(pool, qm);
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "worker_pool_shutdown_and_join() returned - all workers "
+                     "exited, all queues should now be empty");
+
+        queue_manager_destroy(qm);
+
+        OCI_Disconnect_pool(&ctx);
         logger_close(&logger);
+        /* Not using remaining_at_poll_timeout here - it's a stale
+         * snapshot from before the blocking join, which by this point
+         * has already guaranteed every queued item was genuinely
+         * processed (successfully or not - that's reflected in each
+         * item's own response file, not in this aggregate exit code).
+         * Only a real scan-level failure should make this return -1.  */
         return fc_had_failure ? -1 : 0;
     }
 

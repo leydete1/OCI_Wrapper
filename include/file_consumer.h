@@ -4,22 +4,25 @@
 /* ======================================================================
  * file_consumer.h
  *
- * Stage 2 (File_Consumer_proposal v1.2) - single-threaded File Consumer.
- * Scans file_consumer_input_xml_dir / file_consumer_input_json_dir.
+ * Single-threaded File Consumer: scans file_consumer_input_xml_dir /
+ * file_consumer_input_json_dir, reads each file's payload itself
+ * (Payload Ownership addendum), and round-robin enqueues a
+ * RequestObject (request_object.h) via queue_manager. Queue-Full
+ * rejections and read failures both skip Processing_* entirely and go
+ * straight from Input_* to Error_*, per the Queue-Full Behavior
+ * addendum.
  *
- * Stage 3 update: process_xml_file() hands back a populated
- * response_object_t, and response_manager_write() (response_manager.h)
- * writes it to Output_* / Error_* and moves the original file there
- * alongside it.
- *
- * Stage 4 update: File Consumer now reads each file's payload itself
- * and round-robin enqueues a RequestObject (request_object.h) via
- * queue_manager, rather than calling process_xml_file() directly - a
- * single synchronous worker (worker.h) drains everything once the scan
- * is done. Queue-Full rejections and read failures both skip
- * Processing_* entirely and go straight from Input_* to Error_*, per
- * the Queue-Full Behavior addendum. Still no real threads - that's
- * Stage 5.
+ * Stage 5 update: File Consumer no longer owns the queue_manager or
+ * drains it - it just scans and enqueues into a queue_manager that's
+ * now created once, up front, and shared with a long-running worker
+ * thread pool (worker.h) that main() owns and keeps alive across many
+ * scan passes. This is the split that made long-running workers
+ * possible: Stage 4's file_consumer_run_once() created its own
+ * queue_manager, enqueued, drained it synchronously via a single
+ * worker call, then destroyed it - one-shot-per-pass, which is exactly
+ * the "recreate threads every pass" cost Terry flagged as too
+ * expensive (2026-08-06). file_consumer_scan_once() below is the
+ * scan-and-enqueue half only.
  *
  * Logs to ctx->file_consumer_logger (its own dedicated log file,
  * file_consumer_log_file_name in config.ini) rather than borrowing
@@ -28,23 +31,28 @@
 
 #include "OCI_Connection.h"   /* oci_context_t */
 #include "ini_reader.h"       /* app_config_t  */
+#include "queue_manager.h"
 
 /*
- * file_consumer_run_once()
+ * file_consumer_scan_once()
  *
- * One pass over both input directories: scan, move each file found to
- * Processing, dispatch it, log the result, move on. Does not loop or
- * sleep - that's a decision for whatever calls this (continuous
- * polling loop vs. single invocation) and is intentionally left to
- * main() rather than baked in here.
+ * One pass over both input directories: scan, read each file's
+ * payload, round-robin enqueue into qm (created and owned by the
+ * caller - see worker.h's worker_pool_start(), which needs the same
+ * queue_manager_t so workers can drain what gets enqueued here).
+ * Rejects immediately (skipping Processing_* entirely, straight to
+ * Error_*) on read failure or if every queue is full. Does not drain
+ * anything itself and does not loop or sleep - looping across passes
+ * is main()'s job, actual draining is the worker pool's job.
  *
- * Returns the total number of files dispatched (>= 0, files skipped
- * for being zero-length or non-regular don't count), or -1 if BOTH
- * input directories failed to open (a config-level problem - wrong
- * path in consumer_file.ini, permissions, etc.). If only one of the
- * two directories fails to open, that failure is logged and the other
- * directory is still processed normally.
+ * Returns the total number of files enqueued (>= 0, files skipped for
+ * being zero-length or non-regular don't count, and immediately
+ * rejected files don't count either since they never reach a queue),
+ * or -1 if BOTH input directories failed to open (a config-level
+ * problem - wrong path in consumer_file.ini, permissions, etc.). If
+ * only one of the two directories fails to open, that failure is
+ * logged and the other directory is still processed normally.
  */
-int file_consumer_run_once(oci_context_t *ctx, app_config_t *config);
+int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config, queue_manager_t *qm);
 
 #endif /* FILE_CONSUMER_H */

@@ -2,9 +2,9 @@
 <output_xml>
 <execution_envelope>
 <status>ERROR</status>
-<audit_id>-</audit_id>
-<operation>-</operation>
-<error_code>QUEUE_FULL</error_code>
-<error_text>All dispatcher queues are at capacity - rejected without blocking or retry</error_text>
+<audit_id>audit_stub_select_2</audit_id>
+<operation>SELECT</operation>
+<error_code>EXECUTE_FAILED</error_code>
+<error_text>execute_query_batch failed (rc=-1) - see select_Data_Manager.log</error_text>
 </execution_envelope>
 </output_xml>

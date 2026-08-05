@@ -521,6 +521,62 @@ int OCI_Connect_pool(oci_context_t *ctx)
     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
                  "OCIServerAttach OK");
 
+    /* ---- Bound how long any call on this shared server handle will
+     * wait for a response, including a call blocked waiting on
+     * another session's row lock.
+     *
+     * Fix (2026-08-06): network_read_write_timeout was read from
+     * config.ini and printed in the pool summary above but never
+     * actually applied anywhere - confirmed during live debugging of a
+     * genuine cross-session lock-contention hang that neither this
+     * setting nor query_execution_timeout (also dead config, same
+     * problem) had any effect on. OCI_ATTR_RECEIVE_TIMEOUT and
+     * OCI_ATTR_SEND_TIMEOUT (Oracle Client 18c+) are the real
+     * mechanism: set once here on the shared server handle, they
+     * bound every subsequent call made through any session (svchp)
+     * built on top of it - srvhp itself is shared by every pool slot,
+     * so this is the one place that needs setting, not per-session.
+     * A blocked call now fails with an OCI timeout error after
+     * network_read_write_timeout seconds instead of hanging
+     * indefinitely - the difference between a normal FAIL response
+     * and a permanently stuck worker thread and its whole queue.
+     *
+     * Deliberately not using CHECK_OCI_POOL's Cleanup-jump here - an
+     * older Oracle Client that doesn't support these attributes
+     * shouldn't prevent the pool from starting at all, just lose this
+     * protection. Logged as WARN (not fatal) if either attribute
+     * can't be set, so it's visible rather than silently absent.      */
+    {
+        ub4 recv_timeout = (ub4)pool->network_read_write_timeout;
+        ub4 send_timeout = (ub4)pool->network_read_write_timeout;
+
+        sword recv_rc = OCIAttrSet(pool->srvhp, OCI_HTYPE_SERVER,
+                                    &recv_timeout, 0,
+                                    OCI_ATTR_RECEIVE_TIMEOUT, pool->errhp);
+        if (recv_rc != OCI_SUCCESS && recv_rc != OCI_SUCCESS_WITH_INFO)
+            logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT failed (rc=%d) "
+                         "- blocked calls will NOT time out client-side "
+                         "(requires Oracle Client 18c+)", (int)recv_rc);
+        else
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT=%us OK",
+                         recv_timeout);
+
+        sword send_rc = OCIAttrSet(pool->srvhp, OCI_HTYPE_SERVER,
+                                    &send_timeout, 0,
+                                    OCI_ATTR_SEND_TIMEOUT, pool->errhp);
+        if (send_rc != OCI_SUCCESS && send_rc != OCI_SUCCESS_WITH_INFO)
+            logger_write(ctx->connectionpool_logger, LOG_WARN, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT failed (rc=%d) "
+                         "- blocked calls will NOT time out client-side "
+                         "(requires Oracle Client 18c+)", (int)send_rc);
+        else
+            logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
+                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT=%us OK",
+                         send_timeout);
+    }
+
     /* ---- Open pool_min_size slots ---- */
     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
                  "Opening %d minimum pool slots", pool->pool_min_size);

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<Procedure_Result>
+<execution_envelope>
+<procedure_name>DATA_MANAGER.PURGE_OLD_ROWS</procedure_name>
+<execution_time>0.003792</execution_time>
+</execution_envelope>
+</Procedure_Result>
+</output_xml>

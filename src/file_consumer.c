@@ -1,17 +1,18 @@
 /* ======================================================================
  * file_consumer.c
  *
- * Stage 2 (File_Consumer_proposal v1.2) scan/validate/move loop,
- * extended in Stage 3 with the ResponseObject + Response Manager, and
- * now Stage 4: instead of calling process_xml_file() directly,
- * File Consumer reads each file's payload itself (Payload Ownership
- * addendum), builds a RequestObject, and round-robin enqueues it via
- * queue_manager - a single synchronous worker (worker.c) then drains
- * everything queued once the whole directory scan is done. Real
- * concurrency (N worker threads, one per queue) is Stage 5; this stage
- * proves the queue/round-robin/depth-limit logic in isolation first,
- * same "single-threaded before concurrent" approach every stage here
- * has followed.
+ * File Consumer: scan/validate/read loop. Reads each file's payload
+ * itself (Payload Ownership addendum), builds a RequestObject, and
+ * round-robin enqueues it via queue_manager.
+ *
+ * Stage 5 update: File Consumer no longer owns the queue_manager or
+ * drains it - main() now creates the queue_manager once and starts a
+ * long-running worker thread pool (worker.c) against it up front,
+ * keeping both alive across many scan passes. file_consumer_scan_once()
+ * just does its one job (scan and enqueue) against whatever
+ * queue_manager it's handed; the worker pool drains concurrently in
+ * the background. See file_consumer.h for the full reasoning on why
+ * this split happened (thread startup cost).
  *
  * Queue-Full handling (Queue-Full Behavior addendum, v1.2): if every
  * queue is full, the file never moves to Processing_* at all - it's
@@ -44,7 +45,6 @@
 #include "response_manager.h"
 #include "request_object.h"
 #include "queue_manager.h"
-#include "worker.h"
 #include "logger.h"
 
 /* ------------------------------------------------------------------ */
@@ -255,9 +255,9 @@ static int process_directory(oci_context_t   *ctx,
 }
 
 /* ------------------------------------------------------------------ */
-/*  file_consumer_run_once                                              */
+/*  file_consumer_scan_once                                             */
 /* ------------------------------------------------------------------ */
-int file_consumer_run_once(oci_context_t *ctx, app_config_t *config)
+int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config, queue_manager_t *qm)
 {
     if (strcasecmp(config->dispatcher_algorithm, "round_robin") != 0)
     {
@@ -265,17 +265,6 @@ int file_consumer_run_once(oci_context_t *ctx, app_config_t *config)
                      "File Consumer: dispatcher_algorithm='%s' is not "
                      "implemented (only round_robin is) - using round_robin "
                      "anyway", config->dispatcher_algorithm);
-    }
-
-    queue_manager_t *qm = queue_manager_create(config->dispatcher_queue_count,
-                                                config->dispatcher_queue_depth);
-    if (!qm)
-    {
-        logger_write(ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
-                     "File Consumer: queue_manager_create() failed - check "
-                     "dispatcher_queue_count/dispatcher_queue_depth in "
-                     "consumer_file.ini (both must be > 0)");
-        return -1;
     }
 
     int xml_result  = process_directory(ctx, qm,
@@ -296,25 +285,18 @@ int file_consumer_run_once(oci_context_t *ctx, app_config_t *config)
         logger_write(ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
                      "File Consumer: both input directories failed to "
                      "open - check file_consumer.*_dir in consumer_file.ini");
-        queue_manager_destroy(qm);
         return -1;
     }
-
-    int queued = queue_manager_total_count(qm);
-    logger_write(ctx->file_consumer_logger, LOG_INFO, __func__, 0,
-                 "File Consumer: scan complete, %d item(s) queued across "
-                 "%d queue(s) - draining now", queued, config->dispatcher_queue_count);
-
-    int drained = worker_run(ctx, qm);
-
-    queue_manager_destroy(qm);
 
     int total = (xml_result  > 0 ? xml_result  : 0)
               + (json_result > 0 ? json_result : 0);
 
+    int queued = queue_manager_total_count(qm);
     logger_write(ctx->file_consumer_logger, LOG_INFO, __func__, 0,
-                 "File Consumer: pass complete - %d enqueued, %d drained "
-                 "by worker", total, drained);
+                 "File Consumer: scan complete - %d enqueued this pass, "
+                 "%d item(s) currently queued across %d queue(s) (worker "
+                 "pool drains these concurrently in the background)",
+                 total, queued, config->dispatcher_queue_count);
 
     return total;
 }
