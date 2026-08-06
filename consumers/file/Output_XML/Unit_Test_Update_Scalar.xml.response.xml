@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <output_xml>
 <execution_envelope>
-<operation>INSERT</operation>
+<operation>UPDATE</operation>
 <table_name>OCI_FIELD_TEST</table_name>
 <owner>DATA_MANAGER</owner>
-<rows_inserted>2</rows_inserted>
-<lobs_written>1</lobs_written>
-<execution_time>0.012189</execution_time>
+<rows_updated>1</rows_updated>
+<lobs_written>0</lobs_written>
+<execution_time>0.015495</execution_time>
 </execution_envelope>
 </output_xml>

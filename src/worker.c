@@ -145,6 +145,12 @@ static void *worker_thread_main(void *arg)
         response_object_free(&resp);
         request_object_free(req);
 
+        /* Trace context (2026-08-06): clear now that this request is
+         * fully done - must happen before looping back to dequeue the
+         * next item, or this request's sid would leak into the next
+         * one's log lines on this same thread. */
+        logger_clear_sid();
+
         processed++;
     }
 

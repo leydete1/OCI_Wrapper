@@ -975,6 +975,15 @@ int process_xml_file(oci_context_t      *ctx,
                      "operations=%d", filename, new_request.external_audit_id,
                      new_request.operation_count);
 
+        /* Trace context (2026-08-06): set for the calling (worker)
+         * thread now that the request's session_id is known - every
+         * subsequent logger_write() call on this thread, across every
+         * module it touches for the rest of this request, picks it up
+         * automatically. Cleared in worker.c once this request is
+         * fully done, so it never leaks into the next request handled
+         * by the same thread. */
+        logger_set_sid(new_request.session_id);
+
         int is_json = (new_request.source_format == INPUT_FORMAT_JSON);
 
         uint64_t level2_start = metrics_now_us();

@@ -101,6 +101,45 @@ void logger_write(logger_t   *logger,
                   int         thread_id,
                   const char *fmt, ...);
 
+/* ------------------------------------------------------------------ */
+/*  Trace context (session_id / transaction_id) - 2026-08-06            */
+/*                                                                      */
+/*  Point-in-time capture only, for tracing/debugging across the        */
+/*  ~500 existing logger_write() call sites without changing that       */
+/*  function's signature or touching any of them. Storage is __thread   */
+/*  (thread-local) - each worker thread has its own private sid/txid,   */
+/*  set/cleared as that thread moves through a request, with no         */
+/*  locking needed since no other thread can ever see or touch it.      */
+/*  logger_write() appends "sid=... txid=..." to the already-formatted  */
+/*  message for whichever of these the calling thread currently has     */
+/*  set, gated by the single global toggle below.                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * logger_set_include_trace_context()
+ *
+ * Single switch applying to every logger, not per-logger-instance -
+ * set once at startup from config.ini's log_include_trace_context
+ * (default on), before any worker threads exist. Safe as a plain
+ * global (not __thread) because it's write-once-then-read-only for
+ * the rest of the process lifetime.
+ */
+void logger_set_include_trace_context(int enabled);
+
+/*
+ * logger_set_sid() / logger_clear_sid()
+ * logger_set_txid() / logger_clear_txid()
+ *
+ * Set/clear the calling thread's own session_id / transaction_id for
+ * log-line tracing. NULL is equivalent to clearing. Each is silently
+ * truncated to fit its internal buffer if longer than expected - never
+ * a fatal condition, this is a debugging aid, not a correctness path.
+ */
+void logger_set_sid  (const char *sid);
+void logger_clear_sid(void);
+void logger_set_txid  (const char *txid);
+void logger_clear_txid(void);
+
 /* Close logger */
 void logger_close(logger_t *logger);
 

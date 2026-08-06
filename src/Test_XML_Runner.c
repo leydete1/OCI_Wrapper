@@ -1074,6 +1074,12 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /* Set once, here, before any worker/File-Consumer thread exists -
+     * see logger.h's own doc comment on why this is safe as a plain
+     * global rather than __thread (write-once-then-read-only for the
+     * rest of the process lifetime).                                  */
+    logger_set_include_trace_context(config.log_include_trace_context);
+
     /* ---- Load consumer-type-specific ini (File_Consumer_proposal v1.2).
      * config.consumer_ini_path is already populated by load_ini() above
      * (it's a plain config.ini key) - just pass it straight through.

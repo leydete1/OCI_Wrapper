@@ -1,1 +1,0 @@
-{"status":"ERROR","audit_id":"audit_stub_insert_round_3","operation":"INSERT","error_code":"EXECUTE_FAILED","error_text":"execute_insert_batch failed (rc=-1) - see insert_Data_Manager.log"}

@@ -244,10 +244,13 @@
 <row number="80">
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 </row>
+<row number="81">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
 </resultset>
 <execution_envelope>
-<num_rows>80</num_rows>
-<execution_time_total>0.007088</execution_time_total>
+<num_rows>81</num_rows>
+<execution_time_total>0.008620</execution_time_total>
 <fetch_batch_size>5</fetch_batch_size>
 <blobs_extracted>0</blobs_extracted>
 <clobs_extracted>0</clobs_extracted>

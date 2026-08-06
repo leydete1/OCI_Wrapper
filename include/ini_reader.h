@@ -37,6 +37,13 @@ typedef struct
     char log_level[20];
     int  log_level_num;
 
+	/* Global sid/txid trace-context toggle (2026-08-06) - a single
+	 * switch applying to every logger uniformly, not per-logger. See
+	 * logger.h's own doc comment on logger_set_include_trace_context()
+	 * for the full design. Default on (1) per Terry's own call - leave
+	 * it on for debugging. */
+	int  log_include_trace_context;
+
 	/*Cache log file*/
 	char cache_log_file_name[256];
     int  cache_log_file_max_size;
@@ -51,7 +58,7 @@ typedef struct
     char select_log_level[20];
     int  select_log_level_num;
 
-	/* File Consumer log file (File_Consumer_proposal v1.2, Stage 2) -
+	/* File Consumer log file (File_Consumer_proposal v1.2) -
 	 * file_consumer.c's own dedicated log, separate from the shared
 	 * connectionpool_logger it was borrowing before. */
 	char file_consumer_log_file_name[256];
@@ -59,15 +66,15 @@ typedef struct
     int  file_consumer_log_file_rotation_number;
     char file_consumer_log_level[20];
 
-	/* Dispatcher log file (File_Consumer_proposal v1.2, Stage 1) -
+	/* Dispatcher log file (File_Consumer_proposal v1.2) -
 	 * dispatcher.c's own dedicated log, same reasoning as above. */
 	char dispatcher_log_file_name[256];
     int  dispatcher_log_file_max_size;
     int  dispatcher_log_file_rotation_number;
     char dispatcher_log_level[20];
 
-	/* Worker log file (File_Consumer_proposal v1.2, Stage 4) - worker.c's
-	 * own dedicated log. Single shared log across however many workers
+	/* Worker log file (File_Consumer_proposal v1.2) - worker.c's own
+	 * dedicated log. Single shared log across however many workers
 	 * eventually write to it - see OCI_Connection.h's worker_logger
 	 * field for the thread-safety reasoning. */
 	char worker_log_file_name[256];

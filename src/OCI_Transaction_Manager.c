@@ -304,6 +304,13 @@ int tx_begin(tx_handle_t  *handle,
     /* ---- Register as active transaction on the context ---- */
     ctx->active_tx = handle;
 
+    /* Trace context (2026-08-06): set for the calling thread now that
+     * the transaction is genuinely live - every subsequent
+     * logger_write() call on this thread, across every module it
+     * touches, picks it up automatically until tx_commit()/
+     * tx_rollback()/tx_abort() clears it below. */
+    logger_set_txid(handle->transaction_id);
+
     /* ---- Metrics: write a BEGIN record ---- */
     {
         metrics_record_t m;
@@ -487,6 +494,12 @@ int tx_commit(tx_handle_t  *handle,
     /* ---- Always clear the active_tx pointer on resolution ---- */
     ctx->active_tx = NULL;
 
+    /* Trace context (2026-08-06): clear unconditionally here too - this
+     * one spot covers both the commit-succeeded and the commit-failed-
+     * so-rolled-back-and-ABORTED branches immediately below, since both
+     * mean the transaction is no longer active on this thread. */
+    logger_clear_txid();
+
     if (oci_status == OCI_SUCCESS || oci_status == OCI_SUCCESS_WITH_INFO)
     {
         handle->status = TX_STATUS_COMMITTED;
@@ -596,6 +609,9 @@ int tx_rollback(tx_handle_t  *handle,
     /* ---- Clear active transaction on the context ---- */
     ctx->active_tx = NULL;
 
+    /* Trace context (2026-08-06) */
+    logger_clear_txid();
+
     if (oci_status != OCI_SUCCESS && oci_status != OCI_SUCCESS_WITH_INFO)
     {
         tx_log_oci_error(ctx, __func__);
@@ -692,6 +708,9 @@ int tx_abort(tx_handle_t  *handle,
 
     /* ---- Clear active transaction on the context ---- */
     ctx->active_tx = NULL;
+
+    /* Trace context (2026-08-06) */
+    logger_clear_txid();
 
     logger_write(ctx->transaction_logger, LOG_ERROR, __func__, 0,
                  "TRANSACTION ABORTED  tx_id='%s'  session_id='%s'  "

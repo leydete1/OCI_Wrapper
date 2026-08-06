@@ -12,6 +12,50 @@
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ------------------------------------------------------------------ */
+/*  Trace context (session_id / transaction_id) - 2026-08-06            */
+/*  See logger.h's own doc comment for the full design rationale.       */
+/* ------------------------------------------------------------------ */
+static __thread char g_trace_sid[128]  = "";
+static __thread char g_trace_txid[64]  = "";
+
+/* Global switch, applies to every logger uniformly - deliberately NOT
+ * __thread, since it's set once at startup (before any worker thread
+ * exists) from config.ini's log_include_trace_context and never
+ * written again - safe to read from any thread without a lock.       */
+static int g_log_include_trace_context = 1;   /* default ON per Terry's
+                                                   own call - leave it on
+                                                   for debugging        */
+
+void logger_set_include_trace_context(int enabled)
+{
+    g_log_include_trace_context = enabled;
+}
+
+void logger_set_sid(const char *sid)
+{
+    if (!sid) { g_trace_sid[0] = '\0'; return; }
+    strncpy(g_trace_sid, sid, sizeof(g_trace_sid) - 1);
+    g_trace_sid[sizeof(g_trace_sid) - 1] = '\0';
+}
+
+void logger_clear_sid(void)
+{
+    g_trace_sid[0] = '\0';
+}
+
+void logger_set_txid(const char *txid)
+{
+    if (!txid) { g_trace_txid[0] = '\0'; return; }
+    strncpy(g_trace_txid, txid, sizeof(g_trace_txid) - 1);
+    g_trace_txid[sizeof(g_trace_txid) - 1] = '\0';
+}
+
+void logger_clear_txid(void)
+{
+    g_trace_txid[0] = '\0';
+}
+
+/* ------------------------------------------------------------------ */
 /*  Global last error slot - written on every LOG_ERROR call           */
 /* ------------------------------------------------------------------ */
 logger_last_error_t logger_last_error = { "-", "-" };
@@ -235,6 +279,32 @@ void logger_write(logger_t   *logger,
 
 
    va_end(args);
+
+    /* ---- Append trace context (sid/txid), if enabled and set ----
+     * Both fprintf() calls below (main logger + mirrored error_logger)
+     * read from this same msg buffer, so appending here covers both
+     * with no duplicated logic. snprintf with the remaining buffer
+     * size is always safe - never overflows even if msg is already
+     * close to full from the caller's own format string. Point-in-time
+     * capture only, per Terry's own framing - no correctness path
+     * depends on this ever being present.                             */
+    if (g_log_include_trace_context &&
+        (g_trace_sid[0] != '\0' || g_trace_txid[0] != '\0'))
+    {
+        size_t used = strlen(msg);
+        if (used < sizeof(msg) - 1)
+        {
+            if (g_trace_sid[0] != '\0' && g_trace_txid[0] != '\0')
+                snprintf(msg + used, sizeof(msg) - used,
+                         " sid=%s txid=%s", g_trace_sid, g_trace_txid);
+            else if (g_trace_sid[0] != '\0')
+                snprintf(msg + used, sizeof(msg) - used,
+                         " sid=%s", g_trace_sid);
+            else
+                snprintf(msg + used, sizeof(msg) - used,
+                         " txid=%s", g_trace_txid);
+        }
+    }
 
     fprintf(logger->file,
             "%s.%06ld [%s] [T%d] [%s] %s\n",

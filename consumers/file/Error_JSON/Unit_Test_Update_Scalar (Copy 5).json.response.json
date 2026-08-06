@@ -1,1 +1,0 @@
-{"status":"ERROR","audit_id":"audit_stub_update_scalar","operation":"-","error_code":"LEVEL2_FIELD_INVALID","error_text":"SET field 'DATE_COL': Internal error preparing date normalization query"}

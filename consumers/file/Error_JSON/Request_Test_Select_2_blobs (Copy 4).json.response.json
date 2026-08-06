@@ -1,1 +1,0 @@
-{"status":"ERROR","audit_id":"audit_stub_select_2_blobs","operation":"SELECT","error_code":"EXECUTE_FAILED","error_text":"execute_query_batch failed (rc=-1) - see select_Data_Manager.log"}
