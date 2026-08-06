@@ -286,12 +286,37 @@ static int handle_clob_column_batch(oci_context_t *ctx,
                      "OCILobRead offset=%u chunk=%u remaining=%u",
                      offset, chunk, bytes_remaining);
 
-        CHECK_OCI(ctx->errhp,
-            OCILobRead(ctx->svchp, ctx->errhp,
+        /* Bug fix (2026-08-06): previously passed the OCILobRead(...)
+         * call directly into CHECK_OCI, which only LOGS a failure - it
+         * never breaks control flow. Since 'amount' is pre-set to
+         * 'chunk' above and OCI typically leaves an output parameter
+         * unchanged on failure, a failed read wasn't reliably caught by
+         * the "if (amount == 0)" check below (amount would still equal
+         * the requested chunk size, not 0) - the loop would silently
+         * treat a failed read as a successful one, advance past it
+         * with zero-filled (uninitialised-content) buffer space, and
+         * eventually exhaust bytes_remaining normally: no infinite
+         * loop, but a genuinely corrupted CLOB result with no error
+         * ever surfaced to the caller. Capturing the real return code
+         * and checking it explicitly, rather than relying on
+         * CHECK_OCI's logging-only behaviour, fixes that.             */
+        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp,
                        bc->clob_loc,
                        &amount, offset,
                        write_ptr, chunk,
-                       NULL, NULL, 0, SQLCS_IMPLICIT));
+                       NULL, NULL, 0, SQLCS_IMPLICIT);
+        CHECK_OCI(ctx->errhp, lob_read_rc);
+
+        if (lob_read_rc != OCI_SUCCESS && lob_read_rc != OCI_SUCCESS_WITH_INFO)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "OCILobRead failed (rc=%d) at offset=%u - "
+                         "aborting this CLOB read rather than silently "
+                         "treating the failure as success",
+                         (int)lob_read_rc, offset);
+            free(clob_buf);
+            return -1;
+        }
 
         if (amount == 0)
         {

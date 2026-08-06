@@ -63,6 +63,7 @@ static ctx_config_map_t ctx_map[] = {
     { "log_file_max_size",      CFG_INT,    offsetof(app_config_t, log_file_max_size),       NULL, 10485760 },
     { "log_file_rotation_number", CFG_INT,  offsetof(app_config_t, log_file_rotation_number),NULL, 5 },
     { "log_level",              CFG_STRING, offsetof(app_config_t, log_level),               "DEBUG", 0 },
+    { "log_include_trace_context", CFG_INT, offsetof(app_config_t, log_include_trace_context), NULL, 1 },
     { "TEST_SQL_FILE_NAME",     CFG_STRING, offsetof(app_config_t, TEST_SQL_FILE_NAME),      "test.sql", 0 },
 
 	/* ----------------------------------------------------------------

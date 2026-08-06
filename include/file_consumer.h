@@ -45,6 +45,15 @@
  * anything itself and does not loop or sleep - looping across passes
  * is main()'s job, actual draining is the worker pool's job.
  *
+ * session_id (Session Manager proposal, Stage 1, 2026-08-06): File
+ * Consumer's own real, currently-held session for this run - stamped
+ * onto every RequestObject built this pass, so it can override
+ * whatever the payload itself carries once dispatcher.c gets it (see
+ * request_object.h). Pass NULL/"" if File Consumer doesn't currently
+ * hold a valid session (e.g. session_create() itself just failed) -
+ * requests built this pass simply won't carry an override, identical
+ * to this function's behaviour before this stage.
+ *
  * Returns the total number of files enqueued (>= 0, files skipped for
  * being zero-length or non-regular don't count, and immediately
  * rejected files don't count either since they never reach a queue),
@@ -53,6 +62,7 @@
  * only one of the two directories fails to open, that failure is
  * logged and the other directory is still processed normally.
  */
-int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config, queue_manager_t *qm);
+int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config,
+                             queue_manager_t *qm, const char *session_id);
 
 #endif /* FILE_CONSUMER_H */

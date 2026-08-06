@@ -221,13 +221,32 @@ int session_validate(oci_context_t    *ctx,
  *
  * Update last_activity_ts on a cached session to the current time,
  * extending its effective idle window.  Cache-only; does not write
- * through to the database on every call (LAST_ACTIVITY_TS in the
- * permanent table is refreshed only at session_end() / reconciliation
- * time from the last cached value).
+ * through to the database on every call - meant to be cheap enough to
+ * call on every request's critical path. See session_touch_db() below
+ * for the table-persistence half (Session Manager proposal, Stage 2,
+ * 2026-08-06) - previously the permanent table was only ever refreshed
+ * at session_end()/reconciliation time; session_touch_db() is what
+ * keeps it current during a session's life too, called asynchronously
+ * by the Session Manager's own dedicated thread rather than here.
  *
  * Returns SESSION_OK, SESSION_ERR_NOT_FOUND, SESSION_ERR_INVALID_ARG.
  */
 int session_touch(oci_context_t *ctx, const char *session_id);
+
+/*
+ * session_touch_db()
+ *
+ * Persists LAST_ACTIVITY_TS to the permanent OCI_SESSION table via a
+ * real DB UPDATE - unlike session_touch() above, this genuinely hits
+ * the database, so it's meant to be called off the critical path (the
+ * Session Manager's own dedicated thread, draining its touch queue
+ * asynchronously - see session_manager_runner.h), not inline per
+ * request. STATUS/CLOSED_TS/CLOSE_REASON are left untouched - the
+ * session stays ACTIVE, this only refreshes its activity timestamp.
+ *
+ * Returns SESSION_OK, SESSION_ERR_DB_FAILURE, SESSION_ERR_INVALID_ARG.
+ */
+int session_touch_db(oci_context_t *ctx, const char *session_id);
 
 /*
  * session_end()

@@ -907,6 +907,7 @@ int process_xml_file(oci_context_t      *ctx,
                       const char         *payload,
                       long                payload_length,
                       const char         *filename,
+                      const char         *session_id_override,
                       response_object_t  *resp)
 {
     /* xml/len aliases keep the rest of this function's body (which
@@ -974,6 +975,22 @@ int process_xml_file(oci_context_t      *ctx,
                      "File='%s' matched new request format - audit_id=%s "
                      "operations=%d", filename, new_request.external_audit_id,
                      new_request.operation_count);
+
+        /* Session Manager proposal, Stage 1 (2026-08-06): stamp the
+         * caller's real session_id onto the parsed request, overriding
+         * whatever the raw payload itself carried (almost always "-").
+         * Must happen before logger_set_sid() below, so tracing picks
+         * up the real value too - and before Level 2/dispatch, since
+         * this field is what a future Stage 3 validation check will
+         * actually validate. NULL/empty override (e.g. the legacy
+         * Test_XML_Runner harness, which doesn't participate in this
+         * yet) leaves the parsed payload's own session_id untouched. */
+        if (session_id_override && session_id_override[0])
+        {
+            strncpy(new_request.session_id, session_id_override,
+                    sizeof(new_request.session_id) - 1);
+            new_request.session_id[sizeof(new_request.session_id) - 1] = '\0';
+        }
 
         /* Trace context (2026-08-06): set for the calling (worker)
          * thread now that the request's session_id is known - every

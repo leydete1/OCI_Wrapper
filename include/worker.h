@@ -36,6 +36,7 @@
 
 #include "OCI_Connection.h"     /* oci_context_t */
 #include "queue_manager.h"
+#include "session_touch_queue.h"
 
 typedef struct worker_pool worker_pool_t;   /* opaque */
 
@@ -50,17 +51,25 @@ typedef struct worker_pool worker_pool_t;   /* opaque */
  * shared logger/ini/cache pointers base_ctx already has, mirroring
  * main()'s own single-worker-ctx setup for pool mode.
  *
- * base_ctx and qm must both outlive the returned pool - the caller is
- * responsible for keeping them alive until after
+ * touch_q (Session Manager proposal, Stage 2, 2026-08-06): each worker
+ * enqueues a fire-and-forget touch message onto this queue right after
+ * building a ResponseObject for a request that carried a real
+ * session_id - see session_touch_queue.h. Pass NULL to disable this
+ * (no touch messages enqueued at all) if the Session Manager thread
+ * isn't running.
+ *
+ * base_ctx, qm, and touch_q must all outlive the returned pool - the
+ * caller is responsible for keeping them alive until after
  * worker_pool_shutdown_and_join() returns.
  *
  * Returns NULL on allocation failure or if any thread fails to start
  * (in which case any threads that did start are asked to shut down
  * and joined before returning NULL - no partial pool is left running).
  */
-worker_pool_t *worker_pool_start(oci_context_t   *base_ctx,
-                                  queue_manager_t *qm,
-                                  int              worker_count);
+worker_pool_t *worker_pool_start(oci_context_t         *base_ctx,
+                                  queue_manager_t       *qm,
+                                  session_touch_queue_t *touch_q,
+                                  int                    worker_count);
 
 /*
  * worker_pool_shutdown_and_join()

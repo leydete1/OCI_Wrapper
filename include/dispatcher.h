@@ -60,6 +60,17 @@
  * saves a caller that doesn't care about the response body from having
  * to inspect the struct.
  *
+ * session_id_override (Session Manager proposal, Stage 1, 2026-08-06):
+ * if non-NULL and non-empty, overwrites the parsed request's own
+ * session_id field right after Level 1 parsing succeeds - this is what
+ * lets File Consumer's real, cache-registered session become the
+ * session an eventual Stage 3 validation check actually validates,
+ * rather than whatever placeholder ("-", almost always) the raw
+ * payload itself happened to carry. Pass NULL for callers that don't
+ * participate in this yet (e.g. the legacy Test_XML_Runner fixture
+ * harness) - the parsed request's own session_id is left untouched in
+ * that case, identical to this function's behaviour before this stage.
+ *
  * Exported (was static in Test_XML_Runner.c) so both the existing
  * test-runner main() and worker.c (via the queue) can call it directly.
  */
@@ -67,6 +78,7 @@ int process_xml_file(oci_context_t      *ctx,
                       const char         *payload,
                       long                payload_length,
                       const char         *filename,
+                      const char         *session_id_override,
                       response_object_t  *resp);
 
 /*

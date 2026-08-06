@@ -8,7 +8,8 @@ request_object_t *request_object_create(char       *payload,
                                           const char *filename,
                                           const char *processing_path,
                                           const char *output_dir,
-                                          const char *error_dir)
+                                          const char *error_dir,
+                                          const char *session_id)
 {
     request_object_t *req = malloc(sizeof(request_object_t));
     if (!req) return NULL;
@@ -28,6 +29,10 @@ request_object_t *request_object_create(char       *payload,
 
     strncpy(req->error_dir, error_dir ? error_dir : "-", sizeof(req->error_dir) - 1);
     req->error_dir[sizeof(req->error_dir) - 1] = '\0';
+
+    strncpy(req->session_id, (session_id && session_id[0]) ? session_id : "",
+            sizeof(req->session_id) - 1);
+    req->session_id[sizeof(req->session_id) - 1] = '\0';
 
     return req;
 }

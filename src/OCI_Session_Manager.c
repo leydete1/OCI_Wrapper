@@ -605,8 +605,87 @@ int session_touch(oci_context_t *ctx, const char *session_id)
 }
 
 /* ================================================================== */
-/*  session_end                                                         */
+/*  session_touch_db                                                    */
+/*                                                                      */
+/*  Session Manager proposal, Stage 2 (2026-08-06). Persists            */
+/*  LAST_ACTIVITY_TS to the permanent OCI_SESSION table - session_touch */
+/*  above only ever updates the cache (see its own doc comment: "does   */
+/*  not write through to the database on every call"). Deliberately a   */
+/*  SEPARATE function rather than folding this into session_touch()     */
+/*  itself: the cache-only touch is meant to be cheap enough to call on */
+/*  every request's critical path, while this one issues a real DB     */
+/*  UPDATE and is meant to be called asynchronously, off the critical   */
+/*  path, by the Session Manager's own dedicated thread draining its    */
+/*  touch queue (see session_manager_runner.c).                        */
+/*                                                                      */
+/*  Also fixes a real gap in crash-recovery accuracy: session_reconcile */
+/*  _orphans() at startup reads the TABLE's own LAST_ACTIVITY_TS to     */
+/*  decide whether a session left ACTIVE is a genuine orphan - without  */
+/*  this function, a session that had been genuinely active for its     */
+/*  entire life (just never called session_end()) would still show a   */
+/*  stale created-time-only LAST_ACTIVITY_TS in the table after a       */
+/*  crash, and could be wrongly reconciled as an orphan even though it  */
+/*  was legitimately in use right up until the process died.           */
+/*                                                                      */
+/*  Mirrors session_end()'s own update_request_t construction exactly, */
+/*  just with a single field (LAST_ACTIVITY_TS only - STATUS/CLOSED_TS/ */
+/*  CLOSE_REASON are untouched, since the session is still ACTIVE, not  */
+/*  being closed).                                                     */
 /* ================================================================== */
+int session_touch_db(oci_context_t *ctx, const char *session_id)
+{
+    if (!ctx || !session_id || !session_id[0])
+        return SESSION_ERR_INVALID_ARG;
+
+    char now_str[32];
+    format_timestamp(time(NULL), now_str, sizeof(now_str));
+
+    where_key_t where_key;
+    memset(&where_key, 0, sizeof(where_key));
+    strncpy(where_key.field_name, "SESSION_ID", sizeof(where_key.field_name) - 1);
+    strncpy(where_key.key_value,  session_id,   sizeof(where_key.key_value) - 1);
+
+    field_value_t set_field;
+    memset(&set_field, 0, sizeof(set_field));
+    strncpy(set_field.field_name, "LAST_ACTIVITY_TS", sizeof(set_field.field_name) - 1);
+    strncpy(set_field.value, now_str, sizeof(set_field.value) - 1);
+
+    update_request_t update_req;
+    memset(&update_req, 0, sizeof(update_req));
+    strncpy(update_req.table_name, SESSION_TABLE_NAME, sizeof(update_req.table_name) - 1);
+    strncpy(update_req.owner,      ctx->ini->username,  sizeof(update_req.owner) - 1);
+    update_req.key_count   = 1;
+    update_req.keys        = &where_key;
+    update_req.field_count = 1;
+    update_req.fields      = &set_field;
+
+    execute_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.input_file_name = (char *)"OCI_Session_Manager:session_touch_db";
+
+    int rc = execute_update_batch(ctx, &update_req, &cfg);
+
+    if (cfg.xml)
+    {
+        if (cfg.xml->OUTPUT_XML) free(cfg.xml->OUTPUT_XML);
+        free(cfg.xml);
+    }
+    free(cfg.OUTPUT_JSON);
+
+    if (rc != 0)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "session_touch_db: execute_update_batch failed for "
+                     "session_id=%s (rc=%d) - LAST_ACTIVITY_TS not "
+                     "persisted to the table this cycle (the cache copy "
+                     "is still current via session_touch() - this is a "
+                     "missed table sync, not a lost session)",
+                     session_id, rc);
+        return SESSION_ERR_DB_FAILURE;
+    }
+
+    return SESSION_OK;
+}
 int session_end(oci_context_t    *ctx,
                  const char       *session_id,
                  session_status_t  status,

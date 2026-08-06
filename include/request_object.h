@@ -29,6 +29,16 @@ typedef struct {
                                        on this (moving the file to its final home). */
     char   output_dir[256];        /* Output_XML or Output_JSON, matching format */
     char   error_dir[256];         /* Error_XML or Error_JSON, matching format */
+
+    char   session_id[37];         /* SESSION_UUID_LEN (session_cache.h) - the
+                                       real session_id File Consumer is holding
+                                       for this run (Session Manager proposal,
+                                       Stage 1, 2026-08-06). Stamped onto the
+                                       parsed request in dispatcher.c, overriding
+                                       whatever the raw payload itself carried
+                                       (almost always "-" today) - this becomes
+                                       the value Stage 3's future validation
+                                       actually checks, not just a log label. */
 } request_object_t;
 
 /*
@@ -38,13 +48,20 @@ typedef struct {
  * caller must not free it after a successful call - it's now owned by
  * the returned object). Returns NULL on allocation failure, in which
  * case the caller still owns payload and must free it themselves.
+ *
+ * session_id is File Consumer's own real session for this run (Session
+ * Manager proposal, Stage 1) - pass NULL or "" if genuinely unavailable
+ * (e.g. session creation itself failed) and dispatcher.c will fall
+ * back to whatever the payload's own session_id says, same as before
+ * this stage existed.
  */
 request_object_t *request_object_create(char       *payload,
                                           long        payload_length,
                                           const char *filename,
                                           const char *processing_path,
                                           const char *output_dir,
-                                          const char *error_dir);
+                                          const char *error_dir,
+                                          const char *session_id);
 
 /*
  * request_object_free()

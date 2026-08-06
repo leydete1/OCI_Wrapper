@@ -13,6 +13,8 @@
 #include "response_object.h"
 #include "response_manager.h"
 #include "OCI_Connection_Pool.h"
+#include "ctx_utils.h"
+#include "session_touch_queue.h"
 #include "logger.h"
 
 struct worker_pool {
@@ -21,57 +23,17 @@ struct worker_pool {
 };
 
 typedef struct {
-    oci_context_t   *base_ctx;
-    queue_manager_t *qm;
-    int              queue_index;
-    int              worker_id;
+    oci_context_t         *base_ctx;
+    queue_manager_t       *qm;
+    session_touch_queue_t *touch_q;
+    int                     queue_index;
+    int                     worker_id;
 } worker_thread_args_t;
 
-/* ------------------------------------------------------------------ */
-/*  copy_shared_ctx_fields()                                            */
-/*                                                                      */
-/*  OCI_Pool_get_session() only populates the OCI connection handles    */
-/*  (envhp/errhp/svchp etc.) and pool bookkeeping - every logger        */
-/*  pointer, the ini pointer, and the caches remain NULL after that     */
-/*  call and must be copied in explicitly. This mirrors the exact       */
-/*  field list Test_XML_Runner.c's main() already uses for its own      */
-/*  single worker_ctx in pool mode - kept as its own function here      */
-/*  specifically so N threads can each get their own copy without       */
-/*  duplicating this list N times inline. If a new logger is ever       */
-/*  added to oci_context_t, it needs to be added BOTH here AND to       */
-/*  main()'s own copy block - the two aren't unified into one shared    */
-/*  helper today, which is a real duplication risk worth knowing about. */
-/* ------------------------------------------------------------------ */
-static void copy_shared_ctx_fields(oci_context_t *dst, oci_context_t *src)
-{
-    dst->logger                = src->logger;
-    dst->select_logger         = src->select_logger;
-    dst->cache_logger          = src->cache_logger;
-    dst->Metadata_logger       = src->Metadata_logger;
-    dst->connection_logger     = src->connection_logger;
-    dst->connectionpool_logger = src->connectionpool_logger;
-    dst->insert_logger         = src->insert_logger;
-    dst->update_logger         = src->update_logger;
-    dst->delete_logger         = src->delete_logger;
-    dst->dml_logger            = src->dml_logger;
-    dst->ddl_logger            = src->ddl_logger;
-    dst->procedure_logger      = src->procedure_logger;
-    dst->ini                   = src->ini;
-    dst->resultset_cache       = src->resultset_cache;
-    dst->error_logger          = src->error_logger;
-    dst->metrics_logger        = src->metrics_logger;
-    dst->transaction_logger    = src->transaction_logger;
-    dst->security_logger       = src->security_logger;
-    dst->crypt_logger          = src->crypt_logger;
-    dst->audit_logger          = src->audit_logger;
-    dst->session_logger        = src->session_logger;
-    dst->sql_parser_logger     = src->sql_parser_logger;
-    dst->file_consumer_logger  = src->file_consumer_logger;
-    dst->dispatcher_logger     = src->dispatcher_logger;
-    dst->worker_logger         = src->worker_logger;
-    dst->metadata_cache        = src->metadata_cache;
-    dst->session_cache         = src->session_cache;
-}
+/* copy_shared_ctx_fields() moved to ctx_utils.c (2026-08-06) - now
+ * shared with file_consumer_runner.c, which needed the identical field
+ * list once its own thread started borrowing a pooled session too. See
+ * ctx_utils.h's own doc comment for the full story. */
 
 /* ------------------------------------------------------------------ */
 /*  worker_thread_main()                                                */
@@ -123,7 +85,7 @@ static void *worker_thread_main(void *arg)
         response_object_init(&resp);
 
         int rc = process_xml_file(&thread_ctx, req->payload, req->payload_length,
-                                   req->filename, &resp);
+                                   req->filename, req->session_id, &resp);
 
         if (rc == 0)
             logger_write(thread_ctx.worker_logger, LOG_INFO, __func__, args.worker_id,
@@ -132,6 +94,26 @@ static void *worker_thread_main(void *arg)
             logger_write(thread_ctx.worker_logger, LOG_ERROR, __func__, args.worker_id,
                          "Worker[%d]: FAIL '%s' (rc=%d, error_code=%s)",
                          args.worker_id, req->filename, rc, resp.error_code);
+
+        /* Session Manager proposal, Stage 2 (2026-08-06): fire-and-
+         * forget activity touch, enqueued right after the response is
+         * built - matches the proposal's own wording exactly. Genuinely
+         * non-blocking (session_touch_queue_enqueue() never waits for
+         * room; a full queue just drops the touch, logged below, not
+         * fatal - see session_touch_queue.h). Skipped entirely if this
+         * request never carried a real session_id (e.g. the legacy
+         * Test_XML_Runner harness, which doesn't participate in the
+         * Session Manager proposal yet).                               */
+        if (args.touch_q && req->session_id[0] &&
+            session_touch_queue_enqueue(args.touch_q, req->session_id) != 0)
+        {
+            logger_write(thread_ctx.worker_logger, LOG_WARN, __func__, args.worker_id,
+                         "Worker[%d]: session touch queue full - dropped "
+                         "this activity touch for session_id=%s (not "
+                         "fatal, just a slightly stale last_activity "
+                         "until the next successful touch)",
+                         args.worker_id, req->session_id);
+        }
 
         if (response_manager_write(&thread_ctx, &resp, req->filename, req->processing_path,
                                     req->output_dir, req->error_dir) != 0)
@@ -165,9 +147,10 @@ static void *worker_thread_main(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-worker_pool_t *worker_pool_start(oci_context_t   *base_ctx,
-                                  queue_manager_t *qm,
-                                  int              worker_count)
+worker_pool_t *worker_pool_start(oci_context_t         *base_ctx,
+                                  queue_manager_t       *qm,
+                                  session_touch_queue_t *touch_q,
+                                  int                    worker_count)
 {
     if (worker_count <= 0) return NULL;
 
@@ -185,6 +168,7 @@ worker_pool_t *worker_pool_start(oci_context_t   *base_ctx,
 
         args->base_ctx    = base_ctx;
         args->qm           = qm;
+        args->touch_q      = touch_q;
         args->queue_index = i;
         args->worker_id    = i;
 

@@ -99,7 +99,8 @@ static int process_directory(oci_context_t   *ctx,
                               const char      *processing_dir,
                               const char      *output_dir,
                               const char      *error_dir,
-                              const char      *format_label)
+                              const char      *format_label,
+                              const char      *session_id)
 {
     DIR *dir = opendir(input_dir);
     if (!dir)
@@ -191,7 +192,8 @@ static int process_directory(oci_context_t   *ctx,
 
         request_object_t *req = request_object_create(payload, payload_length,
                                                         name, processing_path,
-                                                        output_dir, error_dir);
+                                                        output_dir, error_dir,
+                                                        session_id);
         if (!req)
         {
             logger_write(ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
@@ -257,7 +259,8 @@ static int process_directory(oci_context_t   *ctx,
 /* ------------------------------------------------------------------ */
 /*  file_consumer_scan_once                                             */
 /* ------------------------------------------------------------------ */
-int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config, queue_manager_t *qm)
+int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config,
+                             queue_manager_t *qm, const char *session_id)
 {
     if (strcasecmp(config->dispatcher_algorithm, "round_robin") != 0)
     {
@@ -272,13 +275,13 @@ int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config, queue_mana
                                          config->file_consumer_processing_xml_dir,
                                          config->file_consumer_output_xml_dir,
                                          config->file_consumer_error_xml_dir,
-                                         "XML");
+                                         "XML", session_id);
     int json_result = process_directory(ctx, qm,
                                          config->file_consumer_input_json_dir,
                                          config->file_consumer_processing_json_dir,
                                          config->file_consumer_output_json_dir,
                                          config->file_consumer_error_json_dir,
-                                         "JSON");
+                                         "JSON", session_id);
 
     if (xml_result < 0 && json_result < 0)
     {

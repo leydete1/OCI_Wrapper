@@ -104,6 +104,8 @@
 #include "file_consumer.h"
 #include "file_consumer_runner.h"
 #include "queue_manager.h"
+#include "session_touch_queue.h"
+#include "session_manager_runner.h"
 #include "worker.h"
 
 /* looks_like_new_request_format()'s own forward declaration removed
@@ -256,6 +258,13 @@ static dep_test_case_t test_cases[] = {
  * behavioural timeout, worker_pool_shutdown_and_join() always fully
  * drains regardless of how long that takes.                           */
 #define FILE_CONSUMER_DRAIN_POLL_WARN_SECONDS       30
+
+/* Session Manager proposal, Stage 2 (2026-08-06) - own thread, own
+ * queue. No config key for the queue depth yet (Stage 2 keeps it
+ * simple) - 1000 is comfortable headroom for tiny, fast-draining touch
+ * messages; not expected to ever fill up under normal load given how
+ * cheap each touch is compared to a full CRUD dispatch.               */
+#define SESSION_TOUCH_QUEUE_DEPTH                   1000
 
 
 /* ================================================================== */
@@ -1538,12 +1547,38 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        worker_pool_t *pool = worker_pool_start(&ctx, qm, config.dispatcher_queue_count);
+        /* Session Manager proposal, Stage 2 (2026-08-06) - own thread,
+         * own queue, started alongside the worker pool and File
+         * Consumer.                                                    */
+        session_touch_queue_t *touch_q = session_touch_queue_create(SESSION_TOUCH_QUEUE_DEPTH);
+        if (!touch_q)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "session_touch_queue_create() failed - continuing "
+                         "without session activity tracking (workers will "
+                         "log a WARN per dropped touch, see worker.c)");
+        }
+
+        session_manager_runner_t *sm_runner = NULL;
+        if (touch_q)
+        {
+            sm_runner = session_manager_runner_start(&ctx, touch_q);
+            if (!sm_runner)
+                logger_write(&logger, LOG_ERROR, __func__, 0,
+                             "session_manager_runner_start() failed - "
+                             "continuing without session activity "
+                             "tracking (touch queue will just fill and "
+                             "workers will log dropped touches)");
+        }
+
+        worker_pool_t *pool = worker_pool_start(&ctx, qm, touch_q, config.dispatcher_queue_count);
         if (!pool)
         {
             logger_write(&logger, LOG_ERROR, __func__, 0,
                          "worker_pool_start() failed - see worker log above "
                          "for detail. Refusing to run with no workers.");
+            if (sm_runner) session_manager_runner_stop_and_join(sm_runner, touch_q);
+            if (touch_q) session_touch_queue_destroy(touch_q);
             queue_manager_destroy(qm);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
@@ -1640,6 +1675,22 @@ int main(int argc, char *argv[])
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "worker_pool_shutdown_and_join() returned - all workers "
                      "exited, all queues should now be empty");
+
+        /* Session Manager stops AFTER the worker pool, not before or
+         * concurrently - workers are the only producers onto touch_q,
+         * so stopping them first guarantees no more touches will ever
+         * be enqueued, and session_manager_runner_stop_and_join() then
+         * fully drains whatever's already queued before the thread
+         * exits (same "signal shutdown, don't abandon queued work"
+         * guarantee as worker_pool_shutdown_and_join() itself).        */
+        if (sm_runner)
+        {
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Stopping Session Manager thread - draining "
+                         "remaining touch queue");
+            session_manager_runner_stop_and_join(sm_runner, touch_q);
+        }
+        if (touch_q) session_touch_queue_destroy(touch_q);
 
         queue_manager_destroy(qm);
 
@@ -1740,8 +1791,14 @@ int main(int argc, char *argv[])
 
         response_object_t harness_resp;
         response_object_init(&harness_resp);
+        /* NULL session_id_override - this legacy harness doesn't create
+         * or hold a session (Session Manager proposal, Stage 1 - see
+         * that plan's own Stage 3 note on this harness's fixtures still
+         * carrying "-" and the compatibility decision still pending
+         * for whenever validation itself goes live). Behaviour here is
+         * unchanged from before this stage existed.                    */
         rc = process_xml_file(tx_ctx, harness_payload, harness_payload_len,
-                               name, &harness_resp);
+                               name, NULL, &harness_resp);
         response_object_free(&harness_resp);
         free(harness_payload);
         if (rc == 0)
