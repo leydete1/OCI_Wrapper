@@ -45,6 +45,13 @@ static void *worker_thread_main(void *arg)
     worker_thread_args_t args = *(worker_thread_args_t *)arg;
     free(arg);   /* handed off - this thread's own copy on the stack now */
 
+    /* Set first, before anything else on this thread logs - fixes the
+     * [T0] mislabeling bug (2026-08-07, see logger.c's own comment on
+     * g_worker_id) for every log line this thread produces from here
+     * on, including dispatcher.c and every CRUD execute module it
+     * calls into, none of which needed any change themselves.          */
+    logger_set_worker_id(args.worker_id);
+
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
@@ -91,9 +98,59 @@ static void *worker_thread_main(void *arg)
             logger_write(thread_ctx.worker_logger, LOG_INFO, __func__, args.worker_id,
                          "Worker[%d]: PASS '%s'", args.worker_id, req->filename);
         else
+        {
             logger_write(thread_ctx.worker_logger, LOG_ERROR, __func__, args.worker_id,
                          "Worker[%d]: FAIL '%s' (rc=%d, error_code=%s)",
                          args.worker_id, req->filename, rc, resp.error_code);
+
+            /* Self-healing connection check (2026-08-07). Confirmed by
+             * direct evidence that a worker's session does NOT reliably
+             * recover on its own after a connection-level failure - see
+             * OCI_Connection_Pool.c's own doc comment on
+             * OCI_Pool_session_is_alive() for the investigation this
+             * came from. Only checked here, after a failure - a
+             * successful dispatch already proves the connection was
+             * fine, so there's no reason to add this check to the
+             * healthy, common path.
+             *
+             * Deliberately does NOT retry the item that just failed -
+             * it stays a FAIL. Likely safe to retry (Oracle rolls back
+             * any uncommitted work automatically when a session drops
+             * ungracefully) but "likely safe" isn't "proven safe" -
+             * landing the self-healing mechanism cleanly first, with
+             * automatic retry as a genuine follow-up once this is
+             * trusted, rather than bundling two behaviour changes into
+             * one change.                                              */
+            if (!OCI_Pool_session_is_alive(&thread_ctx))
+            {
+                logger_write(thread_ctx.worker_logger, LOG_WARN, __func__, args.worker_id,
+                             "Worker[%d]: WARNING - connection lost (session no "
+                             "longer alive after a failed dispatch) - "
+                             "reconnecting before continuing to the next item. "
+                             "'%s' remains a FAIL and is not automatically "
+                             "retried.", args.worker_id, req->filename);
+
+                if (OCI_Pool_reconnect_session(args.base_ctx, &thread_ctx) == 0)
+                {
+                    thread_ctx.active_tx = NULL;   /* same reset as at thread
+                                                       startup - no managed
+                                                       transaction on a fresh
+                                                       session               */
+                    logger_write(thread_ctx.worker_logger, LOG_INFO, __func__, args.worker_id,
+                                 "Worker[%d]: reconnected successfully - "
+                                 "resuming with a fresh session",
+                                 args.worker_id);
+                }
+                else
+                {
+                    logger_write(thread_ctx.worker_logger, LOG_ERROR, __func__, args.worker_id,
+                                 "Worker[%d]: WARNING - reconnect attempt itself "
+                                 "failed - continuing with the old (dead) "
+                                 "session; will try again after the next "
+                                 "failure", args.worker_id);
+                }
+            }
+        }
 
         /* Session Manager proposal, Stage 2 (2026-08-06): fire-and-
          * forget activity touch, enqueued right after the response is

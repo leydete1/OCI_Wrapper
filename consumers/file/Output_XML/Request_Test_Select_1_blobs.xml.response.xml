@@ -8,54 +8,54 @@
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>1</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Adam enjoying pizza</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Adam_1.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_092729_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_092730_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_092730_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_163225_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_163225_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260807_163225_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 <row number="2">
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>2</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Big hug for Emily</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_big_hug.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_092730_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_092730_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_092730_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_163225_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_163225_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260807_163225_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 <row number="3">
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>3</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Football Team</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_Football.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_092730_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_092730_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_092730_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_163225_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_163225_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260807_163225_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 <row number="4">
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>4</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Cousin Sophie</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Sophi.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_092730_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_092730_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_092730_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_163225_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_163225_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260807_163225_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 <row number="5">
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>5</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>The kids</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>The_Gang.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_092730_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_092730_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_092730_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_163225_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_163225_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260807_163225_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 <row number="6">
 <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>6</field_value></field>
 <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>The one and only James</field_value></field>
 <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Uncle_James.jpg</field_value></field>
-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_092730_15.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_092730_16.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_092730_17.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_163225_15.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_163225_16.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
+<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Uncle_James_20260807_163225_17.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>26263</file_size><mime_type>image/jpeg</mime_type></blob></field>
 </row>
 </resultset>
 <execution_envelope>
 <num_rows>6</num_rows>
-<execution_time_total>0.230870</execution_time_total>
+<execution_time_total>0.176703</execution_time_total>
 <fetch_batch_size>5</fetch_batch_size>
 <blobs_extracted>18</blobs_extracted>
 <clobs_extracted>0</clobs_extracted>

@@ -45,6 +45,8 @@
 #include "OCI_Connection_Pool.h"
 #include "OCI_Connection.h"
 #include "ini_reader.h"
+#include "ctx_utils.h"   /* copy_shared_ctx_fields() - 2026-08-07, needed
+                            by OCI_Pool_reconnect_session() below */
 #include "logger.h"
 #include "metrics.h"
 
@@ -987,6 +989,13 @@ int OCI_Pool_get_session(oci_context_t *ctx, oci_context_t *worker_ctx)
     memset(worker_ctx, 0, sizeof(oci_context_t));
     worker_ctx->svchp           = slot->svchp;
     worker_ctx->errhp           = slot->errhp;
+    worker_ctx->srvhp           = slot->srvhp;   /* 2026-08-07 - previously
+                                                     not copied since nothing
+                                                     needed direct server-
+                                                     handle access; now
+                                                     needed for
+                                                     OCI_Pool_session_is_alive()
+                                                     below */
     worker_ctx->envhp           = pool->envhp;
     worker_ctx->ini             = ctx->ini;
     worker_ctx->logger          = ctx->logger;
@@ -1064,3 +1073,75 @@ void OCI_Pool_release_session(oci_context_t *ctx,
     logger_write(ctx->connectionpool_logger, LOG_INFO, __func__, 0,
                  "Pool session released: slot=%d", slot_idx);
 }
+
+/* ================================================================== */
+/*  OCI_Pool_session_is_alive                                           */
+/*                                                                      */
+/*  Worker self-healing (2026-08-07). Confirmed by direct evidence      */
+/*  (2026-08-07 ORA-03114 investigation) that a worker whose session    */
+/*  hits a connection-level failure does NOT reliably self-heal on its  */
+/*  own - one worker showed zero successful executes for the rest of    */
+/*  the run, another showed an unstable mix of passes and failures.     */
+/*  Nothing previously detected or repaired this - a worker just kept   */
+/*  using a known-bad handle forever once hit, silently degrading that  */
+/*  one queue's traffic until the whole process restarted.              */
+/*                                                                      */
+/*  Uses OCI_ATTR_SERVER_STATUS - Oracle's own authoritative signal for */
+/*  this - rather than matching against a specific error code list      */
+/*  (ORA-03114, ORA-03113, ORA-01012, ...), which would need updating   */
+/*  every time a new connection-loss scenario turned up. This covers    */
+/*  this failure and any future one without needing to know its code    */
+/*  in advance.                                                         */
+/* ================================================================== */
+int OCI_Pool_session_is_alive(oci_context_t *ctx)
+{
+    if (!ctx || !ctx->srvhp || !ctx->errhp)
+        return 0;   /* conservative - can't confirm alive, so treat as
+                       not alive rather than assume health on an
+                       inconclusive check.                              */
+
+    ub4  status = 0;
+    sword rc = OCIAttrGet(ctx->srvhp, OCI_HTYPE_SERVER,
+                          &status, NULL, OCI_ATTR_SERVER_STATUS, ctx->errhp);
+
+    if (rc != OCI_SUCCESS)
+        return 0;   /* couldn't even check - same conservative reasoning */
+
+    return (status == OCI_SERVER_NORMAL) ? 1 : 0;
+}
+
+/* ================================================================== */
+/*  OCI_Pool_reconnect_session                                          */
+/*                                                                      */
+/*  Releases ctx's current (presumed-dead) session and borrows a fresh  */
+/*  one in its place - the same release-then-borrow sequence a worker   */
+/*  thread already runs once at startup (OCI_Pool_get_session()), reused*/
+/*  here as a mid-loop repair step rather than anything new. Re-copies  */
+/*  the shared logger/ini/cache fields via copy_shared_ctx_fields(),    */
+/*  same as startup - OCI_Pool_get_session() only ever populates the    */
+/*  OCI connection handles themselves. Caller (worker.c) is responsible */
+/*  for resetting ctx->active_tx = NULL afterward - a worker-level      */
+/*  semantic, not a pool one, matching how the two are already kept     */
+/*  separate at startup.                                                */
+/*                                                                      */
+/*  base_ctx is the pool-owning master context - the same one already   */
+/*  passed to the original OCI_Pool_get_session() call for ctx.         */
+/*                                                                      */
+/*  Returns 0 on success (ctx now holds a fresh, live session), -1 if   */
+/*  the re-borrow itself failed - treat as fatal for this thread, same  */
+/*  as an OCI_Pool_get_session() failure at startup would be.           */
+/* ================================================================== */
+int OCI_Pool_reconnect_session(oci_context_t *base_ctx, oci_context_t *ctx)
+{
+    if (!base_ctx || !ctx) return -1;
+
+    OCI_Pool_release_session(base_ctx, ctx);
+
+    if (OCI_Pool_get_session(base_ctx, ctx) != 0)
+        return -1;
+
+    copy_shared_ctx_fields(ctx, base_ctx);
+
+    return 0;
+}
+

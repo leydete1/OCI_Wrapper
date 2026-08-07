@@ -3,9 +3,9 @@
 <Procedure_Result>
 <execution_envelope>
 <procedure_name>DATA_MANAGER.GET_DEPT_STATUS</procedure_name>
-<execution_time>0.003095</execution_time>
+<execution_time>0.004885</execution_time>
 <out_parameters>
-  <parameter><param_name>P_STATUS</param_name><param_type>INTEGER</param_type><param_value>9</param_value></parameter>
+  <parameter><param_name>P_STATUS</param_name><param_type>INTEGER</param_type><param_value>29</param_value></parameter>
 </out_parameters>
 </execution_envelope>
 </Procedure_Result>

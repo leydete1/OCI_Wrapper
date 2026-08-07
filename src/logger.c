@@ -18,6 +18,37 @@ static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread char g_trace_sid[128]  = "";
 static __thread char g_trace_txid[64]  = "";
 
+/* Thread ID / worker ID display fix (2026-08-07) - the thread_id
+ * PARAMETER logger_write() already takes has been hardcoded to a
+ * literal 0 at nearly every one of its ~500 call sites across the
+ * whole codebase for as long as this project has existed - only
+ * worker.c's own few direct log lines ("Worker[%d]: ...") ever passed
+ * a real value. Everything downstream of worker.c (dispatcher.c, every
+ * CRUD execute module) has always shown [T0] regardless of which
+ * actual worker thread was running it - confirmed as the direct cause
+ * of a false lead during the 2026-08-06/07 ORA-03114 investigation
+ * (every failure appeared to be "outside the worker threads" purely
+ * because of this mislabeling, not because it actually was).
+ *
+ * Same fix shape as the sid/txid trace context above, for the exact
+ * same reason: a __thread variable set once by worker.c at thread
+ * start avoids touching any of those ~500 call sites or changing
+ * logger_write()'s signature at all. The thread_id PARAMETER is left
+ * in place (removing it would mean touching every call site for no
+ * behavioural gain) but is no longer what actually determines the
+ * [T%d] tag - see the two fprintf() calls below. Threads that never
+ * call logger_set_worker_id() (main, File Consumer, Session Manager -
+ * each already has its own dedicated, unshared log file, so [T0]
+ * there was never actually ambiguous the way it was in the *shared*
+ * per-CRUD-operation logs workers all write to) simply keep the
+ * default of 0.                                                       */
+static __thread int g_worker_id = 0;
+
+void logger_set_worker_id(int worker_id)
+{
+    g_worker_id = worker_id;
+}
+
 /* Global switch, applies to every logger uniformly - deliberately NOT
  * __thread, since it's set once at startup (before any worker thread
  * exists) from config.ini's log_include_trace_context and never
@@ -211,6 +242,11 @@ void logger_write(logger_t   *logger,
                   int         thread_id,
                   const char *fmt, ...)
 {
+	/* thread_id kept in the signature to avoid touching ~500 call sites
+	 * for no behavioural gain (see g_worker_id's own comment above,
+	 * 2026-08-07) - no longer what determines the [T%d] tag, so
+	 * explicitly unused here.                                          */
+	(void)thread_id;
 
 	int mutex_locked = 0;
 
@@ -311,7 +347,7 @@ void logger_write(logger_t   *logger,
             buffer,
             ts.tv_nsec / 1000,
             level_str,
-            thread_id,
+            g_worker_id,
             func,
             msg);
     fflush(logger->file);
@@ -338,7 +374,7 @@ void logger_write(logger_t   *logger,
 					buffer,
 					ts.tv_nsec / 1000,
 					level_str,
-					thread_id,
+					g_worker_id,
 					func,
 					msg);
 

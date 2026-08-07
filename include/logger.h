@@ -140,6 +140,20 @@ void logger_clear_sid(void);
 void logger_set_txid  (const char *txid);
 void logger_clear_txid(void);
 
+/*
+ * logger_set_worker_id()
+ *
+ * Sets the calling thread's own worker ID for the [T%d] tag every
+ * subsequent logger_write() call on this thread will show - fixes the
+ * thread_id parameter having been hardcoded to 0 at nearly every call
+ * site across the whole codebase (2026-08-07; see g_worker_id's own
+ * doc comment in logger.c for the full story). Call once, at thread
+ * start (worker.c does this already) - there's no corresponding clear
+ * function, since a worker's ID is fixed for its entire lifetime,
+ * unlike sid/txid which change per-request.
+ */
+void logger_set_worker_id(int worker_id);
+
 /* Close logger */
 void logger_close(logger_t *logger);
 

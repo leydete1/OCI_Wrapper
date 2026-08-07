@@ -193,6 +193,34 @@ void OCI_Pool_release_session(oci_context_t *ctx,
                                oci_context_t *worker_ctx);
 
 /*
+ * OCI_Pool_session_is_alive() (2026-08-07)
+ *
+ * Worker self-healing - checks ctx's currently-held session using
+ * Oracle's own authoritative OCI_ATTR_SERVER_STATUS signal, not a
+ * specific error-code match. Returns 1 if alive, 0 if not (or if the
+ * check itself couldn't be performed - conservative by design). See
+ * OCI_Connection_Pool.c's own doc comment for the full 2026-08-07
+ * investigation this came from.
+ */
+int OCI_Pool_session_is_alive(oci_context_t *ctx);
+
+/*
+ * OCI_Pool_reconnect_session() (2026-08-07)
+ *
+ * Releases ctx's current session and borrows + fully re-initialises a
+ * fresh one in its place - the same sequence a worker thread already
+ * runs once at startup, reused here as a mid-loop repair step. base_ctx
+ * is the pool-owning master context originally passed to
+ * OCI_Pool_get_session() for ctx. Caller must reset ctx->active_tx =
+ * NULL afterward - a worker-level concern, not a pool one.
+ *
+ * Returns 0 on success, -1 if the re-borrow itself failed (treat as
+ * fatal for this thread, same as a startup OCI_Pool_get_session()
+ * failure).
+ */
+int OCI_Pool_reconnect_session(oci_context_t *base_ctx, oci_context_t *ctx);
+
+/*
  * OCI_Pool_health_check()
  *
  * Ping all FREE slots.  Expired (session_max_lifetime) or idle
