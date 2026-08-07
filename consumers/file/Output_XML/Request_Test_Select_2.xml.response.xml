@@ -51,7 +51,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="3">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -97,16 +97,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="5">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -120,16 +120,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="6">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -143,16 +143,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="7">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -198,7 +198,7 @@
 <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>27-JUL-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -258,16 +258,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="12">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -281,13 +281,13 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="13">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
@@ -359,7 +359,7 @@
 <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>27-JUL-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -419,7 +419,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="19">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -442,7 +442,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="20">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -488,16 +488,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="22">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -511,16 +511,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="23">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -580,7 +580,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="26">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -603,59 +603,13 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="27">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
-<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
-<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
-<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
-<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
-<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
-<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-</row>
-<row number="28">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
-<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
-<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
-<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
-<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
-<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
-<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
-<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
-<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
-<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-</row>
-<row number="29">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>501</field_value></field>
-<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
-<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
-<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
-<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 1</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
@@ -671,7 +625,7 @@
 <field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
-<row number="30">
+<row number="28">
 <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
@@ -694,17 +648,63 @@
 <field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
-<row number="31">
+<row number="29">
 <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="30">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="31">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -741,16 +741,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="33">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -764,16 +764,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="34">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -787,16 +787,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="35">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -879,16 +879,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="39">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -902,16 +902,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="40">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -948,16 +948,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="42">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -971,16 +971,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="43">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1132,7 +1132,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="50">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1201,7 +1201,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="53">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1270,7 +1270,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="56">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1316,16 +1316,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="58">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1339,16 +1339,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="59">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1362,13 +1362,13 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="60">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>501</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 1</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
@@ -1385,13 +1385,13 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="61">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
@@ -1454,7 +1454,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="64">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1463,7 +1463,7 @@
 <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>27-JUL-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1477,7 +1477,7 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="65">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1523,16 +1523,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="67">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1546,16 +1546,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="68">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1569,16 +1569,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="69">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1592,16 +1592,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="70">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1670,7 +1670,7 @@
 <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>27-JUL-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1730,16 +1730,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="76">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1753,16 +1753,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="77">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1776,16 +1776,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="78">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1799,16 +1799,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="79">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1845,16 +1845,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="81">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1914,16 +1914,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="84">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -1937,16 +1937,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="85">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -2006,16 +2006,16 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="88">
-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
 <field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
 <field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
 <field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
@@ -2052,6 +2052,29 @@
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 <row number="90">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="91">
 <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
 <field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
@@ -2074,35 +2097,196 @@
 <field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 <field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
-<row number="91">
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
-<field><field_name></field_name><field_type></field_type><field_value></field_value></field>
+<row number="92">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="93">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="94">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="95">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="96">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="97">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="98">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+</row>
+<row number="99">
+<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
+<field><field_name>NUMBER_P_S_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+<field><field_name>BINARY_FLOAT_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>BINARY_DOUBLE_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NCHAR_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>NVARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
+<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_COL</field_name><field_type>TIMESTAMP</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_TZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>TIMESTAMP_LTZ_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_YM_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>INTERVAL_DS_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>RAW_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>NCLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
+<field><field_name>BLOB_COL</field_name><field_type>BLOB</field_type><field_value></field_value></field>
+<field><field_name>ROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
+<field><field_name>UROWID_COL</field_name><field_type>UNKNOWN</field_type><field_value></field_value></field>
 </row>
 </resultset>
 <execution_envelope>
-<num_rows>90</num_rows>
-<execution_time_total>0.155258</execution_time_total>
+<num_rows>99</num_rows>
+<execution_time_total>0.194460</execution_time_total>
 <fetch_batch_size>1</fetch_batch_size>
-<blobs_extracted>90</blobs_extracted>
-<clobs_extracted>180</clobs_extracted>
+<blobs_extracted>99</blobs_extracted>
+<clobs_extracted>198</clobs_extracted>
 </execution_envelope>
 </output_xml>

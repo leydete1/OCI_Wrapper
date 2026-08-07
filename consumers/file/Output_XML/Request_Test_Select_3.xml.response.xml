@@ -262,10 +262,34 @@
 <row number="86">
 <field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
 </row>
+<row number="87">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="88">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="89">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="90">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="91">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="92">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="93">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
+<row number="94">
+<field><field_name>FLOAT_COL</field_name><field_type>NUMBER</field_type><field_value></field_value></field>
+</row>
 </resultset>
 <execution_envelope>
-<num_rows>86</num_rows>
-<execution_time_total>0.034890</execution_time_total>
+<num_rows>94</num_rows>
+<execution_time_total>0.023953</execution_time_total>
 <fetch_batch_size>5</fetch_batch_size>
 <blobs_extracted>0</blobs_extracted>
 <clobs_extracted>0</clobs_extracted>
