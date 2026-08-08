@@ -477,6 +477,47 @@ int cache_insert(cache_t            *cache,
             cur->normalized_sql &&
             strcmp(cur->normalized_sql, key) == 0)
         {
+            /* Race fix (2026-08-08): a caller elsewhere may currently
+             * hold this exact entry checked out (in_use=1, set by the
+             * lookup path below and cleared by cache_release()) - e.g.
+             * a worker mid-way through session_validate(), still
+             * reading fields off this entry, having not yet called
+             * cache_release(). Freeing it out from under that caller
+             * is a genuine cross-thread use-after-free - confirmed via
+             * a live ASan crash: a worker's own cache_release() wrote
+             * to memory that a Session Manager thread's session_touch()
+             * had already freed via this exact path moments earlier,
+             * updating the same session_id concurrently. Never
+             * exercised before 2026-08-08 - nothing combined a
+             * checked-out-entry pattern with a concurrent replace of
+             * the same key until Session Manager Stages 2 and 3 both
+             * existed.
+             *
+             * Fix: skip this update entirely rather than free a
+             * checked-out entry - the caller's own update simply isn't
+             * applied this cycle, and whatever's currently checked out
+             * stays valid and untouched. Race-free by construction:
+             * cache_release() needs this same write lock to clear
+             * in_use, so it cannot be concurrently mid-clear while we
+             * hold it here - this check sees a genuinely stable value.
+             * Low-stakes to skip: the next insert/touch attempt,
+             * moments later, will very likely succeed once the entry's
+             * been released - a slightly stale cache value for one
+             * cycle is a vastly better outcome than a crashed process.*/
+            if (cur->in_use)
+            {
+                pthread_rwlock_unlock(&cache->lock);
+                logger_write(cache->logger, LOG_WARN, __func__, 0,
+                             "[%s] cache_insert: key='%.80s' is currently "
+                             "checked out (in_use) by another caller - "
+                             "skipping this update rather than freeing a "
+                             "still-referenced entry. Will retry "
+                             "naturally on the next insert attempt.",
+                             cache->config.cache_name, key);
+                free(output_doc);
+                return 0;
+            }
+
             logger_write(cache->logger, LOG_DEBUG, __func__, 0,
                          "[%s] replacing existing entry for key='%.80s'",
                          cache->config.cache_name, key);

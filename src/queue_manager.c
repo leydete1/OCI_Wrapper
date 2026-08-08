@@ -131,22 +131,49 @@ void queue_manager_destroy(queue_manager_t *qm)
 
 int queue_manager_enqueue(queue_manager_t *qm, request_object_t *req)
 {
-    /* Try the round-robin-assigned queue first, then scan forward
-     * (wrapping) for the first queue with room - see queue_manager.h's
-     * own doc comment on why this isn't a strict "reject the moment
-     * the assigned queue is full" policy. The cursor always advances
-     * by one regardless of outcome, so long-run distribution stays
-     * fair even after a temporary fill.
-     *
-     * Only ever locks one queue's mutex at a time - never holds two
-     * locks simultaneously while scanning, so there's no lock-ordering
-     * deadlock risk here.                                              */
+    return queue_manager_enqueue_excluding(qm, req, -1);
+}
+
+int queue_manager_enqueue_to(queue_manager_t *qm, request_object_t *req, int queue_index)
+{
+    if (!qm || !req || queue_index < 0 || queue_index >= qm->queue_count)
+        return -1;
+
+    /* No round-robin, no overflow, deliberately - see queue_manager.h's
+     * own doc comment on why spilling to another queue here would
+     * defeat the whole point of a dedicated writer queue.              */
+    single_queue_t *q = &qm->queues[queue_index];
+
+    pthread_mutex_lock(&q->mutex);
+    if (single_queue_is_full(q))
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return -1;
+    }
+    int rc = single_queue_push(q, req);
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->mutex);
+    return rc;
+}
+
+int queue_manager_enqueue_excluding(queue_manager_t *qm, request_object_t *req, int exclude_index)
+{
+    /* Same shape as the original queue_manager_enqueue() - round-robin
+     * with overflow-to-next-non-full - just skipping exclude_index
+     * entirely, whether it's the cursor's own starting point or one it
+     * would otherwise wrap around to. Only ever locks one queue's
+     * mutex at a time, same as before - no lock-ordering deadlock risk.
+     * queue_count - 1 iterations when excluding, since one index is
+     * skipped; queue_count when exclude_index is -1 (no exclusion,
+     * matching the original function's own loop exactly).             */
     int start = qm->enqueue_cursor;
     qm->enqueue_cursor = (qm->enqueue_cursor + 1) % qm->queue_count;
 
     for (int i = 0; i < qm->queue_count; i++)
     {
         int idx = (start + i) % qm->queue_count;
+        if (idx == exclude_index) continue;
+
         single_queue_t *q = &qm->queues[idx];
 
         pthread_mutex_lock(&q->mutex);
@@ -160,7 +187,7 @@ int queue_manager_enqueue(queue_manager_t *qm, request_object_t *req)
         pthread_mutex_unlock(&q->mutex);
     }
 
-    return -1;   /* every queue full */
+    return -1;   /* every eligible queue full */
 }
 
 request_object_t *queue_manager_dequeue_blocking(queue_manager_t *qm, int queue_index)

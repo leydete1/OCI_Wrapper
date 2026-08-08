@@ -1705,7 +1705,64 @@ int main(int argc, char *argv[])
      * the loop below - not the pool's master context.                */
     tx_handle_t tx;
     tx_init(&tx, tx_ctx);
-    char *session_id_from_client = "Session_id_from_client_stub";
+
+    /* Session Manager proposal, Stage 3 (2026-08-08): this harness
+     * previously used a hardcoded placeholder string
+     * ("session_id_from_client_stub") as its session identity - never
+     * a real, cache-registered session. That's exactly why hard
+     * validation in dispatcher.c would have broken every fixture in
+     * this harness if left as-is. Create one real session here, once,
+     * for the whole harness run - same one-time-session shape as File
+     * Consumer's own Stage 1, just without the "check validity every
+     * pass" logic, since this is a single bounded run, not a
+     * long-running loop. Reused below both as tx_begin()'s own
+     * session_id argument (a genuine improvement on its own - that
+     * argument was always the same stub value before, not just an
+     * unrelated placeholder for validation purposes) and as the
+     * session_id_override for every process_xml_file() call in the
+     * loop.                                                           */
+    char harness_session_id[SESSION_UUID_LEN] = "";
+    {
+        session_request_t sess_req;
+        memset(&sess_req, 0, sizeof(sess_req));
+        strncpy(sess_req.operation, "CREATE_SESSION", sizeof(sess_req.operation) - 1);
+        strncpy(sess_req.application_name, "Test_XML_Runner (legacy harness)",
+                sizeof(sess_req.application_name) - 1);
+        sess_req.requested_ttl_seconds = 0;
+
+        char *sess_result_xml = NULL;
+        int sess_rc = session_create(tx_ctx, &sess_req, &sess_result_xml);
+
+        if (sess_rc == SESSION_OK && sess_result_xml)
+        {
+            const char *tag_start = strstr(sess_result_xml, "<session_id>");
+            if (tag_start)
+            {
+                tag_start += strlen("<session_id>");
+                const char *tag_end = strstr(tag_start, "</session_id>");
+                if (tag_end && (size_t)(tag_end - tag_start) < sizeof(harness_session_id))
+                {
+                    memcpy(harness_session_id, tag_start, (size_t)(tag_end - tag_start));
+                    harness_session_id[tag_end - tag_start] = '\0';
+                }
+            }
+        }
+
+        if (harness_session_id[0])
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Legacy harness: created session '%s' for this run",
+                         harness_session_id);
+        else
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "Legacy harness: session_create() failed (rc=%d) - "
+                         "every fixture this run will fail Stage 3 "
+                         "validation if session_validation_enabled=1",
+                         sess_rc);
+
+        free(sess_result_xml);
+    }
+
+    char *session_id_from_client = harness_session_id[0] ? harness_session_id : "-";
 
   char *begin_xml = NULL;
   logger_write(&logger, LOG_INFO, __func__, 0,
@@ -1791,14 +1848,13 @@ int main(int argc, char *argv[])
 
         response_object_t harness_resp;
         response_object_init(&harness_resp);
-        /* NULL session_id_override - this legacy harness doesn't create
-         * or hold a session (Session Manager proposal, Stage 1 - see
-         * that plan's own Stage 3 note on this harness's fixtures still
-         * carrying "-" and the compatibility decision still pending
-         * for whenever validation itself goes live). Behaviour here is
-         * unchanged from before this stage existed.                    */
+        /* Session Manager proposal, Stage 3 (2026-08-08): now passes
+         * this harness's own real session (created once above, before
+         * the file loop) instead of NULL - see that block's own doc
+         * comment for the full story.                                 */
         rc = process_xml_file(tx_ctx, harness_payload, harness_payload_len,
-                               name, NULL, &harness_resp);
+                               name, harness_session_id[0] ? harness_session_id : NULL,
+                               &harness_resp);
         response_object_free(&harness_resp);
         free(harness_payload);
         if (rc == 0)

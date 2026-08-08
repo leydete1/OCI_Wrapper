@@ -93,8 +93,51 @@ static void reject_immediately(oci_context_t *ctx,
 /*  full. Returns count enqueued, or -1 if input_dir itself couldn't   */
 /*  be opened at all.                                                   */
 /* ------------------------------------------------------------------ */
+/* Contention Manager proposal (2026-08-08) - see ini_reader.h's own
+ * comment on contention_manager_mode for the full design. Not
+ * separately configurable, deliberately simple.                      */
+#define CONTENTION_MANAGER_WRITER_QUEUE_INDEX 0
+
+/*
+ * payload_requires_single_writer_queue()
+ *
+ * Lightweight raw-payload peek - NOT full Level 1 parsing,
+ * deliberately, since Level 1 doesn't happen until a worker dequeues
+ * this later (see file_consumer.h's own Payload Ownership note).
+ * Looks for any INSERT/UPDATE/DELETE operation-type marker anywhere
+ * in the raw text, in either XML (type="INSERT") or JSON
+ * ("type": "INSERT", with or without the space after the colon)
+ * shape. A single match anywhere is enough - a request with N
+ * operations where even one is a write routes the WHOLE request to
+ * the writer queue, matching the existing "every operation in one
+ * file shares one connection/transaction" design (see dispatcher.c's
+ * own operation loop) - splitting one file's operations across two
+ * different queues/connections would be a bigger change than this
+ * feature takes on. SELECT and EXECUTE_PROCEDURE are NOT treated as
+ * writes here - EXECUTE_PROCEDURE deliberately left alone, since Data
+ * Manager has no visibility into what a procedure's own body actually
+ * does.
+ */
+static int payload_requires_single_writer_queue(const char *payload)
+{
+    if (!payload) return 0;
+
+    static const char *write_markers[] = {
+        "type=\"INSERT\"", "type=\"UPDATE\"", "type=\"DELETE\"",     /* XML */
+        "\"type\": \"INSERT\"", "\"type\":\"INSERT\"",                /* JSON */
+        "\"type\": \"UPDATE\"", "\"type\":\"UPDATE\"",
+        "\"type\": \"DELETE\"", "\"type\":\"DELETE\"",
+    };
+
+    for (size_t i = 0; i < sizeof(write_markers) / sizeof(write_markers[0]); i++)
+        if (strstr(payload, write_markers[i])) return 1;
+
+    return 0;
+}
+
 static int process_directory(oci_context_t   *ctx,
                               queue_manager_t *qm,
+                              app_config_t    *config,
                               const char      *input_dir,
                               const char      *processing_dir,
                               const char      *output_dir,
@@ -207,7 +250,28 @@ static int process_directory(oci_context_t   *ctx,
             continue;
         }
 
-        if (queue_manager_enqueue(qm, req) != 0)
+        /* Contention Manager proposal (2026-08-08): when enabled,
+         * writes get pinned to one dedicated queue (kept off the
+         * normal round-robin rotation) so all INSERT/UPDATE/DELETE
+         * traffic stays on one connection - directly targeting the
+         * cross-worker row-lock contention this project hit
+         * repeatedly under concurrent load. Off by default -
+         * unchanged plain round-robin behaviour, same as before this
+         * feature existed.                                            */
+        int enqueue_rc;
+        if (strcasecmp(config->contention_manager_mode, "single_write_queue") == 0 &&
+            payload_requires_single_writer_queue(payload))
+        {
+            enqueue_rc = queue_manager_enqueue_to(qm, req, CONTENTION_MANAGER_WRITER_QUEUE_INDEX);
+        }
+        else
+        {
+            enqueue_rc = queue_manager_enqueue_excluding(qm, req,
+                strcasecmp(config->contention_manager_mode, "single_write_queue") == 0
+                    ? CONTENTION_MANAGER_WRITER_QUEUE_INDEX : -1);
+        }
+
+        if (enqueue_rc != 0)
         {
             /* Every queue full - Queue-Full Behavior addendum: reject
              * immediately, skip Processing_* entirely, straight to
@@ -270,13 +334,13 @@ int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config,
                      "anyway", config->dispatcher_algorithm);
     }
 
-    int xml_result  = process_directory(ctx, qm,
+    int xml_result  = process_directory(ctx, qm, config,
                                          config->file_consumer_input_xml_dir,
                                          config->file_consumer_processing_xml_dir,
                                          config->file_consumer_output_xml_dir,
                                          config->file_consumer_error_xml_dir,
                                          "XML", session_id);
-    int json_result = process_directory(ctx, qm,
+    int json_result = process_directory(ctx, qm, config,
                                          config->file_consumer_input_json_dir,
                                          config->file_consumer_processing_json_dir,
                                          config->file_consumer_output_json_dir,

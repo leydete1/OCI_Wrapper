@@ -441,7 +441,21 @@ typedef struct
     int  session_log_create;
     int  session_log_end;
     int  session_log_reconcile;
-    
+
+    /* Session Manager proposal, Stage 3 (2026-08-08) - kill switch for
+     * dispatcher.c's hard session validation (see dispatcher.c's own
+     * comment at the check itself). Deliberately required, fail-closed
+     * like every other key in this project - no silent default.
+     * Production runs with this on (1); UAT is expected to run with it
+     * off (0), since UAT traffic often uses ad-hoc/fixture data
+     * without a proper session handshake. Also doubles as a disaster-
+     * recovery lever in production - flip to 0 and restart if session
+     * validation itself is ever the thing blocking otherwise-
+     * legitimate traffic. Gates only the rejection behaviour - session
+     * creation/tracking (Stages 1-2) stay on regardless of this
+     * setting.                                                        */
+    int  session_validation_enabled;
+
     /* ================================================================
      * File Consumer / Dispatcher parameters (File_Consumer_proposal v1.2)
      * consumer_type selects which consumer ini gets loaded as a second
@@ -456,6 +470,20 @@ typedef struct
     int  dispatcher_queue_count;         /* == worker thread count      */
     int  dispatcher_queue_depth;         /* items/queue before QUEUE_FULL */
     char dispatcher_algorithm[32];       /* round_robin (Defined) | least_busy (Pending) */
+
+    /* Contention Manager proposal (2026-08-08) - off (default) uses
+     * plain round-robin across every queue, unchanged from before this
+     * feature existed. single_write_queue routes every request
+     * containing at least one INSERT/UPDATE/DELETE operation to one
+     * fixed, dedicated queue (queue index 0 - not separately
+     * configurable, deliberately simple), keeping all write traffic on
+     * one connection; SELECT and EXECUTE_PROCEDURE continue round-
+     * robin across the remaining queues. EXECUTE_PROCEDURE is
+     * deliberately NOT treated as a write for this purpose - Data
+     * Manager has no visibility into what a procedure's own body
+     * actually does, and isolating it would need a different, larger
+     * design (see the design discussion this was decided against).   */
+    char contention_manager_mode[32];    /* off | single_write_queue */
 
     /* File Consumer thread lifecycle (Terry's proposal, 2026-08-05
      * "Findings and lessons" doc, section 1b) - replaces the hardcoded

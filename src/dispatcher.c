@@ -39,6 +39,8 @@
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Execute_Procedure_Module.h"
 #include "logger.h"
+#include "OCI_Session_Manager.h"   /* session_validate() - Session Manager
+                                      proposal, Stage 3 (2026-08-08) */
 #include "ini_reader.h"
 #include "OCI_Level1_Parser.h"
 #include "OCI_Level2_Parser.h"
@@ -1002,6 +1004,52 @@ int process_xml_file(oci_context_t      *ctx,
         logger_set_sid(new_request.session_id);
 
         int is_json = (new_request.source_format == INPUT_FORMAT_JSON);
+
+        /* Session Manager proposal, Stage 3 (2026-08-08): hard session
+         * validation - the actual "reject requests without a valid
+         * session" behaviour the whole proposal was building toward.
+         * Cache-only (session_validate() never touches the DB - same
+         * "keep the critical path cheap" reasoning as every stage
+         * before this). Gated by session_validation_enabled so UAT can
+         * run with it off (ad-hoc/fixture traffic often has no real
+         * session handshake) and production can flip it off too, as a
+         * disaster-recovery lever, if session validation itself is
+         * ever what's blocking otherwise-legitimate traffic. Session
+         * creation/tracking (Stages 1-2) stay on regardless of this
+         * switch - only the rejection behaviour is gated.
+         *
+         * Checked after the override above, so this validates the
+         * FINAL session_id (whichever consumer stamped it, or the raw
+         * payload's own value if nothing overrode it) - and before
+         * Level 2, so an invalid session is rejected without spending
+         * effort on field-level validation for a request that's being
+         * rejected regardless.                                        */
+        if (ctx->ini->session_validation_enabled)
+        {
+            int session_rc = session_validate(ctx, new_request.session_id, NULL);
+            if (session_rc != SESSION_OK)
+            {
+                const char *session_error_code =
+                    (session_rc == SESSION_ERR_NOT_FOUND) ? "SESSION_NOT_FOUND"
+                                                           : "SESSION_INVALID";
+
+                logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                             "File='%s' REJECTED - session_id='%s' failed "
+                             "validation (rc=%d, %s)", filename,
+                             new_request.session_id, session_rc,
+                             session_error_code);
+
+                build_error_envelope(resp, new_request.external_audit_id,
+                                      "SESSION_VALIDATION", session_error_code,
+                                      "The session_id on this request is "
+                                      "missing, unknown, or expired - a "
+                                      "valid session is required before "
+                                      "this request can be processed.",
+                                      is_json);
+                level1_free_request(&new_request);
+                return -1;
+            }
+        }
 
         uint64_t level2_start = metrics_now_us();
         int level2_rc = level2_validate(ctx, &new_request);

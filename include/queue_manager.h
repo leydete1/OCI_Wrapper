@@ -79,9 +79,39 @@ void queue_manager_destroy(queue_manager_t *qm);
  * blocked worker wakes up. Returns 0 on success, -1 if every queue is
  * full (in which case the caller still owns req and must free it
  * themselves - the caller is expected to build a QUEUE_FULL error
- * response instead).
+ * response instead). Implemented as
+ * queue_manager_enqueue_excluding(qm, req, -1) - see that function
+ * below.
  */
 int queue_manager_enqueue(queue_manager_t *qm, request_object_t *req);
+
+/*
+ * queue_manager_enqueue_to()   (Contention Manager proposal, 2026-08-08)
+ *
+ * Enqueues req to a specific queue_index directly, bypassing the
+ * round-robin cursor entirely - deliberately no overflow to another
+ * queue if the target is full. The whole point of routing to a
+ * specific queue (e.g. a dedicated single writer queue for INSERT/
+ * UPDATE/DELETE, keeping that traffic on one connection to avoid the
+ * cross-worker row-lock contention this project hit repeatedly) is
+ * defeated if a full target queue silently spills onto a different
+ * one. Returns 0 on success, -1 if the target queue is full (caller
+ * still owns req and must free it - same QUEUE_FULL contract as
+ * queue_manager_enqueue()).
+ */
+int queue_manager_enqueue_to(queue_manager_t *qm, request_object_t *req, int queue_index);
+
+/*
+ * queue_manager_enqueue_excluding()   (Contention Manager proposal, 2026-08-08)
+ *
+ * Same round-robin-with-overflow behaviour as queue_manager_enqueue(),
+ * but the rotation never considers exclude_index - used to keep
+ * normal (SELECT/EXECUTE_PROCEDURE) traffic off a dedicated writer
+ * queue reserved via queue_manager_enqueue_to(). Pass -1 for
+ * exclude_index to behave identically to queue_manager_enqueue()
+ * (which is exactly how that function is implemented).
+ */
+int queue_manager_enqueue_excluding(queue_manager_t *qm, request_object_t *req, int exclude_index);
 
 /*
  * queue_manager_dequeue_blocking()

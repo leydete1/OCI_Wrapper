@@ -423,6 +423,7 @@ static ctx_config_map_t ctx_map[] = {
 	    { "session_log_create",             CFG_BOOL,   offsetof(app_config_t, session_log_create),             NULL, 1      },
 	    { "session_log_end",                CFG_BOOL,   offsetof(app_config_t, session_log_end),                NULL, 1      },
 	    { "session_log_reconcile",          CFG_BOOL,   offsetof(app_config_t, session_log_reconcile),          NULL, 1      },
+	    { "session_validation_enabled",     CFG_BOOL,   offsetof(app_config_t, session_validation_enabled),     NULL, 1      },
 
 
 		   /* ----------------------------------------------------------------
@@ -952,6 +953,9 @@ static consumer_config_map_t consumer_map[] = {
         NULL, 500 },
     { "dispatcher.algorithm",   CFG_STRING, offsetof(app_config_t, dispatcher_algorithm),
         sizeof(((app_config_t *)0)->dispatcher_algorithm), "round_robin", 0 },
+
+    { "contention_manager.mode", CFG_STRING, offsetof(app_config_t, contention_manager_mode),
+        sizeof(((app_config_t *)0)->contention_manager_mode), "off", 0 },
 
     { "dispatcher.poll_interval_seconds", CFG_INT, offsetof(app_config_t, dispatcher_poll_interval_seconds), 0,
         NULL, 5 },
