@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <output_xml>
 <execution_envelope>
-<operation>DELETE</operation>
+<operation>UPDATE</operation>
 <table_name>OCI_FIELD_TEST</table_name>
 <owner>DATA_MANAGER</owner>
-<rows_deleted>0</rows_deleted>
+<rows_updated>1</rows_updated>
 <lobs_written>0</lobs_written>
-<execution_time>0.002082</execution_time>
+<execution_time>0.049581</execution_time>
 </execution_envelope>
 </output_xml>

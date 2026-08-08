@@ -1,0 +1,1229 @@
+
+TKPROF: Release 23.0.0.0.0 - Development on Sat Aug 8 01:03:09 2026
+
+Copyright (c) 1982, 2025, Oracle and/or its affiliates.  All rights reserved.
+
+Trace file: ./FREE_ora_698.trc
+Trace file version:
+   Oracle Database 23ai Free Release 23.0.0.0.0 - Develop, Learn, and Run for Free
+   Version 23.9.0.25.07
+   Build label:    RDBMS_23.9.0.25.07DBRU_LINUX.X64_250723.FREE
+Sort options: default
+
+********************************************************************************
+count    = number of times OCI procedure was executed
+cpu      = cpu time in seconds executing 
+elapsed  = elapsed time in seconds executing
+disk     = number of physical reads of buffers from disk
+query    = number of buffers gotten for consistent read
+current  = number of buffers gotten in current mode (usually for update)
+rows     = number of rows processed by the fetch or execute call
+********************************************************************************
+
+SQL ID: 0k8522rmdzg4k Plan Hash: 2057665657
+
+select privilege# 
+from
+ sysauth$ where (grantee#=:1 or grantee#=1) and privilege#>0
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        4      0.00       0.00          0          7          0           3
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        6      0.00       0.00          0          7          0           3
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         3          3          3  INLIST ITERATOR  (cr=7 pr=0 pw=0 time=331 us starts=1 direct read=0 direct write=0)
+         3          3          3   INDEX RANGE SCAN I_SYSAUTH1 (cr=7 pr=0 pw=0 time=302 us starts=2 direct read=0 direct write=0 cost=2 size=24 card=3)(object id 153)
+
+********************************************************************************
+
+SQL ID: 5dqz0hqtp9fru Plan Hash: 1227530427
+
+select /*+ connect_by_filtering index(sysauth$ i_sysauth1) */ privilege#, 
+  bitand(nvl(option$, 0), 72), grantee#, level 
+from
+ sysauth$ connect by grantee#=prior privilege# and privilege#>0 start with 
+  grantee#=:1 and privilege#>0
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        3      0.00       0.00          0          0          0           0
+Execute      3      0.00       0.00          0          0          0           0
+Fetch       48      0.00       0.00          0         39          0          45
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       54      0.00       0.00          0         39          0          45
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  CONNECT BY WITH FILTERING (cr=2 pr=0 pw=0 time=46 us starts=1 direct read=0 direct write=0)
+         0          0          0   TABLE ACCESS BY INDEX ROWID BATCHED SYSAUTH$ (cr=2 pr=0 pw=0 time=24 us starts=1 direct read=0 direct write=0 cost=3 size=33 card=3)
+         0          0          0    INDEX RANGE SCAN I_SYSAUTH1 (cr=2 pr=0 pw=0 time=16 us starts=1 direct read=0 direct write=0 cost=2 size=0 card=3)(object id 153)
+         0          0          0   HASH JOIN  (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=9 size=192 card=8)
+         0          0          0    NESTED LOOPS  (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=9 size=192 card=8)
+         0          0          0     STATISTICS COLLECTOR  (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0)
+         0          0          0      CONNECT BY PUMP  (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0)
+         0          0          0     TABLE ACCESS BY INDEX ROWID BATCHED SYSAUTH$ (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=2 size=33 card=3)
+         0          0          0      INDEX RANGE SCAN I_SYSAUTH1 (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=1 size=0 card=3)(object id 153)
+         0          0          0    TABLE ACCESS BY INDEX ROWID BATCHED SYSAUTH$ (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=2 size=33 card=3)
+         0          0          0     INDEX FULL SCAN I_SYSAUTH1 (cr=0 pr=0 pw=0 time=0 us starts=0 direct read=0 direct write=0 cost=1 size=0 card=3)(object id 153)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate UGA memory from OS                     3        0.00          0.00
+********************************************************************************
+
+SQL ID: 9mb61uqwwqkpj Plan Hash: 2709293936
+
+select spare6 
+from
+ sys.user$ where user#=:1
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0          2          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          2          0           1
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  TABLE ACCESS CLUSTER USER$ (cr=2 pr=0 pw=0 time=63 us starts=1 direct read=0 direct write=0 cost=1 size=6 card=1)
+         1          1          1   INDEX UNIQUE SCAN I_USER# (cr=1 pr=0 pw=0 time=28 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)(object id 11)
+
+********************************************************************************
+
+SQL ID: 9w9np2sc9ss7t Plan Hash: 0
+
+ALTER SESSION SET TIME_ZONE='+01:00'
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          0           0
+
+Misses in library cache during parse: 0
+Parsing user id: 137     (recursive depth: 1)
+********************************************************************************
+
+SQL ID: 8btyg0wy808ch Plan Hash: 2447725225
+
+update sys.user$ set spare1=spare1-BITAND(spare1, 1048576), spare6=
+  DECODE(to_char(:2, 'YYYY-MM-DD'), '0000-00-00', to_date(NULL), :2) 
+where
+ user#=:1
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          2          2           1
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          2          2           1
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  UPDATE  USER$ (cr=2 pr=0 pw=0 time=320 us starts=1 direct read=0 direct write=0)
+         1          1          1   TABLE ACCESS CLUSTER USER$ (cr=2 pr=0 pw=0 time=14 us starts=1 direct read=0 direct write=0 cost=1 size=27 card=1)
+         1          1          1    INDEX UNIQUE SCAN I_USER# (cr=1 pr=0 pw=0 time=5 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)(object id 11)
+
+********************************************************************************
+
+SQL ID: f0h5rpzmhju11 Plan Hash: 4175978637
+
+select SYS_CONTEXT('USERENV', 'SERVER_HOST'), SYS_CONTEXT('USERENV', 
+  'DB_UNIQUE_NAME'), SYS_CONTEXT('USERENV', 'INSTANCE_NAME'), 
+  SYS_CONTEXT('USERENV', 'INSTANCE'), STARTUP_TIME, SYS_CONTEXT('USERENV', 
+  'DB_DOMAIN'), SYS_CONTEXT('USERENV', 'SERVICE_NAME')  
+from
+ v$instance
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0          0          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          0          0           1
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  MERGE JOIN CARTESIAN (cr=0 pr=0 pw=0 time=110 us starts=1 direct read=0 direct write=0 cost=0 size=24 card=1)
+         1          1          1   MERGE JOIN CARTESIAN (cr=0 pr=0 pw=0 time=89 us starts=1 direct read=0 direct write=0 cost=0 size=13 card=1)
+         1          1          1    MERGE JOIN CARTESIAN (cr=0 pr=0 pw=0 time=59 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)
+         1          1          1     FIXED TABLE FULL X$QUIESCE (cr=0 pr=0 pw=0 time=34 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)
+         1          1          1     BUFFER SORT (cr=0 pr=0 pw=0 time=20 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)
+         1          1          1      FIXED TABLE FULL X$KJIDT (cr=0 pr=0 pw=0 time=15 us starts=1 direct read=0 direct write=0 cost=0 size=0 card=1)
+         1          1          1    BUFFER SORT (cr=0 pr=0 pw=0 time=27 us starts=1 direct read=0 direct write=0 cost=0 size=13 card=1)
+         1          1          1     FIXED TABLE FULL X$KSUXSINST (cr=0 pr=0 pw=0 time=26 us starts=1 direct read=0 direct write=0 cost=0 size=13 card=1)
+         1          1          1   BUFFER SORT (cr=0 pr=0 pw=0 time=12 us starts=1 direct read=0 direct write=0 cost=0 size=11 card=1)
+         1          1          1    FIXED TABLE FULL X$KVIT (cr=0 pr=0 pw=0 time=11 us starts=1 direct read=0 direct write=0 cost=0 size=11 card=1)
+
+********************************************************************************
+
+SQL ID: bs49gudrrb053 Plan Hash: 395742348
+
+select decode(upper(failover_method), NULL, 0 , 'BASIC', 1, 'PRECONNECT', 2 , 
+  'PREPARSE', 4 , 0), decode(upper(failover_type), NULL, 1,  'NONE', 1, 
+  'SESSION', 2, 'SELECT',  4, 'TRANSACTION',  8, 'AUTO' , 32,  1 ), 
+  failover_retries, failover_delay, flags, nvl(replay_initiation_timeout, 900)
+  , decode(upper(session_state_consistency), 'STATIC', 16, 'HYBRID', 256,  0),
+   failover_restore 
+from
+ sys.service$ where name = :1
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0          2          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          2          0           0
+
+Misses in library cache during parse: 0
+Optimizer mode: CHOOSE
+Parsing user id: SYS   (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  TABLE ACCESS FULL SERVICE$ (cr=2 pr=0 pw=0 time=89 us starts=1 direct read=0 direct write=0 cost=2 size=59 card=1)
+
+********************************************************************************
+
+SQL ID: 974jahtujp6cj Plan Hash: 0
+
+ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          0           0
+
+Misses in library cache during parse: 0
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        0.00          0.00
+********************************************************************************
+
+SQL ID: 0bh1s0gu171kz Plan Hash: 0
+
+ALTER SESSION SET NLS_LANGUAGE = 'AMERICAN' NLS_TERRITORY = 'AMERICA'
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          0           0
+
+Misses in library cache during parse: 0
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        0.00          0.00
+********************************************************************************
+
+SQL ID: 0k69mvhw5r4f4 Plan Hash: 0
+
+ALTER SESSION SET TIME_ZONE = 'UTC'
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          0           0
+
+Misses in library cache during parse: 0
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        9.70          9.70
+********************************************************************************
+
+SQL ID: 63vbmwbg199cv Plan Hash: 0
+
+INSERT INTO DATA_MANAGER.OCI_FIELD_TEST (NUMBER_COL, CLOB_COL) 
+VALUES
+ (:1, EMPTY_CLOB())
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        4      0.00       0.00          0          0          0           0
+Execute      4      0.00       0.00          0          1         12           4
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        8      0.00       0.00          0          1         12           4
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  OCI_FIELD_TEST (cr=1 pr=0 pw=0 time=951 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  asynch descriptor resize                        1        0.00          0.00
+  Disk file operations I/O                        1        0.00          0.00
+  SQL*Net message to client                       4        0.00          0.00
+  SQL*Net message from client                     4        0.00          0.00
+********************************************************************************
+
+SQL ID: ap0n716ahz91u Plan Hash: 3474980505
+
+SELECT CLOB_COL 
+FROM
+ DATA_MANAGER.OCI_FIELD_TEST WHERE ROWID = :rid FOR UPDATE
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        8      0.00       0.00          0          0          0           0
+Execute      8      0.00       0.00          0        181          8           0
+Fetch        8      0.00       0.00          0        243          0           8
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       24      0.00       0.00          0        424          8           8
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FOR UPDATE  (cr=112 pr=0 pw=0 time=564 us starts=1 direct read=0 direct write=0)
+         2          2          2   TABLE ACCESS BY USER ROWID OCI_FIELD_TEST (cr=112 pr=0 pw=0 time=540 us starts=2 direct read=0 direct write=0 cost=1 size=46 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                      16        0.00          0.00
+  SQL*Net message from client                    16        0.00          0.00
+********************************************************************************
+
+SQL ID: 2rys3y9bd9zbn Plan Hash: 25874125
+
+INSERT INTO DATA_MANAGER.AUDIT_TRAIL (TABLE_NAME, RECORD_ID, FIELD_NAME, 
+  ACTION_TYPE, NEW_VALUE, DATA_TYPE, CHANGED_BY, CHANGE_REASON, 
+  TRANSACTION_ID, SESSION_ID, CLIENT_IP, APPLICATION_NAME, MODULE_NAME, 
+  ROW_HASH) 
+VALUES
+ (:1, :2, :3, :4, EMPTY_CLOB(), :5, :6, :7, :8, :9, :10, :11, :12, :13)
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        5      0.00       0.00          0          0          0           0
+Execute      5      0.00       0.00          0          1         25           6
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       10      0.00       0.00          0          1         25           6
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  AUDIT_TRAIL (cr=1 pr=0 pw=0 time=611 us starts=1 direct read=0 direct write=0)
+         1          1          1   SEQUENCE  ISEQ$$_85359 (cr=0 pr=0 pw=0 time=95 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       5        0.00          0.00
+  SQL*Net message from client                     5        0.00          0.00
+********************************************************************************
+
+SQL ID: 66f6axkjv4zha Plan Hash: 885135659
+
+SELECT NEW_VALUE 
+FROM
+ DATA_MANAGER.AUDIT_TRAIL WHERE ROWID = :rid FOR UPDATE
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        5      0.00       0.00          0          0          0           0
+Execute      5      0.00       0.00          0          5          5           0
+Fetch        5      0.00       0.00          0         10          0           5
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       15      0.00       0.00          0         15          5           5
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FOR UPDATE  (cr=2 pr=0 pw=0 time=183 us starts=1 direct read=0 direct write=0)
+         2          2          2   TABLE ACCESS BY USER ROWID AUDIT_TRAIL (cr=2 pr=0 pw=0 time=103 us starts=2 direct read=0 direct write=0 cost=1 size=150 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                      10        0.00          0.00
+  SQL*Net message from client                    10        0.00          0.00
+********************************************************************************
+
+SQL ID: 3m9qmf0v4yqqw Plan Hash: 963832190
+
+UPDATE DATA_MANAGER.OCI_FIELD_TEST SET CLOB_COL=EMPTY_CLOB() 
+WHERE
+ NUMBER_COL=:1
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.04          0        416        420         205
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.04          0        416        420         205
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  UPDATE  OCI_FIELD_TEST (cr=362 pr=0 pw=0 time=43766 us starts=1 direct read=0 direct write=0)
+       101        101        101   TABLE ACCESS FULL OCI_FIELD_TEST (cr=354 pr=0 pw=0 time=1347 us starts=1 direct read=0 direct write=0 cost=5 size=2516 card=68)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate UGA memory from OS                     5        0.00          0.00
+  enq: TX - row lock contention                   1        0.03          0.03
+  buffer busy waits                               2        0.00          0.00
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: d11jmbjhb1g8v Plan Hash: 1388734953
+
+SELECT TO_CHAR(TO_DATE(:1,:2),:3) 
+FROM
+ DUAL
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse       18      0.00       0.00          0          0          0           0
+Execute     18      0.00       0.00          0          0          0           0
+Fetch       18      0.00       0.00          0          0          0          18
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       54      0.00       0.00          0          0          0          18
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FAST DUAL  (cr=0 pr=0 pw=0 time=11 us starts=1 direct read=0 direct write=0 cost=2 size=0 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                      18        0.00          0.00
+  SQL*Net message from client                    18        0.00          0.04
+********************************************************************************
+
+SQL ID: 5qydpuz5rjsuf Plan Hash: 963832190
+
+UPDATE DATA_MANAGER.OCI_FIELD_TEST SET VARCHAR2_COL=:1, DATE_COL=TO_DATE(:2,
+  'YYYY-MM-DD HH24:MI:SS') 
+WHERE
+ NUMBER_COL=:3
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.06     120.25          0        126         69          33
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.06     120.25          0        126         69          33
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  UPDATE  OCI_FIELD_TEST (cr=37 pr=0 pw=0 time=421 us starts=1 direct read=0 direct write=0)
+        33         33         33   TABLE ACCESS FULL OCI_FIELD_TEST (cr=37 pr=0 pw=0 time=116 us starts=1 direct read=0 direct write=0 cost=5 size=84 card=7)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        0.00          0.00
+********************************************************************************
+
+SQL ID: 9v4182d6qp9ws Plan Hash: 1388734953
+
+SELECT TO_CHAR(TO_TIMESTAMP(:1,:2),:3) 
+FROM
+ DUAL
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           0
+Fetch        2      0.00       0.00          0          0          0           2
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        6      0.00       0.00          0          0          0           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FAST DUAL  (cr=0 pr=0 pw=0 time=1 us starts=1 direct read=0 direct write=0 cost=2 size=0 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 80sw25pgmff5q Plan Hash: 0
+
+INSERT INTO DATA_MANAGER.OCI_FIELD_TEST (NUMBER_COL, VARCHAR2_COL, DATE_COL) 
+VALUES
+ (:1, :2, TO_DATE(:3,'YYYY-MM-DD HH24:MI:SS'))
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          6           4
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0          0          6           4
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  OCI_FIELD_TEST (cr=0 pr=0 pw=0 time=75 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 1g63q0xn2j398 Plan Hash: 0
+
+INSERT INTO DATA_MANAGER.OCI_FIELD_TEST (NUMBER_COL, VARCHAR2_COL, CLOB_COL) 
+VALUES
+ (:1, :2, EMPTY_CLOB())
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0         10           4
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0          0         10           4
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  OCI_FIELD_TEST (cr=0 pr=0 pw=0 time=240 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 7uvk7db2u8umb Plan Hash: 2235054712
+
+SELECT COUNT(*) 
+FROM
+ (SELECT 1 FROM (SELECT DATE_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE 
+  DATE_COL = TO_DATE('2026-07-27 00:00:00','YYYY-MM-DD HH24:MI:SS')))
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           0
+Fetch        2      0.00       0.00          0        243          0           2
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        6      0.00       0.00          0        243          0           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  SORT AGGREGATE (cr=39 pr=0 pw=0 time=462 us starts=1 direct read=0 direct write=0)
+         0          0          0   TABLE ACCESS FULL OCI_FIELD_TEST (cr=39 pr=0 pw=0 time=433 us starts=1 direct read=0 direct write=0 cost=5 size=3 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+  buffer busy waits                               3        0.00          0.00
+********************************************************************************
+
+SQL ID: 39qrw8pzhagwq Plan Hash: 1433888574
+
+DELETE FROM DATA_MANAGER.OCI_FIELD_TEST 
+WHERE
+ DATE_COL=TO_DATE(:1,'YYYY-MM-DD HH24:MI:SS')
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        3      0.00       0.00          0          0          0           0
+Execute      3      0.00       0.00          0        607          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        6      0.00       0.00          0        607          0           0
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  DELETE  OCI_FIELD_TEST (cr=51 pr=0 pw=0 time=420 us starts=1 direct read=0 direct write=0)
+         0          0          0   TABLE ACCESS FULL OCI_FIELD_TEST (cr=51 pr=0 pw=0 time=415 us starts=1 direct read=0 direct write=0 cost=5 size=3 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       3        0.00          0.00
+  SQL*Net message from client                     3        0.01          0.02
+********************************************************************************
+
+SQL ID: 1kmryxq2cggjq Plan Hash: 1433888574
+
+DELETE FROM DATA_MANAGER.OCI_FIELD_TEST 
+WHERE
+ NUMBER_COL=:1 AND VARCHAR2_COL=:2
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0        361          3           3
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0        361          3           3
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  DELETE  OCI_FIELD_TEST (cr=54 pr=0 pw=0 time=776 us starts=1 direct read=0 direct write=0)
+         1          1          1   TABLE ACCESS FULL OCI_FIELD_TEST (cr=54 pr=0 pw=0 time=484 us starts=1 direct read=0 direct write=0 cost=5 size=9 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate UGA memory from OS                     3        0.00          0.00
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.01          0.02
+********************************************************************************
+
+SQL ID: 1bg6g36ghhbhs Plan Hash: 0
+
+BEGIN DATA_MANAGER.PURGE_OLD_ROWS; END;
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0         48          1           2
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0         48          1           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  log file sync                                   2        0.00          0.00
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.01
+********************************************************************************
+
+SQL ID: 81cw8jk1g31qf Plan Hash: 1433888574
+
+DELETE FROM DATA_MANAGER.OCI_FIELD_TEST 
+WHERE
+ DATE_COL < SYSDATE - 365
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0        480          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0        480          0           0
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137     (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  DELETE  OCI_FIELD_TEST (cr=48 pr=0 pw=0 time=271 us starts=1 direct read=0 direct write=0)
+         0          0          0   TABLE ACCESS FULL OCI_FIELD_TEST (cr=48 pr=0 pw=0 time=268 us starts=1 direct read=0 direct write=0 cost=5 size=3 card=1)
+
+********************************************************************************
+
+SQL ID: 8ggw94h7mvxd7 Plan Hash: 0
+
+COMMIT
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          3          3           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          3          3           0
+
+Misses in library cache during parse: 0
+Parsing user id: 137     (recursive depth: 1)
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  latch: enqueue hash chains                      1        0.00          0.00
+********************************************************************************
+
+SQL ID: 4gychvvz64u9z Plan Hash: 0
+
+INSERT INTO DATA_MANAGER.OCI_FIELD_TEST (NUMBER_COL, VARCHAR2_COL, BLOB_COL) 
+VALUES
+ (:1, :2, EMPTY_BLOB())
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          6           2
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0          0          6           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  OCI_FIELD_TEST (cr=0 pr=0 pw=0 time=187 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 2y6ngqfkjgfj2 Plan Hash: 3474980505
+
+SELECT BLOB_COL 
+FROM
+ DATA_MANAGER.OCI_FIELD_TEST WHERE ROWID = :rid FOR UPDATE
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        4      0.00       0.00          0          0          0           0
+Execute      4      0.00       0.00          0        214          4           0
+Fetch        4      0.00       0.00          0        279          0           4
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       12      0.00       0.00          0        493          4           4
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FOR UPDATE  (cr=62 pr=0 pw=0 time=310 us starts=1 direct read=0 direct write=0)
+         2          2          2   TABLE ACCESS BY USER ROWID OCI_FIELD_TEST (cr=62 pr=0 pw=0 time=286 us starts=2 direct read=0 direct write=0 cost=1 size=52 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       8        0.00          0.00
+  SQL*Net message from client                     8        0.00          0.00
+********************************************************************************
+
+SQL ID: 0z6khrs8b03jn Plan Hash: 0
+
+BEGIN DATA_MANAGER.GET_DEPT_STATUS(:P_DEPT_ID, :P_STATUS); END;
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           2
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0          0          0           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        4.93          4.94
+********************************************************************************
+
+SQL ID: 3cb4k0vyg8cf6 Plan Hash: 2235054712
+
+SELECT COUNT(*) 
+FROM
+ DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL = :B1 
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           0
+Fetch        2      0.00       0.00          0        723          0           2
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        5      0.00       0.00          0        723          0           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137     (recursive depth: 1)
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  SORT AGGREGATE (cr=425 pr=0 pw=0 time=1275 us starts=1 direct read=0 direct write=0)
+        35         35         35   TABLE ACCESS FULL OCI_FIELD_TEST (cr=425 pr=0 pw=0 time=1133 us starts=1 direct read=0 direct write=0 cost=5 size=21 card=7)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate PGA memory from OS                     1        0.00          0.00
+********************************************************************************
+
+SQL ID: 7pc4g8k0xm9tn Plan Hash: 1433888574
+
+DELETE FROM DATA_MANAGER.OCI_FIELD_TEST 
+WHERE
+ NUMBER_COL=:1
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.02          0       1208         47           5
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.02          0       1208         47           5
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  DELETE  OCI_FIELD_TEST (cr=724 pr=0 pw=57 time=20281 us starts=3 direct read=0 direct write=0)
+        11         11         11   TABLE ACCESS FULL OCI_FIELD_TEST (cr=658 pr=0 pw=0 time=626 us starts=3 direct read=0 direct write=0 cost=5 size=12 card=4)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  enq: TX - row lock contention                   1        0.01          0.01
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: fhnd2n0dmwg8z Plan Hash: 0
+
+BEGIN DATA_MANAGER.GET_FIELD_ROWS(:P_MIN_NUM, :P_RESULTS); END;
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           2
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0          0          0           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 0n0wwqagr61ua Plan Hash: 1411535462
+
+SELECT NUMBER_COL, VARCHAR2_COL, DATE_COL 
+FROM
+ DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL >= :B1 ORDER BY NUMBER_COL
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0          0          0           0
+Fetch       76      0.00       0.00          0        814          0         373
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       80      0.00       0.00          0        814          0         373
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+       180        180        180  SORT ORDER BY (cr=506 pr=0 pw=0 time=537 us starts=1 direct read=0 direct write=0 cost=6 size=1032 card=86)
+       180        180        180   TABLE ACCESS FULL OCI_FIELD_TEST (cr=506 pr=0 pw=0 time=485 us starts=1 direct read=0 direct write=0 cost=5 size=1032 card=86)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                      76        0.00          0.00
+  SQL*Net message from client                    76        0.00          0.04
+********************************************************************************
+
+SQL ID: f265vrzm0q0u1 Plan Hash: 963832190
+
+UPDATE DATA_MANAGER.OCI_FIELD_TEST SET VARCHAR2_COL=:1, BLOB_COL=EMPTY_BLOB() 
+WHERE
+ NUMBER_COL=:2
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        2      0.00       0.00          0          0          0           0
+Execute      2      0.00       0.00          0        521         15           2
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        4      0.00       0.00          0        521         15           2
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  UPDATE  OCI_FIELD_TEST (cr=291 pr=0 pw=0 time=286 us starts=1 direct read=0 direct write=0)
+         1          1          1   TABLE ACCESS FULL OCI_FIELD_TEST (cr=291 pr=0 pw=0 time=233 us starts=1 direct read=0 direct write=0 cost=5 size=104 card=2)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 6vksw099bx70c Plan Hash: 25874125
+
+INSERT INTO DATA_MANAGER.AUDIT_TRAIL (TABLE_NAME, RECORD_ID, FIELD_NAME, 
+  ACTION_TYPE, OLD_VALUE, NEW_VALUE, DATA_TYPE, CHANGED_BY, CHANGE_REASON, 
+  TRANSACTION_ID, SESSION_ID, CLIENT_IP, APPLICATION_NAME, MODULE_NAME, 
+  ROW_HASH) 
+VALUES
+ (:1, :2, :3, :4, EMPTY_CLOB(), EMPTY_CLOB(), :5, :6, :7, :8, :9, :10, :11, 
+  :12, :13)
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          5           1
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          5           1
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         0          0          0  LOAD TABLE CONVENTIONAL  AUDIT_TRAIL (cr=0 pr=0 pw=0 time=127 us starts=1 direct read=0 direct write=0)
+         1          1          1   SEQUENCE  ISEQ$$_85359 (cr=0 pr=0 pw=0 time=19 us starts=1 direct read=0 direct write=0)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        0.00          0.00
+********************************************************************************
+
+SQL ID: cz9sd0dg3ydpd Plan Hash: 885135659
+
+SELECT OLD_VALUE 
+FROM
+ DATA_MANAGER.AUDIT_TRAIL WHERE ROWID = :rid FOR UPDATE
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          1          1           0
+Fetch        1      0.00       0.00          0          2          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          3          1           1
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  FOR UPDATE  (cr=2 pr=0 pw=0 time=75 us starts=1 direct read=0 direct write=0)
+         2          2          2   TABLE ACCESS BY USER ROWID AUDIT_TRAIL (cr=2 pr=0 pw=0 time=45 us starts=2 direct read=0 direct write=0 cost=1 size=41 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       2        0.00          0.00
+  SQL*Net message from client                     2        0.00          0.00
+********************************************************************************
+
+SQL ID: 6g0xkynzkddsf Plan Hash: 2235054712
+
+SELECT COUNT(*) 
+FROM
+ (SELECT 1 FROM (SELECT DATE_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE 
+  DATE_COL = TO_DATE('2026-08-19 14:30:00','YYYY-MM-DD HH24:MI:SS')))
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0        305          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0        305          0           1
+
+Misses in library cache during parse: 0
+Optimizer mode: ALL_ROWS
+Parsing user id: 137  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  SORT AGGREGATE (cr=305 pr=0 pw=0 time=882 us starts=1 direct read=0 direct write=0)
+         0          0          0   TABLE ACCESS FULL OCI_FIELD_TEST (cr=305 pr=0 pw=0 time=870 us starts=1 direct read=0 direct write=0 cost=5 size=3 card=1)
+
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  SQL*Net message to client                       1        0.00          0.00
+  SQL*Net message from client                     1        0.00          0.00
+
+
+
+********************************************************************************
+
+OVERALL TOTALS FOR ALL NON-RECURSIVE STATEMENTS
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse       81      0.00       0.00          0          0          0           0
+Execute     81      0.09     120.34          0       3690        637         275
+Fetch      117      0.00       0.00          0       1896          0         414
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total      279      0.10     120.36          0       5586        637         689
+
+Misses in library cache during parse: 0
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate PGA memory from OS                     2        0.00          0.00
+  SQL*Net message to client                     216        0.00          0.00
+  SQL*Net message from client                   216        9.70         29.73
+  Allocate UGA memory from OS                    15        0.00          0.00
+  asynch descriptor resize                        1        0.00          0.00
+  Disk file operations I/O                        2        0.00          0.00
+  enq: TX - row lock contention                   2        0.03          0.05
+  buffer busy waits                               7        0.00          0.00
+  log file sync                                   2        0.00          0.00
+  SQL*Net more data from client                 220        0.00          0.00
+  direct path write                              19        0.00          0.01
+
+
+OVERALL TOTALS FOR ALL RECURSIVE STATEMENTS
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse       12      0.00       0.00          0          0          0           0
+Execute     15      0.00       0.00          0        485          5           1
+Fetch       57      0.00       0.00          0        773          0          52
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       84      0.00       0.00          0       1258          5          53
+
+Misses in library cache during parse: 0
+
+Elapsed times include waiting on following events:
+  Event waited on                             Times   Max. Wait  Total Waited
+  ----------------------------------------   Waited  ----------  ------------
+  Allocate PGA memory from OS                     1        0.00          0.00
+  Allocate UGA memory from OS                     3        0.00          0.00
+  latch: enqueue hash chains                      1        0.00          0.00
+
+   31  user  SQL statements in session.
+    6  internal SQL statements in session.
+   37  SQL statements in session.
+********************************************************************************
+Trace file: ./FREE_ora_698.trc
+Trace file compatibility: 12.2.0.0
+Sort options: default
+
+       1  session in tracefile.
+      31  user  SQL statements in trace file.
+       6  internal SQL statements in trace file.
+      37  SQL statements in trace file.
+      37  unique SQL statements in trace file.
+    1476  lines in trace file.
+     150  elapsed seconds in trace file.
+
+
