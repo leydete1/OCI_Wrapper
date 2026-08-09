@@ -72,6 +72,21 @@ typedef struct
     int  file_consumer_log_file_rotation_number;
     char file_consumer_log_level[20];
 
+    /* Metrics refactor (closure item 5), Stage 2 follow-up (2026-08-09) -
+     * a dedicated logger for the Metrics Writer threads' OWN
+     * operational/lifecycle messages ("thread started", "flushing
+     * batch of N"), kept genuinely separate from metrics_logger (the
+     * actual CSV data file) - the same one-logger-per-subsystem
+     * pattern already used for File Consumer and Session Manager. Real
+     * bug this fixes: these threads' own diagnostic messages were
+     * previously written through the SAME logger as the CSV data
+     * itself, corrupting the CSV's row structure with interleaved log
+     * lines wherever one landed between data rows.                    */
+    char metrics_writer_log_file_name[256];
+    int  metrics_writer_log_file_max_size;
+    int  metrics_writer_log_file_rotation_number;
+    char metrics_writer_log_level[20];
+
 	/* Dispatcher log file (File_Consumer_proposal v1.2) -
 	 * dispatcher.c's own dedicated log, same reasoning as above. */
 	char dispatcher_log_file_name[256];
@@ -428,8 +443,30 @@ typedef struct
       int  metrics_display_input_file_name;
       int  metrics_display_input_request;
       int  metrics_display_output_response;
-      
-      
+
+    /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - see
+     * metrics_writer.h for the full design. finalize_metrics() itself
+     * is now always fire-and-forget/non-blocking regardless of these
+     * settings; these two independently control which destination(s)
+     * actually persist anything. Both may be on, either alone, or
+     * neither (metrics silently dropped, matching the same "drop
+     * rather than block" philosophy already used for session touches -
+     * a metrics gap is not something worth blocking real request
+     * traffic to avoid).                                              */
+    int  metrics_file_enabled;
+    int  metrics_db_enabled;
+
+    /* DB destination only - file writes stay one-row-at-a-time (cheap,
+     * local I/O, no round-trip cost worth batching for). The DB writer
+     * flushes whichever comes first: metrics_per_write records
+     * accumulated, or metrics_max_insert_delay_ms elapsed since the
+     * oldest record still unflushed - so a quiet period never leaves
+     * metrics sitting unwritten indefinitely just because the batch
+     * never filled up.                                                */
+    int  metrics_per_write;
+    int  metrics_max_insert_delay_ms;
+
+
     /* ================================================================
      * Session Cache parameters
      * ================================================================ */
@@ -490,6 +527,17 @@ typedef struct
      * actually does, and isolating it would need a different, larger
      * design (see the design discussion this was decided against).   */
     char contention_manager_mode[32];    /* off | single_write_queue */
+
+    /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - this
+     * consumer instance's own declared identity, e.g. "FILE_CONSUMER_01".
+     * Stamped onto every metrics record (metrics_set_context()) so a
+     * dashboard querying the metrics table can distinguish which
+     * consumer produced a given row - essential once HTTP consumer
+     * exists alongside File Consumer, and also lets two instances of
+     * the SAME consumer type carry distinct identities if ever run
+     * side by side. Required, like every other key in this project -
+     * no silent "unknown consumer" default.                           */
+    char consumer_name[64];
 
     /* File Consumer thread lifecycle (Terry's proposal, 2026-08-05
      * "Findings and lessons" doc, section 1b) - replaces the hardcoded

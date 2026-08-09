@@ -72,6 +72,7 @@
 #include "logger.h"
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
+#include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "OCI_Blob_Utils.h"
 
 /* --2---------------------------------------------------------------- */
@@ -1363,8 +1364,7 @@ Cleanup:
 		strncpy(metrics.transaction_id , tx_get_id(ctx->active_tx),sizeof(tx_get_id(ctx->active_tx))-1);
 	else
 		strncpy(metrics.transaction_id , "-",sizeof("-")-1);
-	metrics_finalise(&metrics);
-	metrics_write(ctx->metrics_logger, &metrics);
+	metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &metrics);
 	logger_clear_last_error();   // reset for next operation
 #
     if (pc)

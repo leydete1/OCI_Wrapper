@@ -104,7 +104,8 @@
 #include "file_consumer.h"
 #include "file_consumer_runner.h"
 #include "queue_manager.h"
-#include "session_touch_queue.h"
+#include "generic_queue.h"
+#include "metrics_writer.h"
 #include "session_manager_runner.h"
 #include "worker.h"
 
@@ -600,7 +601,8 @@ static int initialise_loggers(oci_context_t *ctx,
 							   logger_t      *sql_parser_logger,
 							   logger_t      *file_consumer_logger,
 							   logger_t      *dispatcher_logger,
-							   logger_t      *worker_logger)
+							   logger_t      *worker_logger,
+							   logger_t      *metrics_writer_logger)
 {
 
     /* ---- error logger MUST BE initialized first---- */
@@ -722,6 +724,28 @@ static int initialise_loggers(oci_context_t *ctx,
     ctx->worker_logger = worker_logger;
     printf("Initialize worker logger name =%s complete successful.\n",
            ctx->ini->worker_log_file_name);
+
+    /* ---- Metrics Writer logger (closure item 5, Stage 2 follow-up,
+     * 2026-08-09) - the writer threads' own operational logging,
+     * deliberately separate from metrics_logger (the actual CSV data
+     * file) - see ini_reader.h's own doc comment on the real bug this
+     * fixes.                                                           */
+    printf("Initialize metrics_writer logger name =%sx\n",
+           ctx->ini->metrics_writer_log_file_name);
+    if (logger_init_str2(metrics_writer_logger,
+                        ctx->ini->metrics_writer_log_file_name,
+                        ctx->ini->metrics_writer_log_file_max_size,
+                        ctx->ini->metrics_writer_log_file_rotation_number,
+                        ctx->ini->metrics_writer_log_level,
+						ctx->error_logger) != 0)
+    {
+        printf("Failed to initialise metrics_writer logger: %s\n",
+               ctx->ini->metrics_writer_log_file_name);
+        return -1;
+    }
+    ctx->metrics_writer_logger = metrics_writer_logger;
+    printf("Initialize metrics_writer logger name =%s complete successful.\n",
+           ctx->ini->metrics_writer_log_file_name);
 
     /* ---- Cache logger ---- */
     printf("Initialize cache logger name =%sx\n",
@@ -1067,6 +1091,7 @@ int main(int argc, char *argv[])
     logger_t	  file_consumer_logger;
     logger_t	  dispatcher_logger;
     logger_t	  worker_logger;
+    logger_t	  metrics_writer_logger;   /* closure item 5, Stage 2 follow-up */
 
 
 
@@ -1129,7 +1154,8 @@ int main(int argc, char *argv[])
 							&sql_parser_logger,
 							&file_consumer_logger,
 							&dispatcher_logger,
-							&worker_logger
+							&worker_logger,
+							&metrics_writer_logger
     				) != 0)
     {
         printf("Failed to initialise loggers - exiting\n");
@@ -1447,6 +1473,8 @@ int main(int argc, char *argv[])
         worker_ctx.resultset_cache       = ctx.resultset_cache;
         worker_ctx.error_logger          = ctx.error_logger;
         worker_ctx.metrics_logger        = ctx.metrics_logger;
+        worker_ctx.metrics_writer        = ctx.metrics_writer;   /* closure item 5, Stage 2 */
+        worker_ctx.metrics_writer_logger = ctx.metrics_writer_logger;   /* Stage 2 follow-up */
         worker_ctx.transaction_logger    = ctx.transaction_logger;
         worker_ctx.security_logger       = ctx.security_logger;
         worker_ctx.crypt_logger          = ctx.crypt_logger;
@@ -1546,6 +1574,23 @@ int main(int argc, char *argv[])
                      "Released the startup-only pinned session - each "
                      "worker thread borrows its own below");
 
+        /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) -
+         * started before the worker pool, so ctx.metrics_writer is
+         * already set (and will propagate to every thread that borrows
+         * a session after this point, via copy_shared_ctx_fields())
+         * before any real request processing - and therefore any real
+         * metrics recording - can begin. metrics_writer_start() itself
+         * never fails outright for a disabled destination; NULL
+         * sub-queues there just mean metrics_finalise_and_enqueue()
+         * silently skips that destination everywhere it's called.      */
+        ctx.metrics_writer = metrics_writer_start(&ctx, &config, ctx.metrics_logger, ctx.metrics_writer_logger);
+        if (!ctx.metrics_writer)
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "metrics_writer_start() failed - continuing "
+                         "without any metrics persistence this run "
+                         "(metrics_finalise_and_enqueue() handles a NULL "
+                         "writer safely everywhere it's called)");
+
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "consumer_type=FILE - starting worker pool (%d "
                      "thread(s), one per queue)", config.dispatcher_queue_count);
@@ -1565,12 +1610,17 @@ int main(int argc, char *argv[])
 
         /* Session Manager proposal, Stage 2 (2026-08-06) - own thread,
          * own queue, started alongside the worker pool and File
-         * Consumer.                                                    */
-        session_touch_queue_t *touch_q = session_touch_queue_create(SESSION_TOUCH_QUEUE_DEPTH);
+         * Consumer. Now built on generic_queue.h rather than the
+         * original session_touch_queue.h (2026-08-09) - see
+         * session_manager_runner.h's own note on that swap. free is
+         * passed as the destroy-time cleanup function since items
+         * queued here are always plain strdup()'d session_id strings
+         * (see worker.c's own enqueue site).                          */
+        generic_queue_t *touch_q = generic_queue_create(SESSION_TOUCH_QUEUE_DEPTH, free);
         if (!touch_q)
         {
             logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "session_touch_queue_create() failed - continuing "
+                         "generic_queue_create() failed - continuing "
                          "without session activity tracking (workers will "
                          "log a WARN per dropped touch, see worker.c)");
         }
@@ -1594,8 +1644,9 @@ int main(int argc, char *argv[])
                          "worker_pool_start() failed - see worker log above "
                          "for detail. Refusing to run with no workers.");
             if (sm_runner) session_manager_runner_stop_and_join(sm_runner, touch_q);
-            if (touch_q) session_touch_queue_destroy(touch_q);
+            if (touch_q) generic_queue_destroy(touch_q);
             queue_manager_destroy(qm);
+            metrics_writer_stop_and_join(ctx.metrics_writer);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1616,6 +1667,7 @@ int main(int argc, char *argv[])
                          "nothing will ever be enqueued for it to drain");
             worker_pool_shutdown_and_join(pool, qm);
             queue_manager_destroy(qm);
+            metrics_writer_stop_and_join(ctx.metrics_writer);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1706,9 +1758,18 @@ int main(int argc, char *argv[])
                          "remaining touch queue");
             session_manager_runner_stop_and_join(sm_runner, touch_q);
         }
-        if (touch_q) session_touch_queue_destroy(touch_q);
+        if (touch_q) generic_queue_destroy(touch_q);
 
         queue_manager_destroy(qm);
+
+        /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - the
+         * metrics writer stops LAST, deliberately, after every other
+         * thread that could still be producing metrics (workers, File
+         * Consumer, Session Manager) has already fully stopped above -
+         * same "producers stop before their consumer" ordering already
+         * used for Session Manager's own touch queue relative to the
+         * workers that feed it.                                        */
+        metrics_writer_stop_and_join(ctx.metrics_writer);
 
         OCI_Disconnect_pool(&ctx);
         logger_close(&logger);

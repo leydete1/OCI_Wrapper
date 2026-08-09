@@ -18,6 +18,8 @@ void copy_shared_ctx_fields(oci_context_t *dst, oci_context_t *src)
     dst->resultset_cache       = src->resultset_cache;
     dst->error_logger          = src->error_logger;
     dst->metrics_logger        = src->metrics_logger;
+    dst->metrics_writer        = src->metrics_writer;   /* closure item 5, Stage 2 */
+    dst->metrics_writer_logger = src->metrics_writer_logger;   /* Stage 2 follow-up */
     dst->transaction_logger    = src->transaction_logger;
     dst->security_logger       = src->security_logger;
     dst->crypt_logger          = src->crypt_logger;

@@ -1,1 +1,1 @@
-{"operation":"INSERT","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_inserted":2,"lobs_written":1,"execution_time":0.005870015}
+{"operation":"INSERT","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_inserted":2,"lobs_written":1,"execution_time":0.004812805}

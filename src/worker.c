@@ -14,7 +14,7 @@
 #include "response_manager.h"
 #include "OCI_Connection_Pool.h"
 #include "ctx_utils.h"
-#include "session_touch_queue.h"
+#include "generic_queue.h"
 #include "logger.h"
 
 struct worker_pool {
@@ -25,7 +25,7 @@ struct worker_pool {
 typedef struct {
     oci_context_t         *base_ctx;
     queue_manager_t       *qm;
-    session_touch_queue_t *touch_q;
+    generic_queue_t *touch_q;
     int                     queue_index;
     int                     worker_id;
 } worker_thread_args_t;
@@ -155,21 +155,35 @@ static void *worker_thread_main(void *arg)
         /* Session Manager proposal, Stage 2 (2026-08-06): fire-and-
          * forget activity touch, enqueued right after the response is
          * built - matches the proposal's own wording exactly. Genuinely
-         * non-blocking (session_touch_queue_enqueue() never waits for
-         * room; a full queue just drops the touch, logged below, not
-         * fatal - see session_touch_queue.h). Skipped entirely if this
-         * request never carried a real session_id (e.g. the legacy
-         * Test_XML_Runner harness, which doesn't participate in the
-         * Session Manager proposal yet).                               */
-        if (args.touch_q && req->session_id[0] &&
-            session_touch_queue_enqueue(args.touch_q, req->session_id) != 0)
+         * non-blocking (generic_queue_enqueue() never waits for room; a
+         * full queue just drops the touch, logged below, not fatal).
+         * Skipped entirely if this request never carried a real
+         * session_id (e.g. the legacy Test_XML_Runner harness, which
+         * doesn't participate in the Session Manager proposal yet).
+         *
+         * Now built on generic_queue.h rather than the original
+         * session_touch_queue.h (2026-08-09) - see session_manager_
+         * runner.h's own note on that swap. The one real behavioural
+         * difference: generic_queue_enqueue() never copies its item -
+         * unlike session_touch_queue_enqueue(), which used to strdup()
+         * the session_id internally, the strdup() now has to happen
+         * here, at the call site, before enqueueing. Ownership
+         * transfers to the queue on success; on failure (queue full),
+         * this thread still owns sid_copy and must free it itself.    */
+        if (args.touch_q && req->session_id[0])
         {
-            logger_write(thread_ctx.worker_logger, LOG_WARN, __func__, args.worker_id,
-                         "Worker[%d]: session touch queue full - dropped "
-                         "this activity touch for session_id=%s (not "
-                         "fatal, just a slightly stale last_activity "
-                         "until the next successful touch)",
-                         args.worker_id, req->session_id);
+            char *sid_copy = strdup(req->session_id);
+            if (!sid_copy || generic_queue_enqueue(args.touch_q, sid_copy) != 0)
+            {
+                free(sid_copy);   /* safe even if strdup() itself returned NULL */
+                logger_write(thread_ctx.worker_logger, LOG_WARN, __func__, args.worker_id,
+                             "Worker[%d]: session touch queue full (or "
+                             "strdup failed) - dropped this activity "
+                             "touch for session_id=%s (not fatal, just a "
+                             "slightly stale last_activity until the "
+                             "next successful touch)",
+                             args.worker_id, req->session_id);
+            }
         }
 
         if (response_manager_write(&thread_ctx, &resp, req->filename, req->processing_path,
@@ -204,10 +218,10 @@ static void *worker_thread_main(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-worker_pool_t *worker_pool_start(oci_context_t         *base_ctx,
-                                  queue_manager_t       *qm,
-                                  session_touch_queue_t *touch_q,
-                                  int                    worker_count)
+worker_pool_t *worker_pool_start(oci_context_t   *base_ctx,
+                                  queue_manager_t *qm,
+                                  generic_queue_t *touch_q,
+                                  int              worker_count)
 {
     if (worker_count <= 0) return NULL;
 

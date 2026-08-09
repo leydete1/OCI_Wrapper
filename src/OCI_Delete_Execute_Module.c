@@ -72,6 +72,7 @@
 #include "XML_Helper.h"
 #include "logger.h"
 #include "metrics.h"
+#include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "OCI_Transaction_Manager.h"
 
 /* ------------------------------------------------------------------ */
@@ -837,8 +838,7 @@ Cleanup:
 
 
 
-	metrics_finalise(&metrics);
-	metrics_write(ctx->metrics_logger, &metrics);
+	metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &metrics);
 	logger_clear_last_error();   // reset for next operation
 
 

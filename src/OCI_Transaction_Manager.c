@@ -36,6 +36,7 @@
 #include "OCI_Connection.h"
 #include "logger.h"
 #include "metrics.h"
+#include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers - forward declarations                            */
@@ -329,8 +330,7 @@ int tx_begin(tx_handle_t  *handle,
         strncpy(m.error_code, "-", sizeof(m.error_code) - 1);
         strncpy(m.error_text, "-", sizeof(m.error_text) - 1);
         m.status_code = 0;
-        metrics_finalise(&m);
-        metrics_write(ctx->metrics_logger, &m);
+        metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &m);
     }
 
     /* ---- Log ---- */
@@ -549,8 +549,7 @@ int tx_commit(tx_handle_t  *handle,
                 sizeof(m.transaction_name) - 1);
         strncpy(m.error_code, "-", sizeof(m.error_code) - 1);
         strncpy(m.error_text, "-", sizeof(m.error_text) - 1);
-        metrics_finalise(&m);
-        metrics_write(ctx->metrics_logger, &m);
+        metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &m);
     }
 
     /* ---- Build result XML ---- */
@@ -651,8 +650,7 @@ int tx_rollback(tx_handle_t  *handle,
                 sizeof(m.transaction_name) - 1);
         strncpy(m.error_code, "-", sizeof(m.error_code) - 1);
         strncpy(m.error_text, "-", sizeof(m.error_text) - 1);
-        metrics_finalise(&m);
-        metrics_write(ctx->metrics_logger, &m);
+        metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &m);
     }
 
     if (result_xml)

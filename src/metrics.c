@@ -23,6 +23,7 @@
 
 #include "OCI_Connection.h"
 #include "metrics.h"
+#include "logger.h"   /* logger_get_worker_id() - closure item 5, Stage 2 */
 
 /* ------------------------------------------------------------------ */
 /*  Stage 5 (File_Consumer_proposal v1.2) - metrics.c thread safety.
@@ -174,6 +175,7 @@ void metrics_init(metrics_record_t *m)
     strncpy(m->transaction_id,   "-", sizeof(m->transaction_id)   - 1);
     strncpy(m->transaction_name, "-", sizeof(m->transaction_name) - 1);
     strncpy(m->audit_id,         "-", sizeof(m->audit_id)         - 1);
+    strncpy(m->consumer_name,    "-", sizeof(m->consumer_name)    - 1);
     strncpy(m->client_ip,        "-", sizeof(m->client_ip)        - 1);
     strncpy(m->host_name,        "-", sizeof(m->host_name)        - 1);
     strncpy(m->server_ip,        "-", sizeof(m->server_ip)        - 1);
@@ -252,9 +254,25 @@ void metrics_set_context(metrics_record_t *m,
         strncpy(m->datasource_name, ctx->ini->dbname,
                 sizeof(m->datasource_name) - 1);
 
+    /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - this
+     * consumer instance's own declared identity, so a dashboard can
+     * tell which consumer produced this row.                          */
+    if (ctx->ini && ctx->ini->consumer_name[0])
+        strncpy(m->consumer_name, ctx->ini->consumer_name,
+                sizeof(m->consumer_name) - 1);
+
     /* Process and thread IDs */
     m->process_id = (uint32_t)getpid();
-    m->thread_id  = (uint32_t)(uintptr_t)pthread_self();
+
+    /* Fix (closure item 5, Stage 2, 2026-08-09): this used to be
+     * (uint32_t)(uintptr_t)pthread_self() - the raw, opaque OS thread
+     * handle. That's technically "a thread identifier", but it has no
+     * relationship to the [T%d] tag the same thread's own log lines
+     * show - a metrics row and its own log lines couldn't be
+     * correlated by thread at all. logger_get_worker_id() returns the
+     * exact same clean 0-4 worker number already used everywhere else
+     * for this thread, matching what [T%d] actually shows.            */
+    m->thread_id  = (uint32_t)logger_get_worker_id();
 
     /* Pool slot index as connection_id / pool_id */
     if (ctx->pool_slot_index >= 0)
@@ -313,6 +331,39 @@ void metrics_finalise(metrics_record_t *m)
 /* ================================================================== */
 /*  metrics_write                                                       */
 /* ================================================================== */
+/*
+ * metrics_format_timestamp_us()
+ *
+ * Formats a raw microsecond-epoch value as "YYYY-MM-DD HH24:MI:SS.FFFFFF".
+ * Extracted (closure item 5, Stage 3, 2026-08-09) from what used to be
+ * inline, duplicated logic inside metrics_write() below (once for
+ * start_time_us, once for end_time_us) - now shared with
+ * metrics_db_bulk_insert() (metrics_writer.c), which needs the exact
+ * same conversion to build a string Oracle's own TO_TIMESTAMP can
+ * parse. buf_size should be at least 48 bytes; us == 0 writes "-".
+ */
+void metrics_format_timestamp_us(uint64_t us, char *buf, size_t buf_size)
+{
+    strncpy(buf, "-", buf_size - 1);
+    buf[buf_size - 1] = '\0';
+
+    if (us == 0) return;
+
+    time_t sec  = (time_t)(us / 1000000ULL);
+    uint32_t usec = (uint32_t)(us % 1000000ULL);
+    struct tm *tm_info = gmtime(&sec);
+    if (tm_info)
+        snprintf(buf, buf_size,
+                 "%04d-%02d-%02d %02d:%02d:%02d.%06u",
+                 tm_info->tm_year + 1900,
+                 tm_info->tm_mon  + 1,
+                 tm_info->tm_mday,
+                 tm_info->tm_hour,
+                 tm_info->tm_min,
+                 tm_info->tm_sec,
+                 usec);
+}
+
 void metrics_write(logger_t         *metrics_logger,
                    metrics_record_t *m)
 {
@@ -348,6 +399,7 @@ void metrics_write(logger_t         *metrics_logger,
     char f_transaction_id   [512];
     char f_transaction_name [512];
     char f_audit_id         [512];
+    char f_consumer_name    [512];
     char f_client_ip        [512];
     char f_host_name        [512];
     char f_server_ip        [512];
@@ -361,6 +413,7 @@ void metrics_write(logger_t         *metrics_logger,
     csv_field(f_transaction_id,   sizeof(f_transaction_id),   m->transaction_id);
     csv_field(f_transaction_name, sizeof(f_transaction_name), m->transaction_name);
     csv_field(f_audit_id,         sizeof(f_audit_id),         m->audit_id);
+    csv_field(f_consumer_name,    sizeof(f_consumer_name),    m->consumer_name);
     csv_field(f_client_ip,        sizeof(f_client_ip),        m->client_ip);
     csv_field(f_host_name,        sizeof(f_host_name),        m->host_name);
     csv_field(f_server_ip,        sizeof(f_server_ip),        m->server_ip);
@@ -371,42 +424,15 @@ void metrics_write(logger_t         *metrics_logger,
     csv_field(f_error_text,       sizeof(f_error_text),       m->error_text);
 
     /* Format start_time_us as a human-readable timestamp + microseconds
-     * so the CSV is readable without a separate converter.            */
-    char start_ts[48] = "-";
-    if (m->start_time_us > 0)
-    {
-        time_t sec  = (time_t)(m->start_time_us / 1000000ULL);
-        uint32_t us = (uint32_t)(m->start_time_us % 1000000ULL);
-        struct tm *tm_info = gmtime(&sec);
-        if (tm_info)
-            snprintf(start_ts, sizeof(start_ts),
-                     "%04d-%02d-%02d %02d:%02d:%02d.%06u",
-                     tm_info->tm_year + 1900,
-                     tm_info->tm_mon  + 1,
-                     tm_info->tm_mday,
-                     tm_info->tm_hour,
-                     tm_info->tm_min,
-                     tm_info->tm_sec,
-                     us);
-    }
+     * so the CSV is readable without a separate converter. Extracted
+     * (closure item 5, Stage 3, 2026-08-09) into metrics_format_
+     * timestamp_us(), now shared with metrics_db_bulk_insert()
+     * (metrics_writer.c) instead of duplicated a third time.           */
+    char start_ts[48];
+    metrics_format_timestamp_us(m->start_time_us, start_ts, sizeof(start_ts));
 
-    char end_ts[48] = "-";
-    if (m->end_time_us > 0)
-    {
-        time_t sec  = (time_t)(m->end_time_us / 1000000ULL);
-        uint32_t us = (uint32_t)(m->end_time_us % 1000000ULL);
-        struct tm *tm_info = gmtime(&sec);
-        if (tm_info)
-            snprintf(end_ts, sizeof(end_ts),
-                     "%04d-%02d-%02d %02d:%02d:%02d.%06u",
-                     tm_info->tm_year + 1900,
-                     tm_info->tm_mon  + 1,
-                     tm_info->tm_mday,
-                     tm_info->tm_hour,
-                     tm_info->tm_min,
-                     tm_info->tm_sec,
-                     us);
-    }
+    char end_ts[48];
+    metrics_format_timestamp_us(m->end_time_us, end_ts, sizeof(end_ts));
 
     if (metrics_logger->file)
     {
@@ -415,6 +441,7 @@ void metrics_write(logger_t         *metrics_logger,
             "%s,"       /* transaction_id       */
             "%s,"       /* transaction_name     */
             "%s,"       /* audit_id             */
+            "%s,"       /* consumer_name        */
             "%s,"       /* client_ip            */
             "%s,"       /* host_name            */
             "%s,"       /* server_ip            */
@@ -456,6 +483,7 @@ void metrics_write(logger_t         *metrics_logger,
             f_transaction_id,
             f_transaction_name,
             f_audit_id,
+            f_consumer_name,
             f_client_ip,
             f_host_name,
             f_server_ip,

@@ -25,6 +25,15 @@
 #include <oci.h>
 #include "oci_cache.h"
 
+/* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - forward
+ * declaration only, deliberately not #include "metrics_writer.h" here:
+ * that header itself includes THIS one for oci_context_t, so a direct
+ * include here would be circular. metrics_writer_t is only ever used
+ * as a pointer below - every module that actually calls into it
+ * (dispatcher.c, the CRUD execute modules) already includes
+ * metrics_writer.h directly for the real declaration.                 */
+typedef struct metrics_writer metrics_writer_t;
+
 typedef struct oci_context_t {
     OCIEnv     *envhp;
     OCIError   *errhp;
@@ -46,6 +55,21 @@ typedef struct oci_context_t {
     logger_t     *procedure_logger;
    logger_t		 *error_logger;
    logger_t		 *metrics_logger;
+   metrics_writer_t *metrics_writer;   /* closure item 5, Stage 2 - NULL
+                                           if neither destination is
+                                           enabled; metrics_finalise_
+                                           and_enqueue() handles NULL
+                                           safely either way            */
+   logger_t         *metrics_writer_logger;   /* Stage 2 follow-up
+                                                   (2026-08-09) - the
+                                                   writer threads' own
+                                                   operational logging,
+                                                   deliberately separate
+                                                   from metrics_logger
+                                                   (the actual CSV data
+                                                   file) - see
+                                                   ini_reader.h's own
+                                                   doc comment          */
    logger_t		 *transaction_logger;
    logger_t		 *security_logger;
    logger_t		 *crypt_logger;
@@ -60,9 +84,7 @@ typedef struct oci_context_t {
                                              Stage 4 - worker.c. Single
                                              shared logger across however
                                              many callers eventually use
-                                             it (one synchronous caller
-                                             today, N threads from Stage
-                                             5 on) - logger.c's global
+                                             it - logger.c's global
                                              log_mutex already makes this
                                              safe under real concurrency,
                                              per the 2026-08-04 design

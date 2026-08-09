@@ -64,6 +64,7 @@
 #include "resultset_cache.h"
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
+#include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "OCI_Resultset_Builder.h"
 #include "OCI_Response_Writer.h";
 #include "cJSON.h"                       /* Stage 3c JSON verification only */
@@ -1262,14 +1263,63 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                  "record_count=%d max=%d",
                  record_count, ctx->ini->query_max_record_count);
 
-    if (record_count > ctx->ini->query_max_record_count || record_count < 1)
+    /* Closure item 4 (2026-08-09) - this guard used to treat "zero
+     * rows" and "exceeds max" identically, aborting the whole request
+     * with a generic error for both. Neither is actually an error:
+     *
+     *  - Zero rows is a completely normal, valid outcome for a SELECT
+     *    whose WHERE clause simply matches nothing - it isn't a
+     *    failure to be reported as one. Confirmed as a real, repeated
+     *    point of confusion during 2026-07 testing (this exact log
+     *    line being mistaken for a genuine problem - see
+     *    OCI_Session_Manager.c's own reconcile_orphans() comment on
+     *    the same issue) and worth fixing at the source rather than
+     *    re-explaining every time it comes up.
+     *
+     *  - Exceeding max shouldn't block the caller outright either -
+     *    return what's allowed and say so, rather than forcing a
+     *    ticket/retry cycle for something the caller can already see
+     *    and adjust for themselves (their own request's row count is
+     *    knowable in advance).
+     *
+     * IMPORTANT SAFETY NOTE for the "exceeds max" branch: capping only
+     * the record_count VARIABLE here would NOT actually bound how many
+     * rows get fetched below - Stage 5's fetch loop runs unbounded
+     * until OCIStmtFetch2 itself reports rows_fetched=0 (cursor
+     * exhausted), with no check against record_count inside the loop
+     * at all. If the underlying query would still return more rows
+     * than the cap, capping just this variable would leave
+     * resultset_create() allocating arrays sized for the CAPPED count,
+     * while the fetch loop kept writing past that bound - a genuine
+     * buffer overflow. The safe fix constrains the actual SQL executed
+     * below (see fetch_sql construction a few lines down), not just
+     * this count.                                                      */
+    int truncated = 0;
+
+    if (record_count < 1)
     {
-       logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "Query aborted: record_count=%d exceeds max=%d "
-                     "or returned no rows",
-                     record_count, ctx->ini->query_max_record_count);
-           rc = -1;
-        goto Cleanup;
+        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                     "record_count=0 - no rows matched. This is a valid, "
+                     "normal outcome, not an error - proceeding with an "
+                     "empty result set.");
+        /* record_count stays 0 - resultset_create(0, ...) and the
+         * max_lobs/max_clobs calculations below all handle this
+         * correctly (0 * anything = 0), and Stage 5's fetch loop will
+         * simply see rows_fetched=0 on its first call and exit
+         * immediately with nothing processed.                         */
+    }
+    else if (record_count > ctx->ini->query_max_record_count)
+    {
+        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                     "record_count=%d exceeds max=%d - returning the "
+                     "first %d row(s) rather than aborting. Caller "
+                     "should check the <truncated> flag on the response "
+                     "and narrow their own query if the full result set "
+                     "is actually needed.",
+                     record_count, ctx->ini->query_max_record_count,
+                     ctx->ini->query_max_record_count);
+        record_count = ctx->ini->query_max_record_count;
+        truncated = 1;
     }
 
     /* ---- Allocate BLOB and CLOB tracking lists ---- */
@@ -1282,6 +1332,30 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "max_lobs=%d max_clobs=%d", max_lobs, max_clobs);
+
+    /* Closure item 4 (2026-08-09) - when truncated, the statement
+     * actually fetched below must itself be bounded to record_count
+     * rows (now the capped value) - not just the variable. A separate
+     * buffer, not an in-place rewrite of cfg->SQL: that pointer is
+     * also used later for extract_sql_dependencies() (already run,
+     * above this point, on the real original query - unaffected
+     * either way) and for the <sql_query> tag in the response itself,
+     * which should show the caller's actual query, not a wrapper this
+     * code injected around it. Same ROWNUM-subquery idiom already used
+     * a few lines up for the COUNT(*) guard query, for consistency
+     * within this file.                                                */
+    char  fetch_sql_buf[4096];
+    const char *fetch_sql = cfg->SQL;
+
+    if (truncated)
+    {
+        snprintf(fetch_sql_buf, sizeof(fetch_sql_buf),
+                 "SELECT * FROM (%s) WHERE ROWNUM <= %d",
+                 cfg->SQL, record_count);
+        fetch_sql = fetch_sql_buf;
+        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                     "Truncated fetch SQL: %s", fetch_sql);
+    }
 
     if (max_lobs > 0)
     {
@@ -1303,7 +1377,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
     CHECK_OCI(ctx->errhp,
         OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)cfg->SQL, (ub4)strlen(cfg->SQL),
+                        (text *)fetch_sql, (ub4)strlen(fetch_sql),
                         NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT));
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
@@ -1694,6 +1768,12 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     xml_start_document(xml);
     xml_start_execution(xml);
     xml_append(xml, "<sql_query>%s</sql_query>\n", cfg->SQL);
+    /* Closure item 4 (2026-08-09) - explicit flag, not just a log
+     * warning, so a caller doing reconciliation or a completeness
+     * check has a real way to know they received a partial result
+     * rather than silently trusting a row count that's actually
+     * short of the true total.                                        */
+    xml_append(xml, "<truncated>%s</truncated>\n", truncated ? "true" : "false");
     xml_end_execution(xml);
     /* xml_start_resultset(xml); */ /* Unused: resultset body now built by response_write_xml(ctx, rs) via new parsing layer, after the fetch loop populates rs */
 
@@ -2093,8 +2173,7 @@ Cleanup:
 	        metrics.output_response = flatten_for_csv3(cfg->xml->OUTPUT_XML);
 	}
 
-	metrics_finalise(&metrics);
-	metrics_write(ctx->metrics_logger, &metrics);
+	metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &metrics);
     logger_clear_last_error();   // reset for next operation
 
 

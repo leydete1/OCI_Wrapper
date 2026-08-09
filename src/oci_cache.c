@@ -679,14 +679,40 @@ void cache_release(cache_t *cache, cache_entry_t *entry)
 {
     if (!cache || !entry) return;
 
+    /* Race fix (2026-08-09) - a direct consequence of the 2026-08-08
+     * cache_insert() fix (checking in_use before free_entry()), not a
+     * new class of bug: THAT fix means cache_insert() can now free an
+     * entry the instant in_use hits 0 and the lock is released - which
+     * exposed this line reading entry->normalized_sql AFTER doing
+     * exactly that, with no protection at all. Before the 2026-08-08
+     * fix, cache_insert() ignored in_use entirely, so this specific
+     * ordering never mattered - there was no real "the free just
+     * became legal" moment for it to race against. Confirmed via a
+     * live ASan use-after-free: a worker's own cache_release() read
+     * freed memory inside its own logging call, moments after the
+     * Session Manager thread's session_touch() legitimately freed the
+     * same entry once in_use correctly allowed it to.
+     *
+     * Fix: copy what the log line needs into a local buffer WHILE
+     * STILL HOLDING THE LOCK, then log using that local copy after
+     * releasing it - never touch entry itself once the lock protecting
+     * it (and thus protecting cache_insert()'s own in_use check) is
+     * gone. The lock is only held for a fast snprintf(), not for the
+     * logger_write() call itself, so this doesn't hold it any longer
+     * than the original code did.                                     */
+    char key_snapshot[81];   /* matches the %.80s truncation below */
+
     pthread_rwlock_wrlock(&cache->lock);
+    if (entry->normalized_sql)
+        snprintf(key_snapshot, sizeof(key_snapshot), "%s", entry->normalized_sql);
+    else
+        key_snapshot[0] = '\0';
     entry->in_use = 0;
     pthread_rwlock_unlock(&cache->lock);
 
     logger_write(cache->logger, LOG_DEBUG, __func__, 0,
                  "[%s] released entry key='%.80s'",
-                 cache->config.cache_name,
-                 entry->normalized_sql ? entry->normalized_sql : "");
+                 cache->config.cache_name, key_snapshot);
 }
 
 /* ================================================================== */

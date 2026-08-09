@@ -49,6 +49,20 @@ void logger_set_worker_id(int worker_id)
     g_worker_id = worker_id;
 }
 
+/* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - lets
+ * metrics.c stamp the exact same clean worker number (0-4, whatever
+ * the calling thread already set via logger_set_worker_id() above)
+ * onto every metrics record, instead of building its own separate
+ * thread-identification mechanism for something already solved here.
+ * See metrics.c's own doc comment on the bug this replaces - the
+ * previous metrics_record_t.thread_id was populated from raw
+ * pthread_self(), an opaque value with no relationship to the [T%d]
+ * tag the same thread's own log lines show.                          */
+int logger_get_worker_id(void)
+{
+    return g_worker_id;
+}
+
 /* Global switch, applies to every logger uniformly - deliberately NOT
  * __thread, since it's set once at startup (before any worker thread
  * exists) from config.ini's log_include_trace_context and never

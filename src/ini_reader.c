@@ -79,6 +79,12 @@ static ctx_config_map_t ctx_map[] = {
     { "file_consumer_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, file_consumer_log_file_rotation_number),NULL, 5 },
     { "file_consumer_log_level",              CFG_STRING, offsetof(app_config_t, file_consumer_log_level),               "DEBUG", 0 },
 
+    /* Metrics refactor (closure item 5), Stage 2 follow-up (2026-08-09) */
+    { "metrics_writer_log_file_name",          CFG_STRING, offsetof(app_config_t, metrics_writer_log_file_name),          "metrics_writer_app.log", 0 },
+    { "metrics_writer_log_file_max_size",      CFG_INT,    offsetof(app_config_t, metrics_writer_log_file_max_size),       NULL, 10485760 },
+    { "metrics_writer_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, metrics_writer_log_file_rotation_number),NULL, 5 },
+    { "metrics_writer_log_level",              CFG_STRING, offsetof(app_config_t, metrics_writer_log_level),               "DEBUG", 0 },
+
     { "dispatcher_log_file_name",          CFG_STRING, offsetof(app_config_t, dispatcher_log_file_name),          "dispatcher_app.log", 0 },
     { "dispatcher_log_file_max_size",      CFG_INT,    offsetof(app_config_t, dispatcher_log_file_max_size),       NULL, 10485760 },
     { "dispatcher_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, dispatcher_log_file_rotation_number),NULL, 5 },
@@ -410,6 +416,12 @@ static ctx_config_map_t ctx_map[] = {
 	    { "metrics_display_input_request",      CFG_INT,    offsetof(app_config_t, metrics_display_input_request),      NULL, 0  },
 	    { "metrics_display_output_response",      CFG_INT,    offsetof(app_config_t, metrics_display_output_response),      NULL, 0  },
 
+	    /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) */
+	    { "metrics_file_enabled",           CFG_INT, offsetof(app_config_t, metrics_file_enabled),           NULL, 1    },
+	    { "metrics_db_enabled",             CFG_INT, offsetof(app_config_t, metrics_db_enabled),             NULL, 0    },
+	    { "metrics_per_write",              CFG_INT, offsetof(app_config_t, metrics_per_write),              NULL, 100  },
+	    { "metrics_max_insert_delay_ms",    CFG_INT, offsetof(app_config_t, metrics_max_insert_delay_ms),    NULL, 5000 },
+
 
 		/*Session Cache*/
 	    { "session_cache_enabled",          CFG_BOOL,   offsetof(app_config_t, session_cache_enabled),          NULL, 1      },
@@ -661,6 +673,8 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
 					else if (!strcmp(m->name,"select_log_level"))                  maxlen=sizeof(config->select_log_level);
 					else if (!strcmp(m->name,"file_consumer_log_file_name"))       maxlen=sizeof(config->file_consumer_log_file_name);
 					else if (!strcmp(m->name,"file_consumer_log_level"))           maxlen=sizeof(config->file_consumer_log_level);
+					else if (!strcmp(m->name,"metrics_writer_log_file_name"))      maxlen=sizeof(config->metrics_writer_log_file_name);
+					else if (!strcmp(m->name,"metrics_writer_log_level"))          maxlen=sizeof(config->metrics_writer_log_level);
 					else if (!strcmp(m->name,"dispatcher_log_file_name"))          maxlen=sizeof(config->dispatcher_log_file_name);
 					else if (!strcmp(m->name,"dispatcher_log_level"))              maxlen=sizeof(config->dispatcher_log_level);
 					else if (!strcmp(m->name,"worker_log_file_name"))              maxlen=sizeof(config->worker_log_file_name);
@@ -956,6 +970,12 @@ static consumer_config_map_t consumer_map[] = {
 
     { "contention_manager.mode", CFG_STRING, offsetof(app_config_t, contention_manager_mode),
         sizeof(((app_config_t *)0)->contention_manager_mode), "off", 0 },
+
+    /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - this
+     * consumer instance's own declared identity - see ini_reader.h's
+     * own doc comment on consumer_name for the full rationale.        */
+    { "consumer_name", CFG_STRING, offsetof(app_config_t, consumer_name),
+        sizeof(((app_config_t *)0)->consumer_name), NULL, 0 },
 
     { "dispatcher.poll_interval_seconds", CFG_INT, offsetof(app_config_t, dispatcher_poll_interval_seconds), 0,
         NULL, 5 },

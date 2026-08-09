@@ -20,7 +20,7 @@ struct session_manager_runner {
 
 typedef struct {
     oci_context_t         *base_ctx;
-    session_touch_queue_t *q;
+    generic_queue_t *q;
 } runner_thread_args_t;
 
 static void *runner_thread_main(void *arg)
@@ -29,7 +29,7 @@ static void *runner_thread_main(void *arg)
     free(arg);
 
     oci_context_t *base_ctx = args.base_ctx;
-    session_touch_queue_t *q = args.q;
+    generic_queue_t *q = args.q;
 
     /* Same pattern as worker.c/file_consumer_runner.c - borrow an
      * independent pooled session at thread start, hold it for this
@@ -60,7 +60,7 @@ static void *runner_thread_main(void *arg)
     int touched = 0;
     char *session_id;
 
-    while ((session_id = session_touch_queue_dequeue_blocking(q)) != NULL)
+    while ((session_id = (char *)generic_queue_dequeue_blocking(q)) != NULL)
     {
         int cache_rc = session_touch(&thread_ctx, session_id);
         if (cache_rc != SESSION_OK)
@@ -90,7 +90,7 @@ static void *runner_thread_main(void *arg)
 }
 
 session_manager_runner_t *session_manager_runner_start(oci_context_t         *base_ctx,
-                                                         session_touch_queue_t *q)
+                                                         generic_queue_t *q)
 {
     session_manager_runner_t *runner = malloc(sizeof(session_manager_runner_t));
     if (!runner) return NULL;
@@ -114,11 +114,11 @@ session_manager_runner_t *session_manager_runner_start(oci_context_t         *ba
 }
 
 void session_manager_runner_stop_and_join(session_manager_runner_t *runner,
-                                           session_touch_queue_t    *q)
+                                           generic_queue_t          *q)
 {
     if (!runner) return;
 
-    session_touch_queue_shutdown(q);
+    generic_queue_shutdown(q);
     pthread_join(runner->thread, NULL);
 
     free(runner);

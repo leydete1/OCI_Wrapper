@@ -53,6 +53,15 @@ typedef struct metrics_record_s
     char        transaction_name  [128];  /* business label e.g. "Save Booking" */
     char        audit_id          [64];
 
+    /* ---- Consumer Identity (closure item 5, Stage 2, 2026-08-09) ----
+     * This consumer instance's own declared identity (config.ini's
+     * consumer_name, e.g. "FILE_CONSUMER_01") - stamped in
+     * metrics_set_context(). Distinct from datasource_name below,
+     * which identifies the DATABASE, not which consumer produced this
+     * row. Essential once HTTP consumer exists alongside File Consumer
+     * and a dashboard needs to tell their traffic apart.               */
+    char        consumer_name     [64];
+
     /* ---- Client Information ---- */
     char        client_ip       [64];
 
@@ -142,6 +151,7 @@ typedef struct metrics_record_s
     "transaction_id,"      \
     "transaction_name,"    \
     "audit_id,"            \
+    "consumer_name,"       \
     "client_ip,"           \
     "host_name,"           \
     "server_ip,"           \
@@ -227,6 +237,21 @@ void metrics_finalise(metrics_record_t *m);
  * After writing, frees m->input_file_name, m->input_request, m->output_response
  * if set - caller must not free these after metrics_write() returns.
  */
+/*
+ * metrics_format_timestamp_us()
+ *
+ * Formats a raw microsecond-epoch value (start_time_us/end_time_us's
+ * own actual type - despite appearances in a CSV row, these are
+ * uint64_t microsecond timestamps, not pre-formatted strings) as
+ * "YYYY-MM-DD HH24:MI:SS.FFFFFF". Extracted from metrics_write()'s own
+ * previously-inline, twice-duplicated (once for start, once for end)
+ * conversion logic (closure item 5, Stage 3, 2026-08-09) - now shared
+ * with metrics_db_bulk_insert() (metrics_writer.c), which needs the
+ * exact same conversion to build a string Oracle's own TO_TIMESTAMP
+ * can parse. buf_size should be at least 48 bytes; us == 0 writes "-".
+ */
+void metrics_format_timestamp_us(uint64_t us, char *buf, size_t buf_size);
+
 void metrics_write(logger_t         *metrics_logger,
                    metrics_record_t *m);
 

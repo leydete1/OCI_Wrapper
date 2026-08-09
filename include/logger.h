@@ -154,6 +154,19 @@ void logger_clear_txid(void);
  */
 void logger_set_worker_id(int worker_id);
 
+/*
+ * logger_get_worker_id()
+ *
+ * Returns the calling thread's own worker ID, as most recently set by
+ * logger_set_worker_id() on this same thread (2026-08-09) - lets any
+ * other module (metrics.c, currently) stamp the same clean [T%d]-
+ * matching identifier the logs already use, rather than building a
+ * separate mechanism for something already solved here. Returns 0 for
+ * threads that never called the setter (main, File Consumer, Session
+ * Manager - same default as the setter's own initial value).
+ */
+int logger_get_worker_id(void);
+
 /* Close logger */
 void logger_close(logger_t *logger);
 
