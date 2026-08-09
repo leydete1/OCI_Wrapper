@@ -1852,8 +1852,29 @@ static int test_ut_date_001(oci_context_t *ctx, char *message, size_t message_ma
     where_key_t wk;
     memset(&wk, 0, sizeof(wk));
     strncpy(wk.field_name, "DATE_COL", sizeof(wk.field_name) - 1);
-    /* No client_date_format - and this value is NOT in nls_date_format
-     * shape (assumed 'YYYY-MM-DD HH24:MI:SS') - must be rejected.      */
+    /* No client_date_format - so this falls through to validation
+     * against whatever nls_date_format is CURRENTLY CONFIGURED
+     * (ctx->ini->nls_date_format), read live - not a hardcoded shape
+     * baked into this test. "19/08/2026" is what's actually being
+     * relied on here: it must NOT parse successfully under whatever
+     * format is deployed, or this test can't tell "correctly
+     * rejected" apart from "never checked at all".
+     *
+     * Latent fragility worth knowing about (found 2026-08-08, closure
+     * item 3 review): this test's correctness depends on the deployed
+     * nls_date_format never accepting a bare DD/MM/YYYY-shaped value
+     * like this one. True for the project's actual default
+     * (NLS_DATE_FORMAT_DEFAULT, ini_reader.h = "YYYY-MM-DD
+     * HH24:MI:SS") - but nls_date_format is a real, user-configurable
+     * setting, and UT-DATE-002 immediately below this test explicitly
+     * demonstrates that the exact same "19/08/2026" shape IS valid
+     * under a DD/MM/YYYY format. If nls_date_format is ever
+     * reconfigured to something DD/MM/YYYY-shaped, this specific test
+     * would start failing - or worse, silently stop testing what it
+     * claims to. Not fixed here, since pinning this test to its own
+     * explicit format (rather than whatever's globally configured)
+     * is a slightly larger change than a comment update - flagged for
+     * a deliberate decision rather than fixed as a drive-by.          */
     strncpy(wk.key_value, "19/08/2026", sizeof(wk.key_value) - 1);
     req.key_count = 1;
     req.keys = &wk;

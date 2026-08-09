@@ -56,6 +56,19 @@
 #include "sql_dependency_extractor.h"
 #include "logger.h"
 
+/* Date format hygiene (2026-08-08 closure item 3, follow-up review).
+ * Deliberately a SEPARATE constant from NLS_DATE_FORMAT_DEFAULT
+ * (ini_reader.h) - that one governs the user-configurable
+ * nls_date_format setting for DATE-column values; this one is the
+ * fixed TO_CHAR() mask used across every metadata query in this file
+ * (ALL_OBJECTS.CREATED/LAST_DDL_TIME, ALL_TAB_STATISTICS.LAST_ANALYZED)
+ * and is intentionally independent of that config value, so metadata
+ * parsing stays predictable regardless of what a user configures for
+ * DATE columns elsewhere. Centralised here purely to remove the
+ * literal-string duplication across this file's own queries - not
+ * because it should ever track nls_date_format. */
+#define METADATA_TIMESTAMP_FORMAT_SQL "YYYY-MM-DD HH24:MI:SS"
+
 /* ------------------------------------------------------------------ */
 /*  OCI error macro - consistent with rest of project                  */
 /* ------------------------------------------------------------------ */
@@ -894,7 +907,10 @@ object_metadata_allobjs_t *get_object_metadata(oci_context_t *ctx,
     /* ================================================================
      *  SELECT - fetch every useful ALL_OBJECTS column as VARCHAR2.
      *  NUMBER columns use TO_CHAR(); DATE columns use
-     *  TO_CHAR(...,'YYYY-MM-DD HH24:MI:SS') for consistent formatting.
+     *  TO_CHAR(...,METADATA_TIMESTAMP_FORMAT_SQL) for consistent
+     *  formatting - see that constant's own doc comment near the top
+     *  of this file for why it's a separate, fixed value, not
+     *  NLS_DATE_FORMAT_DEFAULT/nls_date_format.
      *  ROWNUM = 1 guards against duplicates from edition visibility.
      * ================================================================ */
     const char *sql =
@@ -906,8 +922,8 @@ object_metadata_allobjs_t *get_object_metadata(oci_context_t *ctx,
         "  TO_CHAR(OBJECT_ID),"
         "  TO_CHAR(DATA_OBJECT_ID),"
         "  STATUS,"
-        "  TO_CHAR(CREATED,'YYYY-MM-DD HH24:MI:SS'),"
-        "  TO_CHAR(LAST_DDL_TIME,'YYYY-MM-DD HH24:MI:SS'),"
+        "  TO_CHAR(CREATED,'" METADATA_TIMESTAMP_FORMAT_SQL "'),"
+        "  TO_CHAR(LAST_DDL_TIME,'" METADATA_TIMESTAMP_FORMAT_SQL "'),"
         "  NVL(TIMESTAMP,''),"
         "  TEMPORARY,"
         "  GENERATED,"
@@ -1579,7 +1595,7 @@ table_metadata_alltabs_t *get_table_metadata(oci_context_t *ctx,
         "  CACHE,"
         "  TABLE_LOCK,"
         "  TO_CHAR(SAMPLE_SIZE),"
-        "  TO_CHAR(LAST_ANALYZED,'YYYY-MM-DD HH24:MI:SS'),"
+        "  TO_CHAR(LAST_ANALYZED,'" METADATA_TIMESTAMP_FORMAT_SQL "'),"
         "  PARTITIONED,"
         "  IOT_TYPE,"
         "  TEMPORARY,"

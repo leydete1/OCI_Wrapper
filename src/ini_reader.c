@@ -364,7 +364,7 @@ static ctx_config_map_t ctx_map[] = {
     { "autocommit_mode",                 CFG_BOOL, offsetof(app_config_t, autocommit_mode),                 NULL, 0 },
 
     /* NLS strings */
-    { "nls_date_format",     CFG_STRING, offsetof(app_config_t, nls_date_format),     "YYYY-MM-DD HH24:MI:SS", 0 },
+    { "nls_date_format",     CFG_STRING, offsetof(app_config_t, nls_date_format),     NLS_DATE_FORMAT_DEFAULT, 0 },
     { "nls_language",        CFG_STRING, offsetof(app_config_t, nls_language),        "AMERICAN",              0 },
     { "nls_territory",       CFG_STRING, offsetof(app_config_t, nls_territory),       "AMERICA",               0 },
     { "nls_characterset",    CFG_STRING, offsetof(app_config_t, nls_characterset),    "AL32UTF8",              0 },

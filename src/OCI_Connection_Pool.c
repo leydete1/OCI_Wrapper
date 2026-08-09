@@ -519,7 +519,7 @@ int OCI_Connect_pool(oci_context_t *ctx)
 #define COPY_NLS(dst, src, dflt) \
     strncpy((dst), ((src)[0] ? (src) : (dflt)), sizeof(dst) - 1)
 
-    COPY_NLS(pool->nls_date_format,     ini->nls_date_format,     "YYYY-MM-DD HH24:MI:SS");
+    COPY_NLS(pool->nls_date_format,     ini->nls_date_format,     NLS_DATE_FORMAT_DEFAULT);
     COPY_NLS(pool->nls_language,        ini->nls_language,        "AMERICAN");
     COPY_NLS(pool->nls_territory,       ini->nls_territory,       "AMERICA");
     COPY_NLS(pool->nls_characterset,    ini->nls_characterset,    "AL32UTF8");

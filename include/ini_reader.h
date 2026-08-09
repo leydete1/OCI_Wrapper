@@ -23,6 +23,12 @@ typedef struct {
     size_t count;
 } ini_file_t;
 
+/* Date format hygiene (2026-08-08 closure item 3) - single source of
+ * truth for the default NLS date format string, referenced by
+ * ini_reader.c's own ctx_map default and by OCI_Connection_Pool.c's
+ * COPY_NLS fallback, so the two can never silently drift apart the
+ * way ad-hoc literal copies of this string had started to. */
+#define NLS_DATE_FORMAT_DEFAULT "YYYY-MM-DD HH24:MI:SS"
 
 typedef struct
 {
@@ -365,7 +371,7 @@ typedef struct
     int  autocommit_mode;                 /* ALTER SESSION SET AUTOCOMMIT */
 
     /* NLS / character set */
-    char nls_date_format    [64];   /* default "YYYY-MM-DD HH24:MI:SS"   */
+    char nls_date_format    [64];   /* default NLS_DATE_FORMAT_DEFAULT   */
     char nls_language       [64];   /* default "AMERICAN"                */
     char nls_territory      [64];   /* default "AMERICA"                 */
     char nls_characterset   [64];   /* default "AL32UTF8"                */

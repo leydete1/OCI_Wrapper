@@ -4814,7 +4814,7 @@
 </resultset>
 <execution_envelope>
 <num_rows>209</num_rows>
-<execution_time_total>0.269775</execution_time_total>
+<execution_time_total>0.272111</execution_time_total>
 <fetch_batch_size>1</fetch_batch_size>
 <blobs_extracted>209</blobs_extracted>
 <clobs_extracted>418</clobs_extracted>

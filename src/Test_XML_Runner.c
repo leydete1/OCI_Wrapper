@@ -1136,7 +1136,23 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    ctx.NLS_DATE_FORMAT = "YYYY-MM-DD HH24:MI:SS";
+    /* Date format hygiene (2026-08-08 closure item 3) - this used to be
+     * a hardcoded literal here, completely disconnected from
+     * ctx.ini->nls_date_format - meaning a change to nls_date_format in
+     * config.ini had zero effect on this master context specifically
+     * (used by the legacy harness path and by bootstrap activity before
+     * pool mode workers exist, including the startup self-test suite's
+     * own NLS assertions), even though every pool-mode worker thread
+     * already correctly picks up the real config value via
+     * pool->nls_date_format (OCI_Connection_Pool.c's own COPY_NLS,
+     * itself now reading from the same NLS_DATE_FORMAT_DEFAULT this
+     * uses as its own fallback if config's value is somehow empty -
+     * ctx.ini has already been fully loaded by this point in main(),
+     * well before this line, so that fallback is not expected to fire
+     * in practice).                                                    */
+    ctx.NLS_DATE_FORMAT = ctx.ini->nls_date_format[0]
+                           ? ctx.ini->nls_date_format
+                           : NLS_DATE_FORMAT_DEFAULT;
 
     logger_dump_ctx(&ctx);
 

@@ -71,9 +71,17 @@ static int extract_tag(const char *src, const char *tag,
 }
 
 /* ------------------------------------------------------------------ */
-/*  Internal: format a time_t as "YYYY-MM-DD HH24:MI:SS" - the base    */
-/*  form accepted by validate_insert_template() for TIMESTAMP columns  */
-/*  regardless of ctx->NLS_DATE_FORMAT (which governs DATE columns).   */
+/*  Internal: format a time_t as the base TIMESTAMP-column form         */
+/*  accepted by validate_insert_template().                             */
+/*                                                                      */
+/*  Deliberately NOT NLS_DATE_FORMAT_DEFAULT (ini_reader.h) or           */
+/*  ctx->NLS_DATE_FORMAT (config's nls_date_format) - those govern      */
+/*  DATE columns specifically and are user-configurable. This format    */
+/*  is for TIMESTAMP columns, fixed and independent of that setting on  */
+/*  purpose: if nls_date_format is ever reconfigured, TIMESTAMP-column  */
+/*  handling here must not silently change shape along with it. Not a   */
+/*  stale duplicate of the DATE-column default - a genuinely separate,  */
+/*  intentionally fixed format (2026-08-08 closure item 3 review).      */
 /* ------------------------------------------------------------------ */
 static void format_timestamp(time_t t, char *buf, size_t buf_size)
 {
