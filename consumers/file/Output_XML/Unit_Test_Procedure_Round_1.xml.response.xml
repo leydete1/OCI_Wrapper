@@ -3,7 +3,7 @@
 <Procedure_Result>
 <execution_envelope>
 <procedure_name>DATA_MANAGER.GET_DEPT_STATUS</procedure_name>
-<execution_time>0.000728</execution_time>
+<execution_time>0.000851</execution_time>
 <out_parameters>
   <parameter><param_name>P_STATUS</param_name><param_type>INTEGER</param_type><param_value>43</param_value></parameter>
 </out_parameters>

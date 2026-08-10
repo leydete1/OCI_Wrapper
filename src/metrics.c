@@ -261,6 +261,25 @@ void metrics_set_context(metrics_record_t *m,
         strncpy(m->consumer_name, ctx->ini->consumer_name,
                 sizeof(m->consumer_name) - 1);
 
+    /* Metrics refactor (closure item 5) follow-up (2026-08-10) - the
+     * actual fix for a genuine gap: these two fields were "-" in
+     * every metrics row, project-wide, because this function never
+     * actually read them, even though active_session_id/
+     * active_audit_id (OCI_Connection.h) were purpose-built for
+     * exactly this and their own doc comments already said so.
+     * dispatcher.c now stamps both onto a worker's own ctx per
+     * request (right after session validation) - this is the read
+     * side completing that fix. Empty string (no session/audit id
+     * known for this ctx right now) correctly falls through to
+     * metrics_init()'s own "-" default below, unchanged.               */
+    if (ctx->active_session_id[0])
+        strncpy(m->session_id, ctx->active_session_id,
+                sizeof(m->session_id) - 1);
+
+    if (ctx->active_audit_id[0])
+        strncpy(m->audit_id, ctx->active_audit_id,
+                sizeof(m->audit_id) - 1);
+
     /* Process and thread IDs */
     m->process_id = (uint32_t)getpid();
 
@@ -306,8 +325,6 @@ void metrics_set_context(metrics_record_t *m,
     else
         strncpy(m->client_ip, "127.0.0.1", sizeof(m->client_ip) - 1);
 
-    /* audit_id: stubbed as "-" (set in metrics_init) until the HTTP
-     * input module provides and validates it per-request.             */
 }
 
 /* ================================================================== */

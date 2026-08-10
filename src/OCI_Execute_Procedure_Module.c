@@ -1012,6 +1012,11 @@ int execute_procedure(oci_context_t                *ctx,
     else
         strncpy(metrics.transaction_id, "-",
                 sizeof(metrics.transaction_id) - 1);
+    /* Same source as transaction_id above, just the name - closure
+     * item 5 follow-up (2026-08-10).                                  */
+    strncpy(metrics.transaction_name,
+            ctx->active_tx ? ctx->active_tx->tx_name : "-",
+            sizeof(metrics.transaction_name) - 1);
 
 
 
@@ -1361,9 +1366,10 @@ Cleanup:
 	    strncpy(metrics.error_text, "-", sizeof(metrics.error_text) - 1);
 	}
 	if(ctx->active_tx)
-		strncpy(metrics.transaction_id , tx_get_id(ctx->active_tx),sizeof(tx_get_id(ctx->active_tx))-1);
+		strncpy(metrics.transaction_id , tx_get_id(ctx->active_tx),sizeof(metrics.transaction_id)-1);
 	else
-		strncpy(metrics.transaction_id , "-",sizeof("-")-1);
+		strncpy(metrics.transaction_id , "-",sizeof(metrics.transaction_id)-1);
+	strncpy(metrics.transaction_name , ctx->active_tx ? ctx->active_tx->tx_name : "-", sizeof(metrics.transaction_name)-1);
 	metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger, &metrics);
 	logger_clear_last_error();   // reset for next operation
 #

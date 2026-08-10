@@ -139,6 +139,20 @@ typedef struct oci_context_t {
     char active_session_id[64];      /* "" = no session attached        */
     char active_client_ip[64];       /* "" = no client IP captured yet  */
 
+    /* Same purpose as active_session_id above (metrics tagging), for
+     * the same reason - closure item 5 follow-up (2026-08-10). Stamped
+     * fresh by dispatcher.c for every single request, right after
+     * session validation - a worker's own ctx is reused across many
+     * requests on the same thread, and each one can carry a different
+     * external_audit_id. "" = no audit id known for whatever's
+     * currently executing on this ctx. (dispatcher.c's own per-request
+     * stamp now also refreshes active_session_id above on a worker's
+     * ctx - independent of, and more frequent than, session_create()/
+     * session_end()'s own updates to that same field on File
+     * Consumer's separate ctx, which track a different thing: which
+     * session is currently attached to that specific ctx.)             */
+    char active_audit_id[64];
+
     char *INPUT_XML;            /* Input XML for passing commands  */
     char *OUTPUT_XML;           /* Output XML for passing results  */
 

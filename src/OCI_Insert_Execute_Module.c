@@ -893,6 +893,13 @@ int execute_insert_batch(oci_context_t    *ctx,
       else
           strncpy(metrics.transaction_id, "-",
                   sizeof(metrics.transaction_id) - 1);
+      /* Same source as transaction_id above, just the name instead of
+       * the id - already correctly used by OCI_Transaction_Manager.c's
+       * own metrics (tx_begin/tx_commit/tx_rollback), never wired up
+       * here (closure item 5 follow-up, 2026-08-10).                  */
+      strncpy(metrics.transaction_name,
+              ctx->active_tx ? ctx->active_tx->tx_name : "-",
+              sizeof(metrics.transaction_name) - 1);
       metrics_set_context(&metrics, ctx);
 
       /* metrics_set_context() unconditionally copies ctx->level1_parse_us/
@@ -1556,9 +1563,12 @@ Cleanup:
 	            sizeof(metrics.error_text) - 1);
 	}
 	if(ctx->active_tx)
-		strncpy(metrics.transaction_id , tx_get_id(ctx->active_tx),sizeof(tx_get_id(ctx->active_tx))-1);
+		strncpy(metrics.transaction_id , tx_get_id(ctx->active_tx),sizeof(metrics.transaction_id)-1);
 	else
-		strncpy(metrics.transaction_id , "-",sizeof("-")-1);
+		strncpy(metrics.transaction_id , "-",sizeof(metrics.transaction_id)-1);
+	/* Same source as transaction_id above, just the name instead of the
+	 * id - closure item 5 follow-up (2026-08-10).                      */
+	strncpy(metrics.transaction_name , ctx->active_tx ? ctx->active_tx->tx_name : "-", sizeof(metrics.transaction_name)-1);
 	metrics.connection_wait_us    = ctx->connection_wait_us;
 	metrics.connection_create_us  = ctx->connection_create_us;
 	metrics.connection_acquire_us = ctx->connection_acquire_us;

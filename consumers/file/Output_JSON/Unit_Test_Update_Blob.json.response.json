@@ -1,1 +1,1 @@
-{"operation":"UPDATE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_updated":1,"lobs_written":1,"execution_time":0.005117973}
+{"operation":"UPDATE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_updated":1,"lobs_written":1,"execution_time":0.003628844}

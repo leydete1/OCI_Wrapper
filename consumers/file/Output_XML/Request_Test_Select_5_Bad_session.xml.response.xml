@@ -23,7 +23,7 @@
 </resultset>
 <execution_envelope>
 <num_rows>5</num_rows>
-<execution_time_total>0.001400</execution_time_total>
+<execution_time_total>0.004141</execution_time_total>
 <fetch_batch_size>5</fetch_batch_size>
 <blobs_extracted>0</blobs_extracted>
 <clobs_extracted>0</clobs_extracted>

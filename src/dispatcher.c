@@ -1051,6 +1051,27 @@ int process_xml_file(oci_context_t      *ctx,
             }
         }
 
+        /* Closure item 5 follow-up (2026-08-10) - the actual fix for a
+         * genuine metrics gap: session_id/audit_id were "-" in every
+         * metrics row because nothing ever stamped them onto a
+         * worker's own ctx, per request. active_session_id/
+         * active_audit_id (OCI_Connection.h) were purpose-built for
+         * exactly this - their own doc comments already said
+         * "metrics.c reads these two fields directly" - but the write
+         * side (here) was never actually wired up. Unconditional,
+         * regardless of session_validation_enabled: metrics tagging
+         * shouldn't depend on whether hard validation happens to be
+         * on, and a request that fails validation above already
+         * returned before reaching here, so this only ever runs for a
+         * request that's actually about to be dispatched.              */
+        strncpy(ctx->active_session_id, new_request.session_id,
+                sizeof(ctx->active_session_id) - 1);
+        ctx->active_session_id[sizeof(ctx->active_session_id) - 1] = '\0';
+
+        strncpy(ctx->active_audit_id, new_request.external_audit_id,
+                sizeof(ctx->active_audit_id) - 1);
+        ctx->active_audit_id[sizeof(ctx->active_audit_id) - 1] = '\0';
+
         uint64_t level2_start = metrics_now_us();
         int level2_rc = level2_validate(ctx, &new_request);
         ctx->level2_parse_us = metrics_now_us() - level2_start;
