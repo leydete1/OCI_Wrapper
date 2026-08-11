@@ -108,6 +108,7 @@
 #include "metrics_writer.h"
 #include "session_manager_runner.h"
 #include "worker.h"
+#include "build_number.h";
 
 /* looks_like_new_request_format()'s own forward declaration removed
  * 2026-08-01 - now level1_looks_like_new_format(), declared in
@@ -1161,6 +1162,12 @@ int main(int argc, char *argv[])
         printf("Failed to initialise loggers - exiting\n");
         return -1;
     }
+
+    /*The first write is the version number*/
+    logger_write(&logger, LOG_INFO, __func__, 0,
+                 "Build Version : %d.%d.%d",
+                 MAJOR_NUMBER, MINOR_NUMBER, BUILD_NUMBER);
+
 
     /* Date format hygiene (2026-08-08 closure item 3) - this used to be
      * a hardcoded literal here, completely disconnected from

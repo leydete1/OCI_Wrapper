@@ -1162,6 +1162,167 @@ static int test_ut_conn_003(oci_context_t *ctx, char *message, size_t message_ma
     return 0;
 }
 
+/* ---- UT-CONN-005 ----
+ * Self-healing reconnect (OCI_Pool_session_is_alive()/
+ * OCI_Pool_reconnect_session(), 2026-08-07) - closure item 5 follow-up
+ * test catalog addition, 2026-08-10.
+ *
+ * DELIBERATELY does NOT touch the ctx this test itself was given.
+ * unit_test_run_all() acquires exactly ONE shared test_ctx and reuses
+ * it across every test in the run (see acquire_test_ctx() and its own
+ * doc comment) - killing that shared session here would silently
+ * poison every test that runs after this one in the same pass, for a
+ * reason that has nothing to do with whatever those tests are actually
+ * checking. Instead, this test opens its own separate, independent,
+ * non-pooled connection (OCI_Connect()) specifically to be the victim,
+ * and uses the test's own already-open ctx only to issue the KILL
+ * SESSION command against that separate connection - ctx itself is
+ * never at risk.
+ *
+ * SCOPE NOTE: this only proves the DETECTION half
+ * (OCI_Pool_session_is_alive() correctly reporting a killed session as
+ * dead). The RECOVERY half (OCI_Pool_reconnect_session()) needs a
+ * base_ctx parameter that individual tests are not currently given -
+ * only the already-borrowed test_ctx is passed down, and
+ * OCI_Pool_reconnect_session() needs the pool owner itself, which that
+ * borrowed ctx doesn't have (see OCI_Pool_reconnect_session()'s own
+ * signature). Exercising the reconnect half in this framework would
+ * need a small, deliberate extension - passing the original base_ctx
+ * through to tests that ask for it - not something to build silently
+ * as a side effect of one test. Flagged for a decision, not worked
+ * around here.
+ *
+ * PRIVILEGE NOTE: ALTER SYSTEM KILL SESSION needs the ALTER SYSTEM
+ * system privilege, which a normal application schema user may not
+ * have. If the kill itself fails, this test fails with a message
+ * naming exactly what's needed, rather than silently passing without
+ * having tested anything - Tier 3's own default (log and continue,
+ * not halt) means this doesn't block startup either way. */
+static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_max)
+{
+    oci_context_t victim;
+    memset(&victim, 0, sizeof(victim));
+    victim.ini = ctx->ini;
+
+    if (OCI_Connect(&victim) != 0)
+    {
+        snprintf(message, message_max,
+                 "Could not open a separate, independent connection to "
+                 "act as the victim for this test");
+        return -1;
+    }
+
+    if (!OCI_Pool_session_is_alive(&victim))
+    {
+        snprintf(message, message_max,
+                 "Freshly-opened victim connection already reports as "
+                 "not alive, before anything has killed it - "
+                 "OCI_Pool_session_is_alive() itself looks broken");
+        OCI_Disconnect(&victim);
+        return -1;
+    }
+
+    /* SYS_CONTEXT('USERENV','SID') reliably returns the calling
+     * session's own SID - queried on victim itself, not guessed at
+     * from outside it.                                                 */
+    int sid = 0;
+    {
+        OCIStmt *stmt = NULL;
+        OCIDefine *dfn = NULL;
+        sb2 ind = 0;
+        const char *sql = "SELECT SYS_CONTEXT('USERENV','SID') FROM DUAL";
+        if (OCIStmtPrepare2(victim.svchp, &stmt, victim.errhp, (text *)sql,
+                             (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX,
+                             OCI_DEFAULT) == OCI_SUCCESS)
+        {
+            OCIDefineByPos(stmt, &dfn, victim.errhp, 1, (dvoid *)&sid,
+                           (sb4)sizeof(sid), SQLT_INT, &ind, NULL, NULL, OCI_DEFAULT);
+            OCIStmtExecute(victim.svchp, stmt, victim.errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+            OCIStmtRelease(stmt, victim.errhp, NULL, 0, OCI_DEFAULT);
+        }
+    }
+
+    if (sid <= 0)
+    {
+        snprintf(message, message_max,
+                 "Could not determine the victim connection's own SID");
+        OCI_Disconnect(&victim);
+        return -1;
+    }
+
+    /* Serial# looked up separately, on ctx (the test's own shared,
+     * already-open connection) - this is also the connection that
+     * issues the KILL below, so it needs V$SESSION visibility either
+     * way.                                                             */
+    int serial = 0;
+    {
+        OCIStmt *stmt = NULL;
+        OCIDefine *dfn = NULL;
+        sb2 ind = 0;
+        OCIBind *bindp = NULL;
+        const char *sql = "SELECT SERIAL# FROM V$SESSION WHERE SID = :1";
+        if (OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp, (text *)sql,
+                             (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX,
+                             OCI_DEFAULT) == OCI_SUCCESS)
+        {
+            OCIBindByPos(stmt, &bindp, ctx->errhp, 1, (dvoid *)&sid,
+                         (sb4)sizeof(sid), SQLT_INT, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+            OCIDefineByPos(stmt, &dfn, ctx->errhp, 1, (dvoid *)&serial,
+                           (sb4)sizeof(serial), SQLT_INT, &ind, NULL, NULL, OCI_DEFAULT);
+            OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        }
+    }
+
+    if (serial <= 0)
+    {
+        snprintf(message, message_max,
+                 "Could not determine the victim connection's own "
+                 "SERIAL# via V$SESSION (sid=%d) - this may itself need "
+                 "a grant (SELECT_CATALOG_ROLE or equivalent)", sid);
+        OCI_Disconnect(&victim);
+        return -1;
+    }
+
+    char kill_sql[128];
+    snprintf(kill_sql, sizeof(kill_sql),
+             "ALTER SYSTEM KILL SESSION '%d,%d' IMMEDIATE", sid, serial);
+
+    OCIStmt *kill_stmt = NULL;
+    sword kill_status = OCIStmtPrepare2(ctx->svchp, &kill_stmt, ctx->errhp,
+                                         (text *)kill_sql, (ub4)strlen(kill_sql),
+                                         NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (kill_status == OCI_SUCCESS || kill_status == OCI_SUCCESS_WITH_INFO)
+        kill_status = OCIStmtExecute(ctx->svchp, kill_stmt, ctx->errhp, 1, 0,
+                                      NULL, NULL, OCI_DEFAULT);
+    if (kill_stmt) OCIStmtRelease(kill_stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+
+    if (kill_status != OCI_SUCCESS && kill_status != OCI_SUCCESS_WITH_INFO)
+    {
+        snprintf(message, message_max,
+                 "ALTER SYSTEM KILL SESSION '%d,%d' failed - this test "
+                 "schema user most likely lacks the ALTER SYSTEM "
+                 "privilege; grant it (or run this specific test as a "
+                 "user who has it) to actually exercise self-healing "
+                 "reconnect detection", sid, serial);
+        OCI_Disconnect(&victim);
+        return -1;
+    }
+
+    int result = 0;
+    if (OCI_Pool_session_is_alive(&victim))
+    {
+        snprintf(message, message_max,
+                 "OCI_Pool_session_is_alive() still reports the victim "
+                 "connection as alive after ALTER SYSTEM KILL SESSION "
+                 "'%d,%d' IMMEDIATE - detection is not working", sid, serial);
+        result = -1;
+    }
+
+    OCI_Disconnect(&victim);
+    return result;
+}
+
 /* ---- UT-META-001 ----
  * metadata_cache_get_or_fetch() correctly resolves every real column
  * for the test table, matching what ALL_TAB_COLUMNS itself would
@@ -4310,8 +4471,27 @@ static int test_ut_proc_005(oci_context_t *ctx, char *message, size_t message_ma
         return -1;
     }
 
+    /* Fixed 2026-08-10 - this used to count lines immediately after
+     * execute_procedure() returned, which was correct back when
+     * metrics_write() was called synchronously, inline, on this same
+     * call path. As of the metrics refactor's Stage 2 (2026-08-09),
+     * metrics_finalise_and_enqueue() is fire-and-forget by design - the
+     * actual file write happens moments later, on the Metrics Writer's
+     * own dedicated thread, not synchronously within execute_procedure()
+     * at all. An immediate single check could legitimately see 0 new
+     * lines even on a fully correct system, simply because the writer
+     * thread hadn't been scheduled yet - not the double-write regression
+     * this test exists to catch. Bounded polling (not a fixed sleep)
+     * waits only as long as actually needed: fast on a healthy system,
+     * still bounded (2s ceiling) rather than hanging if something is
+     * genuinely broken.                                                 */
     long lines_after = 0;
+    int  waited_ms = 0;
+    const int poll_interval_ms = 50;
+    const int max_wait_ms = 2000;
+    while (waited_ms <= max_wait_ms)
     {
+        lines_after = 0;
         FILE *fp = fopen(ctx->metrics_logger->filename, "r");
         if (fp)
         {
@@ -4319,6 +4499,10 @@ static int test_ut_proc_005(oci_context_t *ctx, char *message, size_t message_ma
             while (fgets(buf, sizeof(buf), fp)) lines_after++;
             fclose(fp);
         }
+        if (lines_after - lines_before >= 1) break;
+        struct timespec poll_ts = { 0, (long)poll_interval_ms * 1000000L };
+        nanosleep(&poll_ts, NULL);
+        waited_ms += poll_interval_ms;
     }
 
     long new_lines = lines_after - lines_before;
@@ -4326,8 +4510,11 @@ static int test_ut_proc_005(oci_context_t *ctx, char *message, size_t message_ma
     {
         snprintf(message, message_max,
                  "Expected exactly 1 new metrics row for this procedure "
-                 "call, got %ld - regression of the 2026-07-31 double "
-                 "metrics_write() bug", new_lines);
+                 "call, got %ld after waiting up to %dms for the async "
+                 "Metrics Writer to catch up - regression of either the "
+                 "2026-07-31 double metrics_write() bug (if > 1) or the "
+                 "async pipeline itself not persisting this record at "
+                 "all (if 0)", new_lines, max_wait_ms);
         result = -1;
     }
 
@@ -5028,6 +5215,249 @@ static int test_ut_sess_001(oci_context_t *ctx, char *message, size_t message_ma
     return result;
 }
 
+/* ---- UT-SESS-004 ----
+ * Session Manager Stage 2 (async activity tracking, 2026-08-06) -
+ * closure item 5 follow-up test catalog addition, 2026-08-10.
+ *
+ * session_touch() (cache-only) and session_touch_db() (permanent-table
+ * persistence) are two deliberately separate functions - see both
+ * their own doc comments in OCI_Session_Manager.h. This test calls
+ * both directly, exactly as the real code does (session_touch() is
+ * called inline on the request path; session_touch_db() is called
+ * asynchronously by the Session Manager's own dedicated thread
+ * draining its touch queue - neither of those callers themselves are
+ * exercised here, matching every other test in this catalog testing
+ * the underlying function, not the thread/queue wiring around it).
+ *
+ * last_activity_ts is time_t (second granularity) - a real 1-second
+ * sleep is used so a genuinely later touch is guaranteed to produce a
+ * different, comparable value, not just an assumption that it would. */
+static int test_ut_sess_004(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+    char *create_xml = NULL;
+
+    session_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.operation, "CREATE_SESSION", sizeof(req.operation) - 1);
+    strncpy(req.client_id, "unit-test-client", sizeof(req.client_id) - 1);
+    strncpy(req.client_ip, "127.0.0.1", sizeof(req.client_ip) - 1);
+    strncpy(req.application_name, "unit_test", sizeof(req.application_name) - 1);
+    req.requested_ttl_seconds = 60;
+
+    if (session_create(ctx, &req, &create_xml) != 0 || !create_xml)
+    {
+        snprintf(message, message_max, "session_create() failed");
+        free(create_xml);
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    char session_id[128] = {0};
+    const char *tag_start = strstr(create_xml, "<session_id>");
+    if (tag_start)
+    {
+        tag_start += strlen("<session_id>");
+        const char *tag_end = strstr(tag_start, "</session_id>");
+        if (tag_end && (size_t)(tag_end - tag_start) < sizeof(session_id))
+        {
+            memcpy(session_id, tag_start, (size_t)(tag_end - tag_start));
+            session_id[tag_end - tag_start] = '\0';
+        }
+    }
+    free(create_xml);
+
+    if (!session_id[0])
+    {
+        snprintf(message, message_max,
+                 "Could not extract a session_id from session_create()'s "
+                 "own result XML");
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    session_record_t before;
+    memset(&before, 0, sizeof(before));
+    if (session_validate(ctx, session_id, &before) != SESSION_OK)
+    {
+        snprintf(message, message_max,
+                 "session_validate() could not find the session this "
+                 "test just created - cannot proceed");
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    sleep(1);   /* see this test's own top comment on why */
+
+    if (session_touch(ctx, session_id) != SESSION_OK)
+    {
+        snprintf(message, message_max, "session_touch() itself failed");
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    session_record_t after_cache;
+    memset(&after_cache, 0, sizeof(after_cache));
+    if (session_validate(ctx, session_id, &after_cache) != SESSION_OK ||
+        after_cache.last_activity_ts <= before.last_activity_ts)
+    {
+        snprintf(message, message_max,
+                 "session_touch() did not advance last_activity_ts in "
+                 "the cache (before=%ld, after=%ld)",
+                 (long)before.last_activity_ts, (long)after_cache.last_activity_ts);
+        result = -1;
+    }
+
+    if (session_touch_db(ctx, session_id) != SESSION_OK)
+    {
+        snprintf(message, message_max,
+                 "session_touch_db() itself failed%s",
+                 result == -1 ? " (in addition to the cache check above)" : "");
+        result = -1;
+    }
+    else
+    {
+        OCIStmt *stmt = NULL;
+        OCIDefine *dfn = NULL;
+        sb2 ind = 0;
+        time_t db_last_activity = 0;
+        char sql[256];
+        snprintf(sql, sizeof(sql),
+                 "SELECT CAST(LAST_ACTIVITY_TS AS DATE) - "
+                 "TO_DATE('1970-01-01','YYYY-MM-DD') "
+                 "FROM OCI_SESSION WHERE SESSION_ID = '%s'", session_id);
+        /* LAST_ACTIVITY_TS is TIMESTAMP (Create_Session_Table.txt), not
+         * DATE - CAST to DATE first so the subtraction below produces a
+         * plain NUMBER (days since epoch), not an INTERVAL, which
+         * SQLT_FLT could not bind. Dropping sub-second precision here
+         * is fine - this test only needs second-granularity comparison
+         * anyway, matching time_t's own resolution.                    */
+        double days_since_epoch = 0;
+        OCIDefine *dfn2 = NULL;
+        if (OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp, (text *)sql,
+                             (ub4)strlen(sql), NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT) == OCI_SUCCESS)
+        {
+            OCIDefineByPos(stmt, &dfn2, ctx->errhp, 1, (dvoid *)&days_since_epoch,
+                           (sb4)sizeof(days_since_epoch), SQLT_FLT, &ind, NULL, NULL, OCI_DEFAULT);
+            OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL, OCI_DEFAULT);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            db_last_activity = (time_t)(days_since_epoch * 86400.0);
+        }
+        (void)dfn;
+
+        if (db_last_activity < before.last_activity_ts)
+        {
+            snprintf(message, message_max,
+                     "session_touch_db() did not advance LAST_ACTIVITY_TS "
+                     "in the permanent OCI_SESSION row (before=%ld, "
+                     "db_after=%ld)",
+                     (long)before.last_activity_ts, (long)db_last_activity);
+            result = -1;
+        }
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
+/* ---- UT-SESS-005 ----
+ * Session Manager Stage 3 (hard validation, 2026-08-08) - closure item
+ * 5 follow-up test catalog addition, 2026-08-10.
+ *
+ * SCOPE NOTE, narrower than this catalog's own original description:
+ * tests session_validate() itself directly - accepts a real, just-
+ * created session; rejects a genuinely unknown one with SESSION_ERR_
+ * NOT_FOUND - not dispatcher.c's own integration of it (the SESSION_
+ * VALIDATION rejection envelope, or the session_validation_enabled
+ * kill-switch). This test-core module deliberately never routes
+ * through the dispatcher for any test (see this file's own top
+ * comment on why) - session_validate() is the real mechanism
+ * dispatcher.c relies on, and is what's actually being proven here,
+ * consistent with every other test in this catalog testing the
+ * underlying function rather than the dispatch wiring around it. */
+static int test_ut_sess_005(oci_context_t *ctx, char *message, size_t message_max)
+{
+    tx_handle_t tx;
+    if (begin_test_transaction(ctx, &tx) != 0)
+    {
+        snprintf(message, message_max, "Could not begin the test's own transaction");
+        return -1;
+    }
+
+    int result = 0;
+    char *create_xml = NULL;
+
+    session_request_t req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.operation, "CREATE_SESSION", sizeof(req.operation) - 1);
+    strncpy(req.client_id, "unit-test-client", sizeof(req.client_id) - 1);
+    strncpy(req.client_ip, "127.0.0.1", sizeof(req.client_ip) - 1);
+    strncpy(req.application_name, "unit_test", sizeof(req.application_name) - 1);
+    req.requested_ttl_seconds = 60;
+
+    if (session_create(ctx, &req, &create_xml) != 0 || !create_xml)
+    {
+        snprintf(message, message_max, "session_create() failed");
+        free(create_xml);
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    char session_id[128] = {0};
+    const char *tag_start = strstr(create_xml, "<session_id>");
+    if (tag_start)
+    {
+        tag_start += strlen("<session_id>");
+        const char *tag_end = strstr(tag_start, "</session_id>");
+        if (tag_end && (size_t)(tag_end - tag_start) < sizeof(session_id))
+        {
+            memcpy(session_id, tag_start, (size_t)(tag_end - tag_start));
+            session_id[tag_end - tag_start] = '\0';
+        }
+    }
+    free(create_xml);
+
+    if (!session_id[0])
+    {
+        snprintf(message, message_max,
+                 "Could not extract a session_id from session_create()'s "
+                 "own result XML");
+        rollback_test_transaction(ctx, &tx);
+        return -1;
+    }
+
+    if (session_validate(ctx, session_id, NULL) != SESSION_OK)
+    {
+        snprintf(message, message_max,
+                 "session_validate() rejected a session_id this test "
+                 "just created and confirmed exists");
+        result = -1;
+    }
+
+    /* Not just any wrong string - a syntactically well-formed but
+     * genuinely nonexistent UUID, so this is a real "not found" case,
+     * not just malformed input rejected for some unrelated reason.    */
+    int rc = session_validate(ctx, "00000000-0000-0000-0000-000000000000", NULL);
+    if (rc != SESSION_ERR_NOT_FOUND)
+    {
+        snprintf(message, message_max,
+                 "session_validate() returned rc=%d for a genuinely "
+                 "unknown session_id - expected SESSION_ERR_NOT_FOUND%s",
+                 rc, result == -1 ? " (in addition to the failure above)" : "");
+        result = -1;
+    }
+
+    rollback_test_transaction(ctx, &tx);
+    return result;
+}
+
 /* ---- UT-DATE-004 ----
  * An UPDATE WHERE key declared in European DD/MM/YYYY format and a
  * DELETE WHERE key on the same underlying value declared in US
@@ -5201,6 +5631,7 @@ static const unit_test_case_t g_registry[] = {
     /* UT-CONN-002 removed 2026-08-01 - see the note at its former
      * location, right before UT-CONN-003, for the full reasoning.      */
     { "UT-CONN-003", UT_TIER_2, "CONN", "Pooled worker_ctx has every logger set",     test_ut_conn_003 },
+    { "UT-CONN-005", UT_TIER_3, "CONN", "Self-healing reconnect detects a killed session (detection half only - see this test's own top comment)", test_ut_conn_005 },
     { "UT-META-001", UT_TIER_2, "META", "metadata_cache resolves real columns",       test_ut_meta_001 },
     { "UT-META-002", UT_TIER_2, "META", "Repeat lookup within TTL is a cache hit",    test_ut_meta_002 },
     { "UT-META-003", UT_TIER_2, "META", "INSERT/UPDATE/DELETE never trust client type", test_ut_meta_003 },
@@ -5281,6 +5712,8 @@ static const unit_test_case_t g_registry[] = {
 
     /* ---- Tier 3 (2026-08-02, ninth pass - SESS) ---- */
     { "UT-SESS-001", UT_TIER_3, "SESS", "CREATE_SESSION writes a real, permanent OCI_SESSION row", test_ut_sess_001 },
+    { "UT-SESS-004", UT_TIER_3, "SESS", "session_touch()/session_touch_db() both advance LAST_ACTIVITY_TS", test_ut_sess_004 },
+    { "UT-SESS-005", UT_TIER_3, "SESS", "session_validate() accepts real, rejects unknown session_id", test_ut_sess_005 },
 
     /* UT-SESS-002 (END_SESSION via session_end()) is already covered by
      * UT-UPD-004; UT-SESS-003 (zero-orphan reconciliation) is already a
@@ -5376,6 +5809,19 @@ static oci_context_t *acquire_test_ctx(oci_context_t *ctx,
     worker_ctx_storage->session_logger       = ctx->session_logger;
     worker_ctx_storage->sql_parser_logger    = ctx->sql_parser_logger;
     worker_ctx_storage->metadata_cache       = ctx->metadata_cache;
+    /* Genuine pre-existing gap, found 2026-08-10 by UT-SESS-004/005 -
+     * the first tests in this catalog to actually exercise the session
+     * CACHE path (session_create()'s own store, session_validate()'s
+     * own lookup) rather than only the permanent OCI_SESSION table
+     * directly (as UT-SESS-001 already did, successfully, without ever
+     * needing this). Without this line, session_cache_store()/
+     * session_validate() both silently operate on a NULL cache pointer
+     * on the test's own ctx - session_cache_store() gracefully returns
+     * -1 rather than crashing (session_create() itself still "succeeds"
+     * with only a logged warning), which is why this sat undetected
+     * until a test finally tried to read back what it had just
+     * written.                                                          */
+    worker_ctx_storage->session_cache        = ctx->session_cache;
 
     *owns_worker = 1;
     return worker_ctx_storage;

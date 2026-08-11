@@ -3,7 +3,7 @@
 <Procedure_Result>
 <execution_envelope>
 <procedure_name>DATA_MANAGER.PURGE_OLD_ROWS</procedure_name>
-<execution_time>0.002139</execution_time>
+<execution_time>0.001019</execution_time>
 </execution_envelope>
 </Procedure_Result>
 </output_xml>
