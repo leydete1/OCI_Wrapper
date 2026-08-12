@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Transaction Name test - 2 INSERTs in one atomic transaction, business
+ name "Save Booking" carried through to metrics_Data_Manager.csv and
+ to AUDIT_TRAIL.CHANGE_REASON.
+
+ Expected in metrics_Data_Manager.csv: transaction_name = "Save Booking"
+ on both INSERT rows, and both sharing the same transaction_id.
+
+ To test the rollback/name-still-applies path: change the second row's
+ NUMBER_COL to a non-numeric value (e.g. "not_a_number") and re-run -
+ both rows should disappear from the table, and the response should
+ report the second operation's validation failure, not a partial
+ commit of the first row.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_txname_1</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1" name="Save Booking">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>701</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Transaction name test - row 1</value></field>
+            </row>
+        </operation>
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>702</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Transaction name test - row 2</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

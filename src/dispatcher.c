@@ -47,6 +47,10 @@
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Execute_Query_Batch_Module.h"
 #include "metrics.h"
+#include "OCI_Transaction_Manager.h"   /* tx_begin/tx_commit/tx_rollback -
+                                          per-request transaction scoping,
+                                          File Consumer closure item
+                                          2026-08-12 */
 
 /* Moved from Test_XML_Runner.c unchanged */
 #define MAX_XML_FILE_SIZE  (4 * 1024 * 1024)   /* 4 MB per file        */
@@ -1079,6 +1083,53 @@ int process_xml_file(oci_context_t      *ctx,
 
         if (level2_rc == LEVEL2_OK)
         {
+            /* Per-request transaction scoping (File Consumer closure
+             * item, 2026-08-12). transaction_required=1 wraps every
+             * operation below in one tx_begin()/tx_commit()/
+             * tx_rollback() - the design already described in this
+             * header's own pipeline comment, and already fully
+             * anticipated by every CRUD execute module (each already
+             * checks ctx->active_tx and skips its own OCITransCommit,
+             * and already reads ctx->active_tx->tx_name into metrics
+             * and audit trail CHANGE_REASON) - only the actual
+             * tx_begin() call was ever missing here. transaction_name
+             * defaults to "No Name Specified" at Level 1 when the
+             * client didn't supply one, so it's never empty. */
+            tx_handle_t tx;
+            int tx_active = 0;
+
+            if (new_request.transaction_required)
+            {
+                tx_init(&tx, ctx);
+                char *tx_begin_xml = NULL;
+                int tx_rc = tx_begin(&tx, new_request.session_id,
+                                      new_request.transaction_name, &tx_begin_xml);
+                free(tx_begin_xml);
+
+                if (tx_rc == TX_OK)
+                {
+                    ctx->active_tx = &tx;
+                    tx_active = 1;
+                    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                                 "File='%s' transaction_required=1 - began "
+                                 "transaction '%s' name='%s'", filename,
+                                 tx.transaction_id, new_request.transaction_name);
+                }
+                else
+                {
+                    logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                                 "File='%s' transaction_required=1 but tx_begin() "
+                                 "failed (rc=%d) - aborting request rather than "
+                                 "running its operations unmanaged", filename, tx_rc);
+                    build_error_envelope(resp, new_request.external_audit_id, "-",
+                                         "TX_BEGIN_FAILED",
+                                         "Could not start the required transaction "
+                                         "for this request", is_json);
+                    level1_free_request(&new_request);
+                    return -1;
+                }
+            }
+
             /* Note: a request can carry multiple operations
              * (operation_count > 1), but ResponseObject is one-per-file.
              * Same pre-existing limitation as rc itself already had
@@ -1132,6 +1183,59 @@ int process_xml_file(oci_context_t      *ctx,
                                          "new dispatch pipeline yet", is_json);
                     rc = -1;
                 }
+
+                /* Transactional request, one operation failed - stop
+                 * here rather than running (and immediately discarding,
+                 * via the rollback below) further operations that are
+                 * doomed regardless. Non-transactional requests are
+                 * unaffected - they keep running every operation
+                 * independently, exactly as before. */
+                if (tx_active && rc != 0)
+                    break;
+            }
+
+            if (tx_active)
+            {
+                char *tx_result_xml = NULL;
+
+                if (rc == 0)
+                {
+                    int commit_rc = tx_commit(&tx, &tx_result_xml);
+                    if (commit_rc != TX_OK)
+                    {
+                        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                                     "File='%s' tx_commit() failed (rc=%d) on "
+                                     "transaction '%s' - treating request as FAIL",
+                                     filename, commit_rc, tx.transaction_id);
+                        build_error_envelope(resp, new_request.external_audit_id, "-",
+                                             "TX_COMMIT_FAILED",
+                                             "The transaction failed to commit",
+                                             is_json);
+                        rc = -1;
+                    }
+                    else
+                        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                                     "File='%s' transaction '%s' committed",
+                                     filename, tx.transaction_id);
+                }
+                else
+                {
+                    int rollback_rc = tx_rollback(&tx, &tx_result_xml);
+                    logger_write(ctx->dispatcher_logger,
+                                 rollback_rc == TX_OK ? LOG_WARN : LOG_ERROR,
+                                 __func__, 0,
+                                 "File='%s' operation failed - transaction '%s' "
+                                 "rolled back (tx_rollback rc=%d)", filename,
+                                 tx.transaction_id, rollback_rc);
+                    /* resp already carries the triggering operation's own
+                     * error envelope from the loop above - not overwritten
+                     * here, per Data_Manager_Request_Definitions.docx's
+                     * rollback behaviour: the client sees whichever
+                     * operation actually caused the rollback. */
+                }
+
+                free(tx_result_xml);
+                ctx->active_tx = NULL;
             }
         }
         else

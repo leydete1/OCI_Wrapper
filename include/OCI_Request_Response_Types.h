@@ -332,6 +332,19 @@ typedef struct {
                                        * wraps every operation below); 0 =
                                        * operations run/commit independently */
 
+    char   transaction_name[128];    /* optional business label for the
+                                       * transaction (e.g. "Save Booking"),
+                                       * carried straight through to
+                                       * tx_begin()'s own tx_name argument -
+                                       * see OCI_Transaction_Manager.h.
+                                       * Only meaningful when
+                                       * transaction_required is set. Client
+                                       * may omit it entirely; Level 1
+                                       * always fills this with a real value
+                                       * ("No Name Specified" as the
+                                       * fallback) so downstream code never
+                                       * has to check for an empty string. */
+
     int    operation_count;
     input_c_operation_t *operations; /* array of operation_count entries */
 

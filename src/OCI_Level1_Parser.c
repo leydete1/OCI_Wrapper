@@ -1063,6 +1063,8 @@ static int parse_xml(oci_context_t *ctx, const char *buf, size_t len,
 
     memset(out, 0, sizeof(*out));
     out->source_format = INPUT_FORMAT_XML;
+    strncpy(out->transaction_name, "No Name Specified",
+            sizeof(out->transaction_name) - 1);
 
     int have_audit_id = 0, have_session_id = 0;
 
@@ -1097,6 +1099,20 @@ static int parse_xml(oci_context_t *ctx, const char *buf, size_t len,
             xmlChar *req_attr = xmlGetProp(node, (const xmlChar *)"required");
             out->transaction_required = (req_attr && xmlStrcmp(req_attr, (const xmlChar *)"1") == 0) ? 1 : 0;
             xmlFree(req_attr);
+
+            /* transaction_name is optional - business label only, e.g.
+             * name="Save Booking". Absent, or present-but-empty, both
+             * fall back to the same placeholder so nothing downstream
+             * (metrics, audit trail CHANGE_REASON) ever sees "". */
+            xmlChar *name_attr = xmlGetProp(node, (const xmlChar *)"name");
+            if (name_attr && name_attr[0] != '\0')
+                strncpy(out->transaction_name, (const char *)name_attr,
+                        sizeof(out->transaction_name) - 1);
+            else
+                strncpy(out->transaction_name, "No Name Specified",
+                        sizeof(out->transaction_name) - 1);
+            out->transaction_name[sizeof(out->transaction_name) - 1] = '\0';
+            xmlFree(name_attr);
 
             /* Count operations first so we can allocate exactly once */
             int op_count = 0;
@@ -1202,6 +1218,8 @@ static int parse_json(oci_context_t *ctx, const char *buf, size_t len,
 
     memset(out, 0, sizeof(*out));
     out->source_format = INPUT_FORMAT_JSON;
+    strncpy(out->transaction_name, "No Name Specified",
+            sizeof(out->transaction_name) - 1);
 
     cJSON *audit_id = cJSON_GetObjectItemCaseSensitive(root, "external_audit_id");
     cJSON *session_id = cJSON_GetObjectItemCaseSensitive(root, "session_id");
@@ -1221,6 +1239,16 @@ static int parse_json(oci_context_t *ctx, const char *buf, size_t len,
     {
         cJSON *required = cJSON_GetObjectItemCaseSensitive(transaction, "required");
         out->transaction_required = (cJSON_IsNumber(required) && required->valueint == 1) ? 1 : 0;
+
+        /* transaction_name is optional - same placeholder fallback as
+         * the XML path (parse_xml's own "name" attribute handling). */
+        cJSON *tx_name = cJSON_GetObjectItemCaseSensitive(transaction, "name");
+        if (cJSON_IsString(tx_name) && tx_name->valuestring[0] != '\0')
+        {
+            strncpy(out->transaction_name, tx_name->valuestring,
+                    sizeof(out->transaction_name) - 1);
+            out->transaction_name[sizeof(out->transaction_name) - 1] = '\0';
+        }
 
         cJSON *ops = cJSON_GetObjectItemCaseSensitive(transaction, "operations");
         int op_count = cJSON_IsArray(ops) ? cJSON_GetArraySize(ops) : 0;
