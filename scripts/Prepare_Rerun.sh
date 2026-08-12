@@ -1,7 +1,7 @@
 cd /home/leyden100/eclipse-workspace/OCI_Wrapper/logs
 
-#rm -f *.log
-#rm -f *.csv
+rm -f *.log
+rm -f *.csv
 
 
 

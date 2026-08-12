@@ -53,6 +53,7 @@
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
+#include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
 #include "OCI_Transaction_Manager.h"
 
 /* ------------------------------------------------------------------ */
@@ -1429,6 +1430,14 @@ int execute_update_batch(oci_context_t     *ctx,
                      "Commit successful rows_updated=%d lobs=%d",
                      rows_updated, lob_count);
     }
+
+    /* Table-level resultset cache invalidation (closure item 5
+     * follow-up, 2026-08-12) - regression fix for UT-SEL-004. Same
+     * "fires regardless of managed-tx vs auto-commit, erring toward
+     * eager invalidation over any risk of stale reads" reasoning as
+     * OCI_Insert_Execute_Module.c's own identical block - see that
+     * one's own comment for the full explanation.                     */
+    resultset_cache_invalidate_by_table(ctx->resultset_cache, req->table_name);
 
 
 

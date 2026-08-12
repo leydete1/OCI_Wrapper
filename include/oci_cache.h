@@ -132,6 +132,21 @@ typedef struct {
     const char *server_name;
     const char *process_id;
     const char *tx_trace;
+
+    /* Table-level invalidation (closure item 5 follow-up, 2026-08-12) -
+     * comma-separated list of every table this cached entry's own
+     * query depends on (resultset_cache only - metadata_cache/
+     * session_cache leave this NULL, matching output_document_json's
+     * own convention above). Populated from the same table dependency
+     * list extract_sql_dependencies() already produces for every
+     * SELECT (sql_dependency_extractor.h) - no new parsing needed, just
+     * threading what's already computed through to the cache entry
+     * itself. Used by cache_invalidate_by_tag() to find every cached
+     * entry that needs expiring when a write modifies a given table.
+     * NULL = no table dependency tracked for this entry (never
+     * invalidated by table, only by TTL or explicit key). Not owned -
+     * copied (strdup'd) internally, matching output_document_json.   */
+    const char *table_dependency_tag;
 } cache_entry_opts_t;
 
 /* ------------------------------------------------------------------ */
@@ -163,6 +178,12 @@ typedef struct cache_entry_t {
     char       *output_document_json; /* e.g. JSON alongside XML above,
                                         * NULL if not stored            */
     size_t      output_length_json;
+
+    /* ---- Table-level invalidation (resultset_cache only) ----
+     * See cache_entry_opts_t's own doc comment on the field this is
+     * copied from at store time (closure item 5 follow-up, 2026-08-12).
+     * NULL for metadata_cache/session_cache entries.                  */
+    char       *table_dependency_tag;
 
     /* ---- Timestamps ---- */
     time_t      created_ts;
@@ -341,14 +362,50 @@ void cache_release(cache_t *cache, cache_entry_t *entry);
 /*
  * cache_expire_entry()
  *
- * Immediately expire (and free) the entry matching key.
- * No-op if the key is not found.
+ * Mark the entry matching key as immediately expired - no longer
+ * servable as a cache hit by any subsequent cache_lookup(). No-op if
+ * the key is not found.
  *
- * Returns  0  entry found and expired
+ * Fixed (2026-08-12) - this used to unlink and free the entry directly
+ * and unconditionally, with no check on whether another thread
+ * currently had it checked out (cur->in_use) - a genuine use-after-
+ * free risk under concurrent access, the same class of bug fixed in
+ * cache_release() on 2026-08-09. Now defers the actual free entirely
+ * to cache_evict_expired() below, which already correctly checks
+ * !in_use before ever freeing anything - this function only ever marks
+ * expiry_ts in the past, never touches the entry's memory directly.
+ * Functionally equivalent from any caller's point of view (the key is
+ * unusable as a cache hit the instant this returns), just safe under
+ * concurrent access now.
+ *
+ * Returns  0  entry found and marked expired
  *          1  entry not found
  *         -1  error
  */
 int cache_expire_entry(cache_t *cache, const char *key);
+
+/*
+ * cache_invalidate_by_tag()
+ *
+ * Table-level resultset cache invalidation (closure item 5 follow-up,
+ * 2026-08-12) - marks every entry whose own table_dependency_tag
+ * contains tag as immediately expired (same safe, defer-the-actual-
+ * free-to-evict mechanism as cache_expire_entry() above - this
+ * function is genuinely just a bulk version of that one). tag is
+ * matched as a substring against each entry's comma-separated
+ * dependency list, so "OCI_FIELD_TEST" correctly matches an entry
+ * whose own tag is e.g. "OCI_FIELD_TEST,AUDIT_TRAIL" - deliberately
+ * simple substring matching rather than a real tokenised comparison,
+ * since table names in this project don't collide as substrings of
+ * each other in practice (see resultset_cache.h's own note on this
+ * being the deliberately simplest correct design, not row-level
+ * tracking). Entries with a NULL table_dependency_tag (metadata_cache/
+ * session_cache, or a resultset_cache entry stored without one) are
+ * never matched.
+ *
+ * Returns the number of entries marked expired (>= 0), or -1 on error.
+ */
+int cache_invalidate_by_tag(cache_t *cache, const char *tag);
 
 /*
  * cache_evict_expired()

@@ -108,7 +108,8 @@
 #include "metrics_writer.h"
 #include "session_manager_runner.h"
 #include "worker.h"
-#include "build_number.h";
+#include "build_number.h"
+
 
 /* looks_like_new_request_format()'s own forward declaration removed
  * 2026-08-01 - now level1_looks_like_new_format(), declared in
@@ -1163,11 +1164,10 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    /*The first write is the version number*/
+    /*First line is to output the version number*/
     logger_write(&logger, LOG_INFO, __func__, 0,
                  "Build Version : %d.%d.%d",
                  MAJOR_NUMBER, MINOR_NUMBER, BUILD_NUMBER);
-
 
     /* Date format hygiene (2026-08-08 closure item 3) - this used to be
      * a hardcoded literal here, completely disconnected from
@@ -1317,6 +1317,33 @@ int main(int argc, char *argv[])
         unit_test_set_tier3_objects(ut_cfg.test_table_name, ut_cfg.test_table_owner,
                                      ut_cfg.test_procedure_name);
 
+        /* Bug found 2026-08-11: UT-PROC-005 kept failing with "got 0"
+         * even after a generous bounded wait - not a timing issue at
+         * all. metrics_writer_start() used to run much later, and only
+         * inside the consumer_type=FILE branch below - meaning
+         * ctx.metrics_writer was genuinely NULL for the self-test
+         * suite's entire run (it executes before that branch is even
+         * reached, and unconditionally regardless of which mode this
+         * run ends up using), and for legacy-harness ("direct") mode
+         * for its own entire run too. metrics_finalise_and_enqueue()
+         * safely no-ops on a NULL writer by design (see its own doc
+         * comment) - which is exactly why this sat undetected: nothing
+         * crashed, metrics just silently never persisted. Moved here,
+         * before self-tests and before the mode branches, so both
+         * modes and the self-test suite itself all get a genuinely
+         * working metrics_writer for their entire run. metrics_writer_
+         * start() itself never fails outright for a disabled
+         * destination; NULL sub-queues there just mean metrics_
+         * finalise_and_enqueue() silently skips that destination
+         * everywhere it's called.                                      */
+        ctx.metrics_writer = metrics_writer_start(&ctx, &config, ctx.metrics_logger, ctx.metrics_writer_logger);
+        if (!ctx.metrics_writer)
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "metrics_writer_start() failed - continuing "
+                         "without any metrics persistence this run "
+                         "(metrics_finalise_and_enqueue() handles a NULL "
+                         "writer safely everywhere it's called)");
+
         if (ut_cfg.startup_self_test_enabled)
         {
             /* Dedicated log file for the self-test's own results - only
@@ -1396,6 +1423,7 @@ int main(int argc, char *argv[])
     {
         logger_write(&logger, LOG_ERROR, __func__, 0,
                      "Failed to open input_xml dir: %s", input_dir);
+        metrics_writer_stop_and_join(ctx.metrics_writer);
         use_pool ? OCI_Disconnect_pool(&ctx) : OCI_Disconnect(&ctx);
         logger_close(&logger);
         return -1;
@@ -1445,6 +1473,7 @@ int main(int argc, char *argv[])
                          "OCI_Pool_get_session failed - cannot start "
                          "transaction-scoped session");
             closedir(dir);
+            metrics_writer_stop_and_join(ctx.metrics_writer);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1563,6 +1592,7 @@ int main(int argc, char *argv[])
                          "borrowed session, which direct mode's single "
                          "shared connection can't provide. Refusing to "
                          "start.");
+            metrics_writer_stop_and_join(ctx.metrics_writer);
             OCI_Disconnect(&ctx);
             logger_close(&logger);
             return -1;
@@ -1581,23 +1611,6 @@ int main(int argc, char *argv[])
                      "Released the startup-only pinned session - each "
                      "worker thread borrows its own below");
 
-        /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) -
-         * started before the worker pool, so ctx.metrics_writer is
-         * already set (and will propagate to every thread that borrows
-         * a session after this point, via copy_shared_ctx_fields())
-         * before any real request processing - and therefore any real
-         * metrics recording - can begin. metrics_writer_start() itself
-         * never fails outright for a disabled destination; NULL
-         * sub-queues there just mean metrics_finalise_and_enqueue()
-         * silently skips that destination everywhere it's called.      */
-        ctx.metrics_writer = metrics_writer_start(&ctx, &config, ctx.metrics_logger, ctx.metrics_writer_logger);
-        if (!ctx.metrics_writer)
-            logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "metrics_writer_start() failed - continuing "
-                         "without any metrics persistence this run "
-                         "(metrics_finalise_and_enqueue() handles a NULL "
-                         "writer safely everywhere it's called)");
-
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "consumer_type=FILE - starting worker pool (%d "
                      "thread(s), one per queue)", config.dispatcher_queue_count);
@@ -1610,6 +1623,7 @@ int main(int argc, char *argv[])
                          "queue_manager_create() failed - check "
                          "dispatcher_queue_count/dispatcher_queue_depth in "
                          "consumer_file.ini (both must be > 0)");
+            metrics_writer_stop_and_join(ctx.metrics_writer);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -2009,6 +2023,15 @@ int main(int argc, char *argv[])
                  "================================================");
 
     /* ---- Disconnect ---- */
+    /* Metrics refactor (closure item 5) follow-up (2026-08-11) - this
+     * is the legacy harness's own normal completion path, now reached
+     * with a genuinely-started metrics_writer (see this file's own
+     * note near where metrics_writer_start() is now called, before the
+     * mode branches) - stop it here too, same "producers stop before
+     * their consumer" ordering used everywhere else this pattern
+     * appears.                                                          */
+    metrics_writer_stop_and_join(ctx.metrics_writer);
+
     if (use_pool)
     {
         logger_write(&logger, LOG_INFO, __func__, 0,

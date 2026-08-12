@@ -117,8 +117,15 @@ static void reject_immediately(oci_context_t *ctx,
  * writes here - EXECUTE_PROCEDURE deliberately left alone, since Data
  * Manager has no visibility into what a procedure's own body actually
  * does.
+ *
+ * Deliberately non-static as of 2026-08-12 (was static before) - the
+ * test-core module's own design principle is calling real internal
+ * functions directly (see OCI_Unit_Test_Module.c's own top comment),
+ * and this function was genuinely unreachable that way while file-
+ * scoped. Widened specifically for UT-CONT-001/002's sake, not a
+ * functional change - the classification logic itself is unchanged.
  */
-static int payload_requires_single_writer_queue(const char *payload)
+int payload_requires_single_writer_queue(const char *payload)
 {
     if (!payload) return 0;
 
@@ -133,6 +140,29 @@ static int payload_requires_single_writer_queue(const char *payload)
         if (strstr(payload, write_markers[i])) return 1;
 
     return 0;
+}
+
+/*
+ * contention_manager_mode_is_single_write_queue()
+ *
+ * Extracted 2026-08-12, alongside making payload_requires_single_
+ * writer_queue() itself testable (same reasoning - see that function's
+ * own doc comment). This exact comparison was duplicated inline twice
+ * within file_consumer_scan_once() below - once to decide the routing
+ * itself, once to decide the exclusion index for the non-write path -
+ * extracting it removes that duplication and, as a direct side effect,
+ * makes it independently testable (UT-CONT-004): a bare "1" (the
+ * boolean-style value every other recently-added toggle in this
+ * project uses) is deliberately NOT treated as equivalent to
+ * "single_write_queue" - this is a string setting, not a boolean, and
+ * silently failing to match rather than erroring is the documented,
+ * intentional behaviour for an unrecognised value here (see ini_reader.h's
+ * own comment on contention_manager_mode for the full rationale).
+ */
+int contention_manager_mode_is_single_write_queue(const char *mode)
+{
+    if (!mode) return 0;
+    return strcasecmp(mode, "single_write_queue") == 0;
 }
 
 static int process_directory(oci_context_t   *ctx,
@@ -259,7 +289,7 @@ static int process_directory(oci_context_t   *ctx,
          * unchanged plain round-robin behaviour, same as before this
          * feature existed.                                            */
         int enqueue_rc;
-        if (strcasecmp(config->contention_manager_mode, "single_write_queue") == 0 &&
+        if (contention_manager_mode_is_single_write_queue(config->contention_manager_mode) &&
             payload_requires_single_writer_queue(payload))
         {
             enqueue_rc = queue_manager_enqueue_to(qm, req, CONTENTION_MANAGER_WRITER_QUEUE_INDEX);
@@ -267,7 +297,7 @@ static int process_directory(oci_context_t   *ctx,
         else
         {
             enqueue_rc = queue_manager_enqueue_excluding(qm, req,
-                strcasecmp(config->contention_manager_mode, "single_write_queue") == 0
+                contention_manager_mode_is_single_write_queue(config->contention_manager_mode)
                     ? CONTENTION_MANAGER_WRITER_QUEUE_INDEX : -1);
         }
 

@@ -53,6 +53,7 @@
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
+#include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
 #include "OCI_Audit_Trail_Manager.h"
 
 
@@ -1458,6 +1459,20 @@ int execute_insert_batch(oci_context_t    *ctx,
                      "Commit successful rows_inserted=%d lobs=%d",
                      rows_inserted, lob_count);
     }
+
+    /* Table-level resultset cache invalidation (closure item 5
+     * follow-up, 2026-08-12) - regression fix for UT-SEL-004. Fires
+     * regardless of managed-tx vs auto-commit above: if a managed
+     * transaction later rolls back instead of committing, this just
+     * means one unnecessary cache miss on the next matching SELECT
+     * (re-queries the database, gets the correct, unchanged data back)
+     * - not a correctness issue, and far simpler than teaching the
+     * Transaction Manager itself to track per-transaction table
+     * touches for the sake of avoiding that one extra query. Silently
+     * a no-op if resultset caching is disabled or this ctx has no
+     * resultset_cache at all (NULL-safe, see resultset_cache_
+     * invalidate_by_table()'s own contract).                          */
+    resultset_cache_invalidate_by_table(ctx->resultset_cache, req->table_name);
 
     /* ================================================================
      *  Stage 5 - Build result response

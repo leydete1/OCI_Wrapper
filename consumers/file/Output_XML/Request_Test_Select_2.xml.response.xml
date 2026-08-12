@@ -123,7 +123,7 @@
 </resultset>
 <execution_envelope>
 <num_rows>5</num_rows>
-<execution_time_total>0.010526</execution_time_total>
+<execution_time_total>0.021817</execution_time_total>
 <fetch_batch_size>1</fetch_batch_size>
 <blobs_extracted>5</blobs_extracted>
 <clobs_extracted>10</clobs_extracted>

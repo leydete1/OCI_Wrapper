@@ -2053,6 +2053,35 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
      * This is also the actual fix for JSON requests never receiving a
      * JSON response: previously nothing populated a JSON output field
      * at all, cached or not, regardless of ReturnFormat.               */
+
+    /* Table-level cache invalidation (closure item 5 follow-up,
+     * 2026-08-12) - build the comma-separated table dependency tag
+     * from deps (Stage 0's own output, already computed above - no
+     * new parsing) and pass it through opts, so this entry can later
+     * be found and expired by resultset_cache_invalidate_by_table()
+     * when a write modifies one of these same tables. Regression fix
+     * for UT-SEL-004 (a post-UPDATE SELECT could serve a stale cached
+     * result up to resultset_cache_ttl_seconds after the write, since
+     * nothing previously invalidated anything on write at all).       */
+    char table_tag[512];
+    table_tag[0] = '\0';
+    for (int di = 0; di < deps.object_count; di++)
+    {
+        if (!deps.objects[di].object_name[0]) continue;
+        size_t used = strlen(table_tag);
+        if (used > 0 && used < sizeof(table_tag) - 1)
+        {
+            table_tag[used] = ',';
+            table_tag[used + 1] = '\0';
+        }
+        strncat(table_tag, deps.objects[di].object_name,
+                sizeof(table_tag) - strlen(table_tag) - 1);
+    }
+
+    cache_entry_opts_t cache_opts;
+    memset(&cache_opts, 0, sizeof(cache_opts));
+    if (table_tag[0]) cache_opts.table_dependency_tag = table_tag;
+
     char *json_output = NULL;
     int   json_rc = response_writer_cache_store(
                         ctx,
@@ -2062,7 +2091,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                         rs,
                         cfg->xml->OUTPUT_XML,
                         (uint64_t)abs_rownum,
-                        NULL,
+                        table_tag[0] ? &cache_opts : NULL,
                         &json_output);
 
     if (json_rc == 0 && json_output)

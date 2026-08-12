@@ -65,4 +65,27 @@
 int file_consumer_scan_once(oci_context_t *ctx, app_config_t *config,
                              queue_manager_t *qm, const char *session_id);
 
+/*
+ * payload_requires_single_writer_queue()
+ *
+ * Contention Manager's own raw-payload classifier - see file_consumer.c's
+ * own doc comment on this function for the full design. Exported
+ * (2026-08-12, was static before) specifically so the test-core module
+ * can call it directly - see that same doc comment for why. Not a
+ * functional change.
+ */
+int payload_requires_single_writer_queue(const char *payload);
+
+/*
+ * contention_manager_mode_is_single_write_queue()
+ *
+ * Extracted 2026-08-12 from what used to be duplicated inline logic in
+ * file_consumer_scan_once() - see file_consumer.c's own doc comment.
+ * Returns non-zero only for an exact (case-insensitive) match against
+ * "single_write_queue" - any other value, including a boolean-style
+ * "1", correctly returns 0 (feature off), matching contention_manager_
+ * mode's own documented string-only contract.
+ */
+int contention_manager_mode_is_single_write_queue(const char *mode);
+
 #endif /* FILE_CONSUMER_H */

@@ -3,7 +3,7 @@
 <Procedure_Result>
 <execution_envelope>
 <procedure_name>DATA_MANAGER.GET_FIELD_ROWS</procedure_name>
-<execution_time>0.000808</execution_time>
+<execution_time>0.000664</execution_time>
 <resultset param_name="P_RESULTS">
 <row number="1">
 <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>

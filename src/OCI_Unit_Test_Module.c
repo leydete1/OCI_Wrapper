@@ -23,6 +23,9 @@
 #include "OCI_Unit_Test_Module.h"
 #include "OCI_Connection.h"
 #include "OCI_Connection_Pool.h"
+#include "file_consumer.h"      /* payload_requires_single_writer_queue() -
+                                    UT-CONT-001/002, 2026-08-12 */
+#include "generic_queue.h"      /* UT-SESS-006, 2026-08-12 */
 #include "OCI_Level1_Parser.h"
 #include "OCI_Level2_Parser.h"
 #include "OCI_Insert_Execute_Module.h"
@@ -5215,6 +5218,217 @@ static int test_ut_sess_001(oci_context_t *ctx, char *message, size_t message_ma
     return result;
 }
 
+/* ---- UT-CONT-001 ----
+ * Contention Manager's own classifier (payload_requires_single_writer_
+ * queue(), file_consumer.c) - closure item 5 follow-up test catalog
+ * addition, 2026-08-12.
+ *
+ * Pure string-classification logic, no connection needed - Tier 1.
+ * Calls the real function directly (exported non-static specifically
+ * for this - see file_consumer.h's own note on that change). Deliberately
+ * minimal, representative payloads - this function is a lightweight
+ * raw-text peek, not a parser, so a full, valid request envelope isn't
+ * needed to exercise it; only the operation-type marker it actually
+ * looks for matters.                                                    */
+static int test_ut_cont_001(oci_context_t *ctx, char *message, size_t message_max)
+{
+    (void)ctx;   /* pure logic, no ctx needed at all */
+
+    struct { const char *payload; int expect_write; const char *label; } cases[] = {
+        { "<request><op type=\"INSERT\">x</op></request>",              1, "XML INSERT" },
+        { "<request><op type=\"UPDATE\">x</op></request>",              1, "XML UPDATE" },
+        { "<request><op type=\"DELETE\">x</op></request>",              1, "XML DELETE" },
+        { "{\"op\": {\"type\": \"INSERT\"}}",                           1, "JSON INSERT (spaced)" },
+        { "{\"op\": {\"type\":\"UPDATE\"}}",                            1, "JSON UPDATE (unspaced)" },
+        { "{\"op\": {\"type\": \"DELETE\"}}",                           1, "JSON DELETE (spaced)" },
+        { "<request><op type=\"SELECT\">x</op></request>",              0, "XML SELECT" },
+        { "{\"op\": {\"type\": \"SELECT\"}}",                           0, "JSON SELECT" },
+        { "<request><op type=\"EXECUTE_PROCEDURE\">x</op></request>",   0, "XML EXECUTE_PROCEDURE" },
+        { "{\"op\": {\"type\": \"EXECUTE_PROCEDURE\"}}",                0, "JSON EXECUTE_PROCEDURE" },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        int got = payload_requires_single_writer_queue(cases[i].payload);
+        if ((got != 0) != (cases[i].expect_write != 0))
+        {
+            snprintf(message, message_max,
+                     "%s: expected requires_write=%d, got %d",
+                     cases[i].label, cases[i].expect_write, got);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* ---- UT-CONT-002 ----
+ * Confirms the "any write anywhere in the request" rule specifically -
+ * not just "checks the first operation". The write marker here is
+ * deliberately the LAST of three operations, with two SELECTs ahead of
+ * it - a classifier that only checked the first operation, or stopped
+ * at the first non-match, would wrongly return 0 for this payload.    */
+static int test_ut_cont_002(oci_context_t *ctx, char *message, size_t message_max)
+{
+    (void)ctx;
+
+    const char *payload =
+        "<request>"
+        "<op type=\"SELECT\">a</op>"
+        "<op type=\"SELECT\">b</op>"
+        "<op type=\"UPDATE\">c</op>"
+        "</request>";
+
+    if (!payload_requires_single_writer_queue(payload))
+    {
+        snprintf(message, message_max,
+                 "A request with a write as its third (last) operation, "
+                 "behind two reads, was NOT classified as requiring the "
+                 "writer queue - looks like only the first operation is "
+                 "being checked");
+        return -1;
+    }
+
+    /* Sibling check the other direction, for completeness - a request
+     * with genuinely no write anywhere must NOT be classified as one. */
+    const char *all_reads =
+        "<request>"
+        "<op type=\"SELECT\">a</op>"
+        "<op type=\"SELECT\">b</op>"
+        "<op type=\"EXECUTE_PROCEDURE\">c</op>"
+        "</request>";
+
+    if (payload_requires_single_writer_queue(all_reads))
+    {
+        snprintf(message, message_max,
+                 "A request with no write operation anywhere was "
+                 "incorrectly classified as requiring the writer queue");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ---- UT-CONT-004 ----
+ * contention_manager_mode_is_single_write_queue() (file_consumer.c) -
+ * closure item 5 follow-up test catalog addition, 2026-08-12. Extracted
+ * from what used to be duplicated inline logic specifically to make
+ * this testable - see file_consumer.h's own doc comment on that
+ * function.
+ *
+ * Regression test for the exact config mistake made and caught
+ * 2026-08-08: a bare "1" (the boolean-style value every OTHER recently-
+ * added toggle in this project uses) must NOT be treated as equivalent
+ * to "single_write_queue" - this is a string setting, not a boolean,
+ * and the documented contract is a silent no-match (feature off) for
+ * anything that isn't an exact string match, not an error.            */
+static int test_ut_cont_004(oci_context_t *ctx, char *message, size_t message_max)
+{
+    (void)ctx;
+
+    struct { const char *mode; int expect_enabled; const char *label; } cases[] = {
+        { "single_write_queue", 1, "exact match" },
+        { "SINGLE_WRITE_QUEUE", 1, "exact match, different case" },
+        { "1",                 0, "boolean-style '1' - the actual 2026-08-08 mistake" },
+        { "true",              0, "boolean-style 'true'" },
+        { "off",               0, "documented off value" },
+        { "",                  0, "empty string" },
+        { NULL,                0, "NULL" },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        int got = contention_manager_mode_is_single_write_queue(cases[i].mode);
+        if ((got != 0) != (cases[i].expect_enabled != 0))
+        {
+            snprintf(message, message_max,
+                     "mode=%s (%s): expected enabled=%d, got %d",
+                     cases[i].mode ? cases[i].mode : "(NULL)",
+                     cases[i].label, cases[i].expect_enabled, got);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* ---- UT-SESS-006 ----
+ * Confirms generic_queue.c's own "drop rather than block" contract
+ * holds under genuine saturation - closure item 5 follow-up test
+ * catalog addition, 2026-08-12.
+ *
+ * Deliberately does NOT touch the real, shared Session Manager touch
+ * queue - that queue doesn't exist yet at the point self-tests run
+ * (Session Manager's own thread starts later, alongside the worker
+ * pool - see this file's own Architecture note on self-test timing).
+ * Instead, creates its own small, independent, test-owned
+ * generic_queue_t (matching how UT-CONN-005 tests OCI_Pool_session_
+ * is_alive() via its own separate connection rather than the shared
+ * test_ctx) - proving the same underlying mechanism the real touch
+ * queue depends on, without needing the real queue to exist.          */
+static int test_ut_sess_006(oci_context_t *ctx, char *message, size_t message_max)
+{
+    (void)ctx;
+
+    const int depth = 4;
+    generic_queue_t *q = generic_queue_create(depth, free);
+    if (!q)
+    {
+        snprintf(message, message_max, "generic_queue_create() itself failed");
+        return -1;
+    }
+
+    int result = 0;
+
+    /* Fill to capacity - every one of these must succeed. */
+    for (int i = 0; i < depth; i++)
+    {
+        int *item = malloc(sizeof(int));
+        *item = i;
+        if (generic_queue_enqueue(q, item) != 0)
+        {
+            snprintf(message, message_max,
+                     "Enqueue %d of %d (queue not yet full) unexpectedly "
+                     "failed", i + 1, depth);
+            free(item);
+            result = -1;
+            break;
+        }
+    }
+
+    /* One more, past capacity - this one must be REJECTED, not block
+     * (there is nothing dequeuing concurrently here - a blocking
+     * implementation would hang this whole test run, not just fail a
+     * comparison), and the test must get its own item back untouched
+     * so it can free it itself (unlike a successful enqueue, which
+     * transfers ownership to the queue).                               */
+    if (result == 0)
+    {
+        int *overflow_item = malloc(sizeof(int));
+        *overflow_item = 999;
+        int rc = generic_queue_enqueue(q, overflow_item);
+        if (rc == 0)
+        {
+            snprintf(message, message_max,
+                     "Enqueue past a full queue's own depth (%d) "
+                     "succeeded when it should have been rejected - "
+                     "the queue is not actually bounded", depth);
+            result = -1;
+        }
+        free(overflow_item);   /* ownership stayed with the caller on
+                                   failure, per generic_queue.h's own
+                                   documented contract - must free it
+                                   here regardless of pass/fail above  */
+    }
+
+    /* free_fn passed to generic_queue_create() above (free) correctly
+     * cleans up the depth items still queued - not manually drained
+     * here, deliberately, to also prove that path works.              */
+    generic_queue_destroy(q);
+
+    return result;
+}
+
 /* ---- UT-SESS-004 ----
  * Session Manager Stage 2 (async activity tracking, 2026-08-06) -
  * closure item 5 follow-up test catalog addition, 2026-08-10.
@@ -5714,6 +5928,10 @@ static const unit_test_case_t g_registry[] = {
     { "UT-SESS-001", UT_TIER_3, "SESS", "CREATE_SESSION writes a real, permanent OCI_SESSION row", test_ut_sess_001 },
     { "UT-SESS-004", UT_TIER_3, "SESS", "session_touch()/session_touch_db() both advance LAST_ACTIVITY_TS", test_ut_sess_004 },
     { "UT-SESS-005", UT_TIER_3, "SESS", "session_validate() accepts real, rejects unknown session_id", test_ut_sess_005 },
+    { "UT-SESS-006", UT_TIER_1, "SESS", "generic_queue drop-rather-than-block contract holds under saturation", test_ut_sess_006 },
+    { "UT-CONT-001", UT_TIER_1, "CONT", "payload_requires_single_writer_queue() classifies INSERT/UPDATE/DELETE vs SELECT/EXECUTE_PROCEDURE", test_ut_cont_001 },
+    { "UT-CONT-002", UT_TIER_1, "CONT", "A write anywhere in a multi-op request classifies the whole request as a write", test_ut_cont_002 },
+    { "UT-CONT-004", UT_TIER_1, "CONT", "contention_manager.mode='1' (boolean-style) does not match 'single_write_queue'", test_ut_cont_004 },
 
     /* UT-SESS-002 (END_SESSION via session_end()) is already covered by
      * UT-UPD-004; UT-SESS-003 (zero-orphan reconciliation) is already a
@@ -5802,12 +6020,59 @@ static oci_context_t *acquire_test_ctx(oci_context_t *ctx,
     worker_ctx_storage->procedure_logger     = ctx->procedure_logger;
     worker_ctx_storage->error_logger         = ctx->error_logger;
     worker_ctx_storage->metrics_logger       = ctx->metrics_logger;
+    /* Second instance of the exact same gap class as session_cache
+     * above - metrics_writer (closure item 5, Stage 2, 2026-08-09) and
+     * metrics_writer_logger (Stage 2 follow-up, 2026-08-09) were both
+     * added to oci_context_t after acquire_test_ctx() was originally
+     * written, and neither was ever retrofitted into this copy list.
+     * Found 2026-08-12: relocating metrics_writer_start() to run
+     * before self-tests (2026-08-11) correctly gave the MASTER ctx a
+     * working writer, but every individual test receives test_ctx, not
+     * the master ctx - and test_ctx->metrics_writer stayed NULL
+     * regardless, since it was never copied here. metrics_finalise_
+     * and_enqueue() safely no-ops on a NULL writer by design, which is
+     * exactly why this - like session_cache before it - produced no
+     * crash, just silently missing data, until UT-PROC-005 finally
+     * checked for the row it should have produced.                     */
+    worker_ctx_storage->metrics_writer       = ctx->metrics_writer;
+    worker_ctx_storage->metrics_writer_logger = ctx->metrics_writer_logger;
     worker_ctx_storage->transaction_logger   = ctx->transaction_logger;
     worker_ctx_storage->security_logger      = ctx->security_logger;
     worker_ctx_storage->crypt_logger         = ctx->crypt_logger;
     worker_ctx_storage->audit_logger         = ctx->audit_logger;
     worker_ctx_storage->session_logger       = ctx->session_logger;
     worker_ctx_storage->sql_parser_logger    = ctx->sql_parser_logger;
+    /* Full audit (2026-08-12), prompted by this being the third
+     * instance of the same gap class found this week (session_cache,
+     * then metrics_writer/metrics_writer_logger, now these) - rather
+     * than keep patching this list one missing field at a time as each
+     * new test happens to need one, cross-referenced every pointer/
+     * struct field on oci_context_t against this copy list directly.
+     * ini, logger, and resultset_cache are NOT missing despite not
+     * appearing here - ini and logger are already set automatically by
+     * OCI_Pool_get_session() itself (OCI_Connection_Pool.c), called
+     * just above this function's own copy block; resultset_cache is
+     * genuinely never populated anywhere (see below). Everything else
+     * on oci_context_t not already above was missing here and is
+     * added now:                                                       */
+    worker_ctx_storage->connection_logger    = ctx->connection_logger;
+    worker_ctx_storage->dml_logger           = ctx->dml_logger;         /* ddl_logger's
+                                                                             sibling was
+                                                                             already
+                                                                             copied above;
+                                                                             this one
+                                                                             simply never
+                                                                             was          */
+    worker_ctx_storage->file_consumer_logger = ctx->file_consumer_logger;
+    worker_ctx_storage->dispatcher_logger    = ctx->dispatcher_logger;
+    worker_ctx_storage->worker_logger        = ctx->worker_logger;
+    /* Lower-severity than the loggers above (no crash risk - its
+     * absence just means resultset caching is silently disabled for
+     * every test, always, rather than any test being able to exercise
+     * or verify real caching behaviour) but a genuine gap all the
+     * same, and the same audit already found it, so fixed alongside
+     * the rest rather than left as a known, separate loose end.        */
+    worker_ctx_storage->resultset_cache      = ctx->resultset_cache;
     worker_ctx_storage->metadata_cache       = ctx->metadata_cache;
     /* Genuine pre-existing gap, found 2026-08-10 by UT-SESS-004/005 -
      * the first tests in this catalog to actually exercise the session

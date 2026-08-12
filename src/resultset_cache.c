@@ -202,6 +202,23 @@ int resultset_cache_invalidate(cache_t    *cache,
     return cache_expire_entry(cache, key);
 }
 
+/*
+ * resultset_cache_invalidate_by_table()
+ *
+ * Closure item 5 follow-up (2026-08-12) - thin wrapper around
+ * cache_invalidate_by_tag(), matching resultset_cache_invalidate()'s
+ * own thin-wrapper style above. table_name is matched as-is (no
+ * normalisation - it isn't SQL text, just a plain table name, and the
+ * writer modules calling this already have it in a consistent form
+ * from their own request struct).
+ */
+int resultset_cache_invalidate_by_table(cache_t *cache, const char *table_name)
+{
+    if (!cache || !table_name) return -1;
+
+    return cache_invalidate_by_tag(cache, table_name);
+}
+
 /* ================================================================== */
 /*  resultset_cache_evict                                               */
 /* ================================================================== */

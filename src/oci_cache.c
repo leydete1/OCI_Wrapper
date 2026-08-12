@@ -197,6 +197,14 @@ static cache_entry_t *alloc_entry(const char         *key,
         }
     }
 
+    /* ---- Table-level invalidation tag (resultset_cache only,
+     * closure item 5 follow-up, 2026-08-12) - see cache_entry_opts_t's
+     * own doc comment. Non-fatal if strdup() fails, same reasoning as
+     * output_document_json above: this entry just becomes untrackable
+     * by table (falls back to TTL-only expiry), not invalid.         */
+    if (opts && opts->table_dependency_tag)
+        e->table_dependency_tag = strdup(opts->table_dependency_tag);
+
     /* ---- Timestamps ---- */
     time_t now       = time(NULL);
     e->created_ts    = now;
@@ -238,6 +246,7 @@ static void free_entry(cache_entry_t *e)
     free(e->normalized_sql);
     free(e->output_document);
     free(e->output_document_json);
+    free(e->table_dependency_tag);
     free(e->client_ip);
     free(e->client_host);
     free(e->client_id);
@@ -727,8 +736,7 @@ int cache_expire_entry(cache_t *cache, const char *key)
 
     pthread_rwlock_wrlock(&cache->lock);
 
-    cache_entry_t *prev = NULL;
-    cache_entry_t *cur  = cache->buckets[bucket];
+    cache_entry_t *cur = cache->buckets[bucket];
 
     while (cur)
     {
@@ -736,26 +744,49 @@ int cache_expire_entry(cache_t *cache, const char *key)
             cur->normalized_sql &&
             strcmp(cur->normalized_sql, key) == 0)
         {
-            /* Unlink */
-            if (prev) prev->next = cur->next;
-            else      cache->buckets[bucket] = cur->next;
+            /* Fix (2026-08-12) - found while wiring up table-level
+             * resultset cache invalidation (closure item 5 follow-up):
+             * this used to unlink and free_entry() the match completely
+             * unconditionally, with no check on cur->in_use at all -
+             * the exact same race class as the cache_release() use-
+             * after-free fixed 2026-08-09, in a different function that
+             * hadn't been touched yet. Low risk while this function was
+             * called rarely; about to become a genuine risk, since
+             * table-level invalidation calls this on every single
+             * write, making a concurrent "worker mid-read while this
+             * entry gets expired" collision realistic under real load
+             * rather than a rare edge case.
+             *
+             * Fix: never free here at all - just mark the entry
+             * expired (past expiry_ts) and let the already-safe
+             * cache_evict_expired() (which DOES correctly check
+             * !in_use before ever calling free_entry()) reclaim it
+             * later. cache_lookup() already treats expiry_ts <= now as
+             * a miss (see its own existing check) - so this is a
+             * complete, safe fix on its own: no reader can ever be
+             * handed a pointer to memory that gets freed while they're
+             * still using it, and no new caller can see this entry as
+             * a hit after this call returns, matching the exact
+             * "immediately expire" contract this function's own name
+             * promises.                                                */
+            time_t now = time(NULL);
+            cur->expiry_ts = (now > 0) ? now - 1 : 1;
 
-            cache->current_memory_bytes -= cur->entry_memory_bytes;
-            cache->entry_count--;
             cache->cache_evictions++;
             cache->stats.eviction_rate++;
 
             logger_write(cache->logger, LOG_INFO, __func__, 0,
-                         "[%s] expired entry key='%.80s'",
-                         cache->config.cache_name, key);
-
-            free_entry(cur);
+                         "[%s] expired entry key='%.80s'%s",
+                         cache->config.cache_name, key,
+                         cur->in_use ? " (currently in_use - marked "
+                                       "expired, actual reclaim deferred "
+                                       "to the next evict_expired sweep)"
+                                     : "");
 
             pthread_rwlock_unlock(&cache->lock);
             return 0;   /* found and expired */
         }
-        prev = cur;
-        cur  = cur->next;
+        cur = cur->next;
     }
 
     pthread_rwlock_unlock(&cache->lock);
@@ -764,6 +795,56 @@ int cache_expire_entry(cache_t *cache, const char *key)
                  "[%s] expire_entry: key not found '%.80s'",
                  cache->config.cache_name, key);
     return 1;   /* not found */
+}
+
+/* ================================================================== */
+/*  cache_invalidate_by_tag                                             */
+/*                                                                      */
+/*  Closure item 5 follow-up (2026-08-12) - table-level resultset       */
+/*  cache invalidation. See this function's own doc comment in         */
+/*  oci_cache.h for the full design and the deliberate simple-substring */
+/*  matching decision. Genuinely just a bulk version of                */
+/*  cache_expire_entry() above - same "mark expired, never touch the   */
+/*  entry's own memory here" safety approach, just scanning every      */
+/*  bucket instead of one (there is no hash-based way to find "every   */
+/*  entry whose tag contains X", unlike a direct key lookup).           */
+/* ================================================================== */
+int cache_invalidate_by_tag(cache_t *cache, const char *tag)
+{
+    if (!cache || !tag || !tag[0]) return -1;
+
+    int matched = 0;
+    time_t now = time(NULL);
+    time_t past_ts = (now > 0) ? now - 1 : 1;
+
+    pthread_rwlock_wrlock(&cache->lock);
+
+    for (size_t b = 0; b < cache->bucket_count; b++)
+    {
+        for (cache_entry_t *cur = cache->buckets[b]; cur; cur = cur->next)
+        {
+            if (!cur->table_dependency_tag) continue;
+            if (cur->expiry_ts > 0 && cur->expiry_ts <= now) continue;   /* already expired */
+
+            if (strstr(cur->table_dependency_tag, tag))
+            {
+                cur->expiry_ts = past_ts;
+                cache->cache_evictions++;
+                cache->stats.eviction_rate++;
+                matched++;
+            }
+        }
+    }
+
+    pthread_rwlock_unlock(&cache->lock);
+
+    logger_write(cache->logger, LOG_INFO, __func__, 0,
+                 "[%s] invalidate_by_tag: tag='%.80s' matched=%d entr%s "
+                 "marked expired",
+                 cache->config.cache_name, tag, matched,
+                 matched == 1 ? "y" : "ies");
+
+    return matched;
 }
 
 /* ================================================================== */

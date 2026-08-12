@@ -121,6 +121,27 @@ int resultset_cache_invalidate(cache_t    *cache,
                                 const char *sql);
 
 /*
+ * resultset_cache_invalidate_by_table()
+ *
+ * Closure item 5 follow-up (2026-08-12) - expires every cached SELECT
+ * result whose own table dependency list (set at store time via
+ * cache_entry_opts_t's table_dependency_tag, populated from
+ * extract_sql_dependencies()'s own output - see execute_query_batch)
+ * includes table_name. Thin wrapper around cache_invalidate_by_tag()
+ * (oci_cache.h) - see that function's own doc comment for the full
+ * design, including why substring matching is the deliberately
+ * simplest correct choice here rather than row-level tracking.
+ *
+ * Intended caller: execute_insert_batch()/execute_update_batch()/
+ * execute_delete_batch(), after a successful write, with the table
+ * they just modified - so any resultset previously cached from a
+ * SELECT touching that same table is never served stale after this.
+ *
+ * Returns the number of entries invalidated (>= 0), or -1 on error.
+ */
+int resultset_cache_invalidate_by_table(cache_t *cache, const char *table_name);
+
+/*
  * resultset_cache_evict()
  *
  * Sweep expired entries.  Call periodically from a heartbeat thread.
