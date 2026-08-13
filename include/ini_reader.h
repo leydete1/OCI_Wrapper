@@ -267,6 +267,23 @@ typedef struct
                                      leave blank in production config  */
 
     /* ----------------------------------------------------------------
+     * Metrics database - independent connection pool (response to
+     * closure proposal, 13 Aug 2026). Mirrors the block above exactly -
+     * the metrics DB writer thread used to borrow its session from the
+     * SAME pool as the business connection above, meaning DB metrics
+     * silently went wherever dbname happened to point. These give the
+     * metrics destination its own identity, entirely independent of
+     * the business database. Only read/used when metrics_db_enabled=1
+     * (see the Metrics parameters block further down).
+     * ---------------------------------------------------------------- */
+    char metrics_dbname          [128];
+    char metrics_username        [64];   /* logging / NLS only, as above */
+    int  metrics_use_wallet;
+    char metrics_wallet_location [256];
+    char metrics_password        [64];   /* legacy only - ignored if
+                                             metrics_use_wallet=1        */
+
+    /* ----------------------------------------------------------------
      * XML I/O directories
      * ---------------------------------------------------------------- */
     char xml_input_dir [256];
@@ -465,6 +482,48 @@ typedef struct
      * never filled up.                                                */
     int  metrics_per_write;
     int  metrics_max_insert_delay_ms;
+
+    /* Metrics DB pool - independent connection pool (response to
+     * closure proposal, 13 Aug 2026). Sizing is deliberately separate
+     * from, and normally much smaller than, the business pool above -
+     * only one thread (the metrics DB writer) ever borrows from this
+     * pool, so pool_min_size=1/pool_max_size=2 is a sensible default
+     * rather than reusing the business pool's 10/50. Every field here
+     * mirrors its business-pool counterpart 1:1 (see the Connection
+     * pool parameters block above) so the two pools can be tuned
+     * independently, and so a future second metrics thread would not
+     * need any config changes at all.                                  */
+    int  metrics_pool_min_size;
+    int  metrics_pool_max_size;
+    int  metrics_pool_increment;
+
+    int  metrics_pool_connection_timeout;
+    int  metrics_session_idle_timeout;
+    int  metrics_max_time_to_establish;
+    int  metrics_network_read_write_timeout;
+    int  metrics_query_execution_timeout;
+    int  metrics_authentication_handshake_timeout;
+    int  metrics_login_auth_timeout;
+    int  metrics_session_max_lifetime;
+    int  metrics_heartbeat_keepalive_interval;
+
+    int  metrics_retries_on_connection_failure;
+
+    int  metrics_connection_validation_on_borrow;
+    int  metrics_rollback_on_return_to_pool;
+    int  metrics_autocommit_mode;
+
+    /* Startup failure behaviour (response to closure proposal, 13 Aug
+     * 2026) - there are genuine reasons the metrics database
+     * specifically might be unreachable while the business database is
+     * fine, and metrics is never allowed to take production down with
+     * it (see metrics_writer.h's own stated design purpose). Default 0:
+     * a failed metrics pool connect at startup is logged and DB
+     * metrics are disabled for that run; file metrics (if enabled) are
+     * unaffected, and the business connection is untouched either way.
+     * Set to 1 to make a failed metrics pool connect fatal, same as a
+     * failed business pool connect today.                              */
+    int  metrics_db_fail_force_shutdown;
 
 
     /* ================================================================

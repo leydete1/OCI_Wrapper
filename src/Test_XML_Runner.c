@@ -556,6 +556,25 @@ static int parse_pool_arg(const char *arg)
     return -1;
 }
 
+/*
+ * shutdown_metrics_pool()
+ *
+ * Response to closure proposal (13 Aug 2026) - the metrics DB pool is
+ * entirely independent of the business connection pool/mode, so it
+ * needs its own OCI_Disconnect_pool() call at every shutdown/exit path
+ * in main() below, guarded by whether it was actually connected in the
+ * first place (metrics_db_enabled=0, or a failed connect with
+ * metrics_db_fail_force_shutdown=0, both leave it never connected).
+ * Small helper to avoid repeating that guard at every one of those
+ * exit points. Safe to call unconditionally.
+ */
+static void shutdown_metrics_pool(oci_context_t *metrics_ctx,
+                                   int metrics_pool_connected)
+{
+    if (metrics_pool_connected)
+        OCI_Disconnect_pool(metrics_ctx);
+}
+
 /* ================================================================== */
 /*  initialise_loggers                                                  */
 /*                                                                      */
@@ -1070,6 +1089,14 @@ int main(int argc, char *argv[])
     /* ---- Declare all logger instances on the stack ---- */
     app_config_t  config;
     oci_context_t ctx;
+
+    /* Metrics DB pool - independent connection pool (response to
+     * closure proposal, 13 Aug 2026). See shutdown_metrics_pool()'s own
+     * comment above for why metrics_pool_connected exists. */
+    app_config_t  metrics_config;
+    oci_context_t metrics_ctx;
+    int           metrics_pool_connected = 0;
+
     logger_t      logger;
     logger_t      select_logger;
     logger_t      cache_logger;
@@ -1102,6 +1129,11 @@ int main(int argc, char *argv[])
     memset(&config, 0, sizeof(config));
     ctx.ini             = &config;
     ctx.pool_slot_index = -1;   /* not a pooled worker context */
+
+    memset(&metrics_ctx,    0, sizeof(metrics_ctx));
+    memset(&metrics_config, 0, sizeof(metrics_config));
+    metrics_ctx.ini             = &metrics_config;
+    metrics_ctx.pool_slot_index = -1;   /* not a pooled worker context */
 
     /* ---- Load ini ---- */
     if (load_ini(argv[1], &config, &ctx) != 0)
@@ -1336,7 +1368,103 @@ int main(int argc, char *argv[])
          * destination; NULL sub-queues there just mean metrics_
          * finalise_and_enqueue() silently skips that destination
          * everywhere it's called.                                      */
-        ctx.metrics_writer = metrics_writer_start(&ctx, &config, ctx.metrics_logger, ctx.metrics_writer_logger);
+        /* ---- Metrics DB pool - independent connection pool ----
+         * Response to closure proposal (13 Aug 2026) - see
+         * Metrics_DB_Pool_Closure_13_Aug.docx for the full design.
+         * Entirely independent of the business pool/mode above:
+         * connected here (if metrics_db_enabled) regardless of whether
+         * this run is using --pool or --direct for the business
+         * connection, since the metrics destination is not meant to
+         * share fate with that choice either.                          */
+        if (config.metrics_db_enabled)
+        {
+            /* Bug fix (13 Aug 2026, found during wire-in verification) -
+             * OCI_Connect_pool() and every other OCI_Connection_Pool.c
+             * function log EXCLUSIVELY through ctx->connectionpool_logger
+             * (confirmed by inspection - no other logger field is ever
+             * used in that module). metrics_ctx was memset to zero above
+             * and only had metrics_ctx.ini set, so this pointer was NULL
+             * the whole time metrics_ctx existed - logger_write() guards
+             * against a NULL logger and silently no-ops rather than
+             * crashing (see logger.c), so the metrics pool's ENTIRE
+             * connect sequence (config dump, OCIEnvCreate, every
+             * OCIServerAttach/OCISessionBegin per slot) was running
+             * completely invisibly. The pool itself was still genuinely
+             * being created correctly - none of that OCI setup depends
+             * on the logger - only the log OUTPUT was missing. Reusing
+             * ctx.connectionpool_logger here (same log file as the
+             * business pool) rather than adding a whole new dedicated
+             * logger - each pool's log lines already carry their own
+             * dbname/pool sizing, so the two are distinguishable in one
+             * file without needing a second log file just for this.    */
+            metrics_ctx.connectionpool_logger = ctx.connectionpool_logger;
+
+            metrics_config = config;   /* start from a full copy - only
+                                           the fields overridden below
+                                           actually differ from the
+                                           business pool               */
+
+            snprintf(metrics_config.dbname,   sizeof(metrics_config.dbname),   "%s", config.metrics_dbname);
+            snprintf(metrics_config.username, sizeof(metrics_config.username), "%s", config.metrics_username);
+            snprintf(metrics_config.password, sizeof(metrics_config.password), "%s", config.metrics_password);
+            metrics_config.use_wallet = config.metrics_use_wallet;
+            snprintf(metrics_config.wallet_location, sizeof(metrics_config.wallet_location), "%s", config.metrics_wallet_location);
+
+            metrics_config.pool_min_size  = config.metrics_pool_min_size;
+            metrics_config.pool_max_size  = config.metrics_pool_max_size;
+            metrics_config.pool_increment = config.metrics_pool_increment;
+
+            metrics_config.pool_connection_timeout          = config.metrics_pool_connection_timeout;
+            metrics_config.session_idle_timeout             = config.metrics_session_idle_timeout;
+            metrics_config.max_time_to_establish            = config.metrics_max_time_to_establish;
+            metrics_config.network_read_write_timeout       = config.metrics_network_read_write_timeout;
+            metrics_config.query_execution_timeout          = config.metrics_query_execution_timeout;
+            metrics_config.authentication_handshake_timeout = config.metrics_authentication_handshake_timeout;
+            metrics_config.login_auth_timeout               = config.metrics_login_auth_timeout;
+            metrics_config.session_max_lifetime              = config.metrics_session_max_lifetime;
+            metrics_config.heartbeat_keepalive_interval      = config.metrics_heartbeat_keepalive_interval;
+
+            metrics_config.retries_on_connection_failure = config.metrics_retries_on_connection_failure;
+
+            metrics_config.connection_validation_on_borrow = config.metrics_connection_validation_on_borrow;
+            metrics_config.rollback_on_return_to_pool      = config.metrics_rollback_on_return_to_pool;
+            metrics_config.autocommit_mode                 = config.metrics_autocommit_mode;
+
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Calling OCI_Connect_pool for the metrics DB "
+                         "pool (dbname=%s)", metrics_config.dbname);
+
+            if (OCI_Connect_pool(&metrics_ctx) != 0)
+            {
+                logger_write(&logger, LOG_ERROR, __func__, 0,
+                             "OCI_Connect_pool failed for the metrics "
+                             "DB pool (dbname=%s)", metrics_config.dbname);
+
+                if (config.metrics_db_fail_force_shutdown)
+                {
+                    logger_write(&logger, LOG_ERROR, __func__, 0,
+                                 "metrics_db_fail_force_shutdown=1 - "
+                                 "refusing to start");
+                    logger_close(&logger);
+                    return -1;
+                }
+
+                logger_write(&logger, LOG_WARN, __func__, 0,
+                             "metrics_db_fail_force_shutdown=0 (default) "
+                             "- continuing with DB metrics disabled for "
+                             "this run (file metrics, if enabled, are "
+                             "unaffected, as is the business connection)");
+                config.metrics_db_enabled = 0;
+            }
+            else
+            {
+                metrics_pool_connected = 1;
+                logger_write(&logger, LOG_INFO, __func__, 0,
+                             "OCI_Connect_pool OK for the metrics DB pool");
+            }
+        }
+
+        ctx.metrics_writer = metrics_writer_start(&metrics_ctx, &config, ctx.metrics_logger, ctx.metrics_writer_logger);
         if (!ctx.metrics_writer)
             logger_write(&logger, LOG_ERROR, __func__, 0,
                          "metrics_writer_start() failed - continuing "
@@ -1424,6 +1552,7 @@ int main(int argc, char *argv[])
         logger_write(&logger, LOG_ERROR, __func__, 0,
                      "Failed to open input_xml dir: %s", input_dir);
         metrics_writer_stop_and_join(ctx.metrics_writer);
+        shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
         use_pool ? OCI_Disconnect_pool(&ctx) : OCI_Disconnect(&ctx);
         logger_close(&logger);
         return -1;
@@ -1474,6 +1603,7 @@ int main(int argc, char *argv[])
                          "transaction-scoped session");
             closedir(dir);
             metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1593,6 +1723,7 @@ int main(int argc, char *argv[])
                          "shared connection can't provide. Refusing to "
                          "start.");
             metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
             OCI_Disconnect(&ctx);
             logger_close(&logger);
             return -1;
@@ -1624,6 +1755,7 @@ int main(int argc, char *argv[])
                          "dispatcher_queue_count/dispatcher_queue_depth in "
                          "consumer_file.ini (both must be > 0)");
             metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1668,6 +1800,7 @@ int main(int argc, char *argv[])
             if (touch_q) generic_queue_destroy(touch_q);
             queue_manager_destroy(qm);
             metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1689,6 +1822,7 @@ int main(int argc, char *argv[])
             worker_pool_shutdown_and_join(pool, qm);
             queue_manager_destroy(qm);
             metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
             OCI_Disconnect_pool(&ctx);
             logger_close(&logger);
             return -1;
@@ -1792,6 +1926,7 @@ int main(int argc, char *argv[])
          * workers that feed it.                                        */
         metrics_writer_stop_and_join(ctx.metrics_writer);
 
+        shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
         OCI_Disconnect_pool(&ctx);
         logger_close(&logger);
         return 0;
@@ -2031,6 +2166,11 @@ int main(int argc, char *argv[])
      * their consumer" ordering used everywhere else this pattern
      * appears.                                                          */
     metrics_writer_stop_and_join(ctx.metrics_writer);
+
+    /* Metrics DB pool - independent of the business connection mode
+     * above, so it gets its own disconnect call regardless of
+     * use_pool (response to closure proposal, 13 Aug 2026). */
+    shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
 
     if (use_pool)
     {

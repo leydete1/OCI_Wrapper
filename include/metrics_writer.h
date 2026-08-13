@@ -55,10 +55,14 @@ typedef struct metrics_writer metrics_writer_t;   /* opaque */
 /*
  * metrics_writer_start()
  *
- * base_ctx must already be fully set up (connected, loggers
+ * metrics_base_ctx must already be fully set up (connected, loggers
  * initialised) - the DB thread (if metrics_db_enabled) borrows its own
- * session from the same pool base_ctx is attached to, exactly like
- * every other dedicated thread already does. file_logger is the
+ * session from the same pool metrics_base_ctx is attached to, exactly
+ * like every other dedicated thread already does. Response to closure
+ * proposal (13 Aug 2026): this is now the metrics DB's OWN independent
+ * pool, not the business connection pool - callers should pass the
+ * dedicated metrics oci_context_t connected via its own
+ * OCI_Connect_pool() call, not the business ctx. file_logger is the
  * already-open metrics CSV logger (unchanged from before this stage -
  * see metrics_write()'s own existing contract) - used EXCLUSIVELY for
  * actual CSV data rows, never for anything else. writer_logger is a
@@ -78,7 +82,7 @@ typedef struct metrics_writer metrics_writer_t;   /* opaque */
  * Returns NULL only on a genuine allocation failure - a disabled
  * destination is not a failure, it's the requested configuration.
  */
-metrics_writer_t *metrics_writer_start(oci_context_t *base_ctx,
+metrics_writer_t *metrics_writer_start(oci_context_t *metrics_base_ctx,
                                         app_config_t  *config,
                                         logger_t      *file_logger,
                                         logger_t      *writer_logger);

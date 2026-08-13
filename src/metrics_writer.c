@@ -132,7 +132,9 @@ static void *file_writer_thread_main(void *arg)
 /*  from there).                                                        */
 /* ================================================================== */
 typedef struct {
-    oci_context_t   *base_ctx;
+    oci_context_t   *metrics_base_ctx;   /* the metrics DB's OWN pool -
+                                             see metrics_writer.h's note
+                                             on metrics_writer_start()   */
     generic_queue_t *q;
     int               per_write;
     int               max_delay_ms;
@@ -366,7 +368,7 @@ static void *db_writer_thread_main(void *arg)
     db_writer_args_t args = *(db_writer_args_t *)arg;
     free(arg);
 
-    oci_context_t *base_ctx        = args.base_ctx;
+    oci_context_t *metrics_base_ctx = args.metrics_base_ctx;
     generic_queue_t *q              = args.q;
     logger_t *writer_logger        = args.writer_logger;
 
@@ -374,11 +376,14 @@ static void *db_writer_thread_main(void *arg)
      * borrow an independent pooled session at startup, hold it for
      * this thread's whole lifetime. Proven here in Stage 2 even though
      * the actual insert is stubbed until Stage 3 - so Stage 3 only
-     * needs to add the SQL itself, not the connection plumbing too.   */
+     * needs to add the SQL itself, not the connection plumbing too.
+     * As of the 13 Aug 2026 closure item, metrics_base_ctx is the
+     * metrics DB's own independent pool, not the business one - see
+     * metrics_writer.h's own note on metrics_writer_start().          */
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
-    if (OCI_Pool_get_session(base_ctx, &thread_ctx) != 0)
+    if (OCI_Pool_get_session(metrics_base_ctx, &thread_ctx) != 0)
     {
         logger_write(writer_logger, LOG_ERROR, __func__, 0,
                      "Metrics DB writer thread: OCI_Pool_get_session "
@@ -389,7 +394,7 @@ static void *db_writer_thread_main(void *arg)
         return NULL;
     }
 
-    copy_shared_ctx_fields(&thread_ctx, base_ctx);
+    copy_shared_ctx_fields(&thread_ctx, metrics_base_ctx);
     thread_ctx.active_tx = NULL;
 
     logger_write(writer_logger, LOG_INFO, __func__, 0,
@@ -404,7 +409,7 @@ static void *db_writer_thread_main(void *arg)
                      "Metrics DB writer thread: malloc failed for batch "
                      "array (per_write=%d) - this thread cannot start",
                      args.per_write);
-        OCI_Pool_release_session(base_ctx, &thread_ctx);
+        OCI_Pool_release_session(metrics_base_ctx, &thread_ctx);
         return NULL;
     }
 
@@ -478,7 +483,7 @@ static void *db_writer_thread_main(void *arg)
                  "%d record(s) total - releasing session",
                  total_batches, total_flushed);
 
-    OCI_Pool_release_session(base_ctx, &thread_ctx);
+    OCI_Pool_release_session(metrics_base_ctx, &thread_ctx);
 
     return NULL;
 }
@@ -486,7 +491,7 @@ static void *db_writer_thread_main(void *arg)
 /* ================================================================== */
 /*  Public API                                                          */
 /* ================================================================== */
-metrics_writer_t *metrics_writer_start(oci_context_t *base_ctx,
+metrics_writer_t *metrics_writer_start(oci_context_t *metrics_base_ctx,
                                         app_config_t  *config,
                                         logger_t      *file_logger,
                                         logger_t      *writer_logger)
@@ -547,7 +552,7 @@ metrics_writer_t *metrics_writer_start(oci_context_t *base_ctx,
             db_writer_args_t *args = malloc(sizeof(db_writer_args_t));
             if (args)
             {
-                args->base_ctx      = base_ctx;
+                args->metrics_base_ctx = metrics_base_ctx;
                 args->q             = w->db_queue;
                 args->per_write     = config->metrics_per_write > 0 ? config->metrics_per_write : 100;
                 args->max_delay_ms  = config->metrics_max_insert_delay_ms > 0 ? config->metrics_max_insert_delay_ms : 5000;

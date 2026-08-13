@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Transaction Name ROLLBACK test v2 - passes Level 2, fails at EXECUTION
+ time, to actually exercise tx_begin()/tx_rollback() (v1 of this test,
+ Request_Test_TransactionName_Rollback.xml, failed at Level 2 instead -
+ the whole request was rejected before tx_begin() was ever called, so
+ it never proved the runtime rollback path).
+
+ Operation 1: valid scalar INSERT (NUMBER_COL=901) - will genuinely
+ execute and, on its own, would commit successfully.
+ Operation 2: INSERT with a BLOB_COL pointing at a file path that does
+ not exist. Level 2 only checks the value is a non-empty string (any
+ path is accepted); OCI_Insert_Execute_Module.c only discovers the
+ file is missing when it fopen()s it during actual execution - so this
+ operation gets as far as calling into the CRUD module before failing,
+ with operation 1 already executed on the same connection/transaction.
+
+ Expected outcome:
+   - Row 901 must NOT be present in OCI_FIELD_TEST afterward - the
+     transaction rolls back, undoing operation 1's already-executed
+     INSERT.
+   - metrics_Data_Manager.csv should now show a real TX_BEGIN / INSERT
+     (op 1, status_code=0) / INSERT (op 2, status_code!=0) / TX_ROLLBACK
+     sequence, all sharing one transaction_id and
+     transaction_name="Save Booking" - not "-".
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_txname_rollback_v2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1" name="Save Booking">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>901</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Rollback v2 test - row 1 (should NOT persist)</value></field>
+            </row>
+        </operation>
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>902</value></field>
+                <field><field_name>BLOB_COL</field_name><value>/tmp/this_file_does_not_exist_txname_rollback_test.bin</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

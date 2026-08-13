@@ -57,6 +57,16 @@ static ctx_config_map_t ctx_map[] = {
     { "wallet_location",   CFG_STRING, offsetof(app_config_t, wallet_location),   "/opt/data_manager/wallet", 0 },
 
     /* ----------------------------------------------------------------
+     * Metrics database credentials - independent pool (13 Aug 2026
+     * closure item). See ini_reader.h's own comment on this block.
+     * ---------------------------------------------------------------- */
+    { "metrics_username", CFG_STRING, offsetof(app_config_t, metrics_username), "Data_Manager",          0 },
+    { "metrics_password", CFG_STRING, offsetof(app_config_t, metrics_password), "",                      0 },
+    { "metrics_dbname",   CFG_STRING, offsetof(app_config_t, metrics_dbname),   "localhost:1521/freepdb1",0 },
+    { "metrics_use_wallet",      CFG_BOOL,   offsetof(app_config_t, metrics_use_wallet),      NULL, 0   },
+    { "metrics_wallet_location", CFG_STRING, offsetof(app_config_t, metrics_wallet_location), "/opt/data_manager/wallet", 0 },
+
+    /* ----------------------------------------------------------------
      * Logging main log
      * ---------------------------------------------------------------- */
     { "log_file_name",          CFG_STRING, offsetof(app_config_t, log_file_name),          "app.log", 0 },
@@ -422,6 +432,35 @@ static ctx_config_map_t ctx_map[] = {
 	    { "metrics_per_write",              CFG_INT, offsetof(app_config_t, metrics_per_write),              NULL, 100  },
 	    { "metrics_max_insert_delay_ms",    CFG_INT, offsetof(app_config_t, metrics_max_insert_delay_ms),    NULL, 5000 },
 
+	    /* Metrics DB pool - independent connection pool (13 Aug 2026
+	     * closure item). Mirrors the business "Connection pool
+	     * parameters" block above 1:1, but sized for the single thread
+	     * that ever borrows from it. */
+	    { "metrics_pool_min_size",  CFG_INT, offsetof(app_config_t, metrics_pool_min_size),  NULL, 1 },
+	    { "metrics_pool_max_size",  CFG_INT, offsetof(app_config_t, metrics_pool_max_size),  NULL, 2 },
+	    { "metrics_pool_increment", CFG_INT, offsetof(app_config_t, metrics_pool_increment), NULL, 1 },
+
+	    { "metrics_pool_connection_timeout",          CFG_INT, offsetof(app_config_t, metrics_pool_connection_timeout),          NULL, 30   },
+	    { "metrics_session_idle_timeout",             CFG_INT, offsetof(app_config_t, metrics_session_idle_timeout),             NULL, 300  },
+	    { "metrics_max_time_to_establish",            CFG_INT, offsetof(app_config_t, metrics_max_time_to_establish),            NULL, 15   },
+	    { "metrics_network_read_write_timeout",       CFG_INT, offsetof(app_config_t, metrics_network_read_write_timeout),       NULL, 60   },
+	    { "metrics_query_execution_timeout",          CFG_INT, offsetof(app_config_t, metrics_query_execution_timeout),          NULL, 30   },
+	    { "metrics_authentication_handshake_timeout", CFG_INT, offsetof(app_config_t, metrics_authentication_handshake_timeout), NULL, 10   },
+	    { "metrics_login_auth_timeout",               CFG_INT, offsetof(app_config_t, metrics_login_auth_timeout),               NULL, 10   },
+	    { "metrics_session_max_lifetime",             CFG_INT, offsetof(app_config_t, metrics_session_max_lifetime),             NULL, 3600 },
+	    { "metrics_heartbeat_keepalive_interval",     CFG_INT, offsetof(app_config_t, metrics_heartbeat_keepalive_interval),     NULL, 60   },
+
+	    { "metrics_retries_on_connection_failure", CFG_INT, offsetof(app_config_t, metrics_retries_on_connection_failure), NULL, 3 },
+
+	    { "metrics_connection_validation_on_borrow", CFG_BOOL, offsetof(app_config_t, metrics_connection_validation_on_borrow), NULL, 1 },
+	    { "metrics_rollback_on_return_to_pool",      CFG_BOOL, offsetof(app_config_t, metrics_rollback_on_return_to_pool),      NULL, 1 },
+	    { "metrics_autocommit_mode",                 CFG_BOOL, offsetof(app_config_t, metrics_autocommit_mode),                 NULL, 0 },
+
+	    /* Startup failure behaviour - default 0 (do not take production
+	     * down over a metrics-only outage). See ini_reader.h's own
+	     * comment on this field for the full reasoning. */
+	    { "metrics_db_fail_force_shutdown", CFG_BOOL, offsetof(app_config_t, metrics_db_fail_force_shutdown), NULL, 0 },
+
 
 		/*Session Cache*/
 	    { "session_cache_enabled",          CFG_BOOL,   offsetof(app_config_t, session_cache_enabled),          NULL, 1      },
@@ -744,6 +783,12 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                     else if (!strcmp(m->name,"password"))                   maxlen=sizeof(config->password);
                     else if (!strcmp(m->name,"dbname"))                     maxlen=sizeof(config->dbname);
                     else if (!strcmp(m->name,"wallet_location"))            maxlen=sizeof(config->wallet_location);
+
+                    /* Metrics DB credentials (13 Aug 2026 closure item) */
+                    else if (!strcmp(m->name,"metrics_username"))           maxlen=sizeof(config->metrics_username);
+                    else if (!strcmp(m->name,"metrics_password"))           maxlen=sizeof(config->metrics_password);
+                    else if (!strcmp(m->name,"metrics_dbname"))             maxlen=sizeof(config->metrics_dbname);
+                    else if (!strcmp(m->name,"metrics_wallet_location"))    maxlen=sizeof(config->metrics_wallet_location);
 
                     /* XML dirs */
                     else if (!strcmp(m->name,"xml_input_dir"))              maxlen=sizeof(config->xml_input_dir);
