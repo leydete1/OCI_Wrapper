@@ -78,6 +78,8 @@ typedef struct oci_context_t {
    logger_t      *sql_parser_logger;
    logger_t      *file_consumer_logger;  /* File_Consumer_proposal v1.2,
                                              Stage 2 - file_consumer.c   */
+   logger_t      *http_consumer_logger;  /* http_Consumer_proposal v1.2,
+                                             Stage 2 - http_consumer.c   */
    logger_t      *dispatcher_logger;     /* File_Consumer_proposal v1.2,
                                              Stage 1 - dispatcher.c   */
    logger_t      *worker_logger;         /* File_Consumer_proposal v1.2,

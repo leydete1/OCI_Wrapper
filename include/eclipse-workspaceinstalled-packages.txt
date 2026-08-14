@@ -1049,6 +1049,8 @@ libmd4c0:amd64					install
 libmecab2:amd64					install
 libmediaart-2.0-0:amd64				install
 libmhash2:amd64					install
+libmicrohttpd-dev:amd64				install
+libmicrohttpd12t64:amd64			install
 libminiupnpc18:amd64				install
 libminizip1t64:amd64				install
 libmjpegutils-2.1-0t64:amd64			install

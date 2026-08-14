@@ -89,6 +89,22 @@ static ctx_config_map_t ctx_map[] = {
     { "file_consumer_log_file_rotation_number", CFG_INT,  offsetof(app_config_t, file_consumer_log_file_rotation_number),NULL, 5 },
     { "file_consumer_log_level",              CFG_STRING, offsetof(app_config_t, file_consumer_log_level),               "DEBUG", 0 },
 
+    /* HTTP Consumer, Stage 0 (2026-08-14). TLS is mandatory - see
+     * http_consumer_runner.c's own doc comment - so
+     * http_consumer_tls_cert_file / http_consumer_tls_key_file have no
+     * usable default; they default to "" here deliberately, which
+     * http_consumer_runner_start() treats as "cannot start", not as
+     * "start without TLS". */
+    { "http_consumer_port",                     CFG_INT,    offsetof(app_config_t, http_consumer_port),                     NULL, 8443 },
+    { "http_consumer_bind_address",              CFG_STRING, offsetof(app_config_t, http_consumer_bind_address),             "0.0.0.0", 0 },
+    { "http_consumer_thread_pool_size",         CFG_INT,    offsetof(app_config_t, http_consumer_thread_pool_size),         NULL, 8 },
+    { "http_consumer_tls_cert_file",             CFG_STRING, offsetof(app_config_t, http_consumer_tls_cert_file),            "", 0 },
+    { "http_consumer_tls_key_file",              CFG_STRING, offsetof(app_config_t, http_consumer_tls_key_file),             "", 0 },
+    { "http_consumer_log_file_name",             CFG_STRING, offsetof(app_config_t, http_consumer_log_file_name),            "http_consumer_app.log", 0 },
+    { "http_consumer_log_file_max_size",        CFG_INT,    offsetof(app_config_t, http_consumer_log_file_max_size),        NULL, 10485760 },
+    { "http_consumer_log_file_rotation_number", CFG_INT,    offsetof(app_config_t, http_consumer_log_file_rotation_number), NULL, 5 },
+    { "http_consumer_log_level",                 CFG_STRING, offsetof(app_config_t, http_consumer_log_level),                "DEBUG", 0 },
+
     /* Metrics refactor (closure item 5), Stage 2 follow-up (2026-08-09) */
     { "metrics_writer_log_file_name",          CFG_STRING, offsetof(app_config_t, metrics_writer_log_file_name),          "metrics_writer_app.log", 0 },
     { "metrics_writer_log_file_max_size",      CFG_INT,    offsetof(app_config_t, metrics_writer_log_file_max_size),       NULL, 10485760 },
@@ -712,6 +728,13 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
 					else if (!strcmp(m->name,"select_log_level"))                  maxlen=sizeof(config->select_log_level);
 					else if (!strcmp(m->name,"file_consumer_log_file_name"))       maxlen=sizeof(config->file_consumer_log_file_name);
 					else if (!strcmp(m->name,"file_consumer_log_level"))           maxlen=sizeof(config->file_consumer_log_level);
+
+					/* HTTP Consumer, Stage 0 (2026-08-14) */
+					else if (!strcmp(m->name,"http_consumer_bind_address"))        maxlen=sizeof(config->http_consumer_bind_address);
+					else if (!strcmp(m->name,"http_consumer_tls_cert_file"))       maxlen=sizeof(config->http_consumer_tls_cert_file);
+					else if (!strcmp(m->name,"http_consumer_tls_key_file"))        maxlen=sizeof(config->http_consumer_tls_key_file);
+					else if (!strcmp(m->name,"http_consumer_log_file_name"))       maxlen=sizeof(config->http_consumer_log_file_name);
+					else if (!strcmp(m->name,"http_consumer_log_level"))           maxlen=sizeof(config->http_consumer_log_level);
 					else if (!strcmp(m->name,"metrics_writer_log_file_name"))      maxlen=sizeof(config->metrics_writer_log_file_name);
 					else if (!strcmp(m->name,"metrics_writer_log_level"))          maxlen=sizeof(config->metrics_writer_log_level);
 					else if (!strcmp(m->name,"dispatcher_log_file_name"))          maxlen=sizeof(config->dispatcher_log_file_name);

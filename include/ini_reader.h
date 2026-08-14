@@ -616,6 +616,18 @@ typedef struct
     char file_consumer_processing_json_dir[256];
     char file_consumer_output_json_dir    [256];
     char file_consumer_error_json_dir     [256];
+    
+  /* HTTP Consumer, Stage 0 (2026-08-14) */
+  int  http_consumer_port;
+  char http_consumer_bind_address[64];
+  int  http_consumer_thread_pool_size;
+  char http_consumer_tls_cert_file[256];
+  char http_consumer_tls_key_file[256];
+  char http_consumer_log_file_name[256];
+  int  http_consumer_log_file_max_size;
+  int  http_consumer_log_file_rotation_number;
+  char http_consumer_log_level[20];  
+    
 
 } app_config_t;
 
