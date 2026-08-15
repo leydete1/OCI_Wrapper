@@ -109,6 +109,7 @@
 #include "session_manager_runner.h"
 #include "worker.h"
 #include "build_number.h"
+#include "http_consumer_runner.h"
 
 
 /* looks_like_new_request_format()'s own forward declaration removed
@@ -623,7 +624,8 @@ static int initialise_loggers(oci_context_t *ctx,
 							   logger_t      *file_consumer_logger,
 							   logger_t      *dispatcher_logger,
 							   logger_t      *worker_logger,
-							   logger_t      *metrics_writer_logger)
+							   logger_t      *metrics_writer_logger,
+							   logger_t		 *http_consumer_logger)
 {
 
     /* ---- error logger MUST BE initialized first---- */
@@ -691,6 +693,28 @@ static int initialise_loggers(oci_context_t *ctx,
     ctx->select_logger = select_logger;
     printf("Initialize select logger name =%s complete successful.\n",
            ctx->ini->select_log_file_name);
+
+
+    /*Initialize http_consumer_logger*/
+    printf("Initialize http_consumer logger name =%sx\n",
+            ctx->ini->http_consumer_log_file_name);
+     if (logger_init_str2(http_consumer_logger,
+                         ctx->ini->http_consumer_log_file_name,
+                         ctx->ini->http_consumer_log_file_max_size,
+                         ctx->ini->http_consumer_log_file_rotation_number,
+                         ctx->ini->http_consumer_log_level,
+ 						ctx->error_logger) != 0)
+     {
+         printf("Failed to initialise http_consumer logger: %s\n",
+                ctx->ini->http_consumer_log_file_name);
+         return -1;
+     }
+     ctx->http_consumer_logger = http_consumer_logger;
+     printf("Initialize http_consumer logger name =%s complete successful.\n",
+            ctx->ini->http_consumer_log_file_name);
+
+    /**/
+
 
     /* ---- File Consumer logger (File_Consumer_proposal v1.2, Stage 2) ---- */
     printf("Initialize file_consumer logger name =%sx\n",
@@ -1118,7 +1142,8 @@ int main(int argc, char *argv[])
     logger_t	  session_logger;
     logger_t	  sql_parser_logger;
     logger_t	  file_consumer_logger;
-    logger_t	  dispatcher_logger;
+    logger_t	  http_consumer_logger;
+     logger_t	  dispatcher_logger;
     logger_t	  worker_logger;
     logger_t	  metrics_writer_logger;   /* closure item 5, Stage 2 follow-up */
 
@@ -1189,7 +1214,8 @@ int main(int argc, char *argv[])
 							&file_consumer_logger,
 							&dispatcher_logger,
 							&worker_logger,
-							&metrics_writer_logger
+							&metrics_writer_logger,
+							&http_consumer_logger
     				) != 0)
     {
         printf("Failed to initialise loggers - exiting\n");
@@ -1828,6 +1854,9 @@ int main(int argc, char *argv[])
             return -1;
         }
 
+
+
+
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "Worker pool and File Consumer thread both started - "
                      "waiting for File Consumer to stop (lifetime=%s)",
@@ -1852,6 +1881,32 @@ int main(int argc, char *argv[])
          * "exits after 0 scan passes" report on 2026-08-05: calling it
          * unconditionally right after start() told the thread to stop
          * before it ever ran a single pass.                           */
+
+        http_consumer_runner_t *http_runner = http_consumer_runner_start(&ctx, &config);
+        if (!http_runner)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "http_consumer_runner_start() failed - see "
+                         "http_consumer log above for the reason (most likely "
+                         "the TLS cert/key path is wrong or unreadable). "
+                         "Continuing with File Consumer only.");
+            /* Deliberately NOT fatal, unlike the fc_runner check above - File
+             * Consumer already started successfully and there's no reason a
+             * broken HTTP listener should take down a working File Consumer
+             * run. Revisit this call if that stance changes later. */
+        }
+        else
+        {
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "HTTP Consumer TLS listener started alongside File "
+                         "Consumer");
+        }
+
+
+
+
+
+
         file_consumer_runner_join(fc_runner);
 
         logger_write(&logger, LOG_INFO, __func__, 0,
@@ -1899,6 +1954,17 @@ int main(int argc, char *argv[])
                      "worker_pool_shutdown_and_join() returned - all workers "
                      "exited, all queues should now be empty");
 
+
+        if (http_runner)
+        {
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "Stopping HTTP Consumer - blocks until all in-flight "
+                         "connections drain");
+            http_consumer_runner_stop(http_runner);
+            logger_write(&logger, LOG_INFO, __func__, 0,
+                         "HTTP Consumer stopped");
+
+        }
         /* Session Manager stops AFTER the worker pool, not before or
          * concurrently - workers are the only producers onto touch_q,
          * so stopping them first guarantees no more touches will ever
