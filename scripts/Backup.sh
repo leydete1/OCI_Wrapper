@@ -10,7 +10,7 @@ cd ~/eclipse-workspace
 #of the timestamp before each backup. Edit LABEL below to change the
 #descriptive part of the filename (e.g. what milestone this backup marks).
 DATESTAMP=$(date +%Y_%m_%d_%H%M)
-LABEL="http_consumer_stage_0_complete"
+LABEL="http_consumer_stage_2_complete"
 
 #Refresh packages list
 dpkg --get-selections > /home/leyden100/eclipse-workspace/OCI_Wrapper/include/eclipse-workspaceinstalled-packages.txt

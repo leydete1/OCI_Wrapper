@@ -11,23 +11,41 @@
  * process_xml_file() itself detected) is written back as the HTTP
  * response.
  *
- * HTTP status codes stay purely transport-level (Terry, 2026-08-16):
- * every request that reaches process_xml_file() gets HTTP 200
- * regardless of whether Data Manager's own result was PASS or ERROR -
- * that result lives entirely inside the response payload, which the
- * caller opens to find out. Non-200 is reserved for genuine HTTP/
- * transport failures that never reach process_xml_file() at all: 405
- * for non-POST, 413 for an oversized body. The app knows nothing about
- * HTTP, by design - it stays that way.
+ * Session lifecycle (same day, 2026-08-16): CREATE_SESSION/END_SESSION
+ * were never reachable through process_xml_file() at all - Level 2
+ * explicitly rejects both (LEVEL2_ERR_NOT_IMPLEMENTED), and every
+ * existing caller of session_create() (Data_Manager_Bootstrap.c's own
+ * harness, file_consumer_runner.c's startup) calls it directly,
+ * bypassing the whole request pipeline, since neither of them serves
+ * an actual external client that needs its own session. HTTP consumer
+ * is the first consumer type that genuinely does - see
+ * OCI_Session_Manager.h's own note: "once the HTTP input module
+ * replaces the XML test-file input, it will read the session_id from
+ * the request and call session_validate() before dispatching to any
+ * other module." This is that module. A <Session_Request> envelope
+ * (distinct shape from the normal <request>/<operation type="...">
+ * CRUD envelope) is sniffed before the normal dispatch path and routed
+ * to session_create()/session_end() directly - see
+ * handle_session_request() in the .c file.
  *
- * Session handling: borrowed per-request, not per-thread. Every other
- * long-lived-thread consumer in this codebase (File Consumer, Session
- * Manager, worker.c) borrows one session per thread and reuses it -
- * this handler can't do that cleanly because MHD's internal thread
- * pool is opaque to us (no "this pool thread just started" hook to
- * borrow against). Per-request borrow/release is simpler and
- * definitely correct; revisit only if the concurrency stress-testing
- * stage shows it's actually a bottleneck.
+ * HTTP status codes stay purely transport-level (Terry, 2026-08-16):
+ * every request that reaches process_xml_file() or the session handler
+ * gets HTTP 200 regardless of whether Data Manager's own result was
+ * PASS or ERROR - that result lives entirely inside the response
+ * payload, which the caller opens to find out. Non-200 is reserved for
+ * genuine HTTP/transport failures that never reach either handler at
+ * all: 405 for non-POST, 413 for an oversized body, 503 if no session
+ * is available to borrow. The app knows nothing about HTTP, by design -
+ * it stays that way.
+ *
+ * Session handling on the CRUD path: borrowed per-request, not per-
+ * thread. Every other long-lived-thread consumer in this codebase
+ * (File Consumer, Session Manager, worker.c) borrows one session per
+ * thread and reuses it - this handler can't do that cleanly because
+ * MHD's internal thread pool is opaque to us (no "this pool thread
+ * just started" hook to borrow against). Per-request borrow/release is
+ * simpler and definitely correct; revisit only if the concurrency
+ * stress-testing stage shows it's actually a bottleneck.
  *
  * TLS is non-negotiable (Terry, 2026-08-14): http_consumer_runner_start()
  * refuses to start the daemon at all if the cert/key can't be loaded.

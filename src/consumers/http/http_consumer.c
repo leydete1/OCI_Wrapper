@@ -9,6 +9,7 @@
 
 #include "http_consumer.h"
 #include "logger.h"
+#include "OCI_Session_Manager.h"
 
 /* No config-driven envelope size limit yet - 10 MB is a sane guard
  * against a runaway/malicious body filling memory. Revisit once
@@ -35,6 +36,7 @@ typedef struct {
 
 static enum MHD_Result send_static_response(struct MHD_Connection *connection,
                                              unsigned int status_code,
+                                             const char *content_type,
                                              const char *body)
 {
     struct MHD_Response *response =
@@ -43,7 +45,7 @@ static enum MHD_Result send_static_response(struct MHD_Connection *connection,
     if (!response)
         return MHD_NO;
 
-    MHD_add_response_header(response, "Content-Type", "text/plain");
+    MHD_add_response_header(response, "Content-Type", content_type);
     enum MHD_Result ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
     return ret;
@@ -71,6 +73,137 @@ static enum MHD_Result send_dispatch_response(struct MHD_Connection *connection,
     MHD_add_response_header(response, "Content-Type", content_type);
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
     MHD_destroy_response(response);
+    return ret;
+}
+
+/* Narrow-purpose only - pulls a single flat <tag>value</tag> out of a
+ * raw XML string. Not a general parser; used here purely for
+ * session_id on an END_SESSION request, which session_request_t
+ * doesn't carry (parse_session_request() is CREATE_SESSION-shaped -
+ * see OCI_Session_Manager.h). Mirrors the same flat-tag-search
+ * approach parse_session_request()'s own internal extract_tag()
+ * clearly already uses, just not exported for reuse here. */
+static int extract_simple_tag(const char *xml, const char *tag,
+                               char *out, size_t out_size)
+{
+    char open_tag[64];
+    snprintf(open_tag, sizeof(open_tag), "<%s>", tag);
+    const char *start = strstr(xml, open_tag);
+    if (!start) return 0;
+    start += strlen(open_tag);
+
+    char close_tag[64];
+    snprintf(close_tag, sizeof(close_tag), "</%s>", tag);
+    const char *end = strstr(start, close_tag);
+    if (!end || end <= start) return 0;
+
+    size_t len = (size_t)(end - start);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return 1;
+}
+
+/* Session lifecycle requests (CREATE_SESSION/END_SESSION) use a
+ * completely different envelope - <Session_Request> with a plain
+ * <operation>CREATE_SESSION</operation> text tag - not the
+ * <request>/<transaction>/<operation type="..."> shape every CRUD
+ * operation uses. Detected by http_consumer_handle_request() before
+ * the normal process_xml_file() dispatch and routed here instead.
+ *
+ * Level 2 explicitly rejects both operation types if they ever reach
+ * the normal CRUD pipeline (LEVEL2_ERR_NOT_IMPLEMENTED, by design -
+ * see OCI_Level2_Parser.h's own doc comment), so process_xml_file()
+ * could never have serviced these anyway - this isn't bypassing
+ * validation that exists, session_create()/session_end() ARE the
+ * validators for these two operation types.
+ *
+ * Always HTTP 200 - same reasoning as send_dispatch_response(): the
+ * real status lives in the returned <session>...</session> body.      */
+static enum MHD_Result handle_session_request(oci_context_t *base_ctx,
+                                               struct MHD_Connection *connection,
+                                               const char *payload)
+{
+    session_request_t sess_req;
+    if (parse_session_request(base_ctx, payload, &sess_req) != SESSION_OK)
+    {
+        logger_write(base_ctx->http_consumer_logger, LOG_WARN, __func__, 0,
+                     "HTTP Consumer: Session_Request parse failed - "
+                     "<operation> missing or malformed");
+        return send_static_response(connection, MHD_HTTP_OK, "application/xml",
+            "<session><status>ERROR</status>"
+            "<error_code>SESSION_PARSE_FAILED</error_code>"
+            "<error_text>Session_Request could not be parsed - "
+            "&lt;operation&gt; is mandatory.</error_text></session>\n");
+    }
+
+    oci_context_t thread_ctx;
+    memset(&thread_ctx, 0, sizeof(thread_ctx));
+    if (OCI_Pool_get_session(base_ctx, &thread_ctx) != 0)
+    {
+        logger_write(base_ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
+                     "HTTP Consumer: OCI_Pool_get_session failed servicing "
+                     "a %s request", sess_req.operation);
+        return send_static_response(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                                     "text/plain",
+                                     "No database session currently available\n");
+    }
+    copy_shared_ctx_fields(&thread_ctx, base_ctx);
+    thread_ctx.active_tx = NULL;
+
+    char *result_xml = NULL;
+    enum MHD_Result ret;
+
+    if (strcasecmp(sess_req.operation, "CREATE_SESSION") == 0)
+    {
+        int rc = session_create(&thread_ctx, &sess_req, &result_xml);
+        logger_write(base_ctx->http_consumer_logger, LOG_INFO, __func__, 0,
+                     "HTTP Consumer: CREATE_SESSION %s",
+                     (rc == SESSION_OK) ? "PASS" : "FAILED");
+        ret = send_static_response(connection, MHD_HTTP_OK, "application/xml",
+            result_xml ? result_xml :
+            "<session><status>ERROR</status>"
+            "<error_code>SESSION_CREATE_FAILED</error_code></session>\n");
+    }
+    else if (strcasecmp(sess_req.operation, "END_SESSION") == 0)
+    {
+        char session_id[64] = "";
+        extract_simple_tag(payload, "session_id", session_id, sizeof(session_id));
+
+        if (!session_id[0])
+        {
+            ret = send_static_response(connection, MHD_HTTP_OK, "application/xml",
+                "<session><status>ERROR</status>"
+                "<error_code>SESSION_ID_MISSING</error_code>"
+                "<error_text>END_SESSION requires "
+                "&lt;session_id&gt;.</error_text></session>\n");
+        }
+        else
+        {
+            int rc = session_end(&thread_ctx, session_id,
+                                  SESSION_STATUS_LOGGED_OUT,
+                                  "CLIENT_REQUESTED", &result_xml);
+            logger_write(base_ctx->http_consumer_logger, LOG_INFO, __func__, 0,
+                         "HTTP Consumer: END_SESSION %s (session_id=%s)",
+                         (rc == SESSION_OK) ? "PASS" : "FAILED", session_id);
+            ret = send_static_response(connection, MHD_HTTP_OK, "application/xml",
+                result_xml ? result_xml :
+                "<session><status>ERROR</status>"
+                "<error_code>SESSION_END_FAILED</error_code></session>\n");
+        }
+    }
+    else
+    {
+        logger_write(base_ctx->http_consumer_logger, LOG_WARN, __func__, 0,
+                     "HTTP Consumer: unrecognised session operation '%s'",
+                     sess_req.operation);
+        ret = send_static_response(connection, MHD_HTTP_OK, "application/xml",
+            "<session><status>ERROR</status>"
+            "<error_code>UNKNOWN_SESSION_OPERATION</error_code></session>\n");
+    }
+
+    free(result_xml);
+    OCI_Pool_release_session(base_ctx, &thread_ctx);
     return ret;
 }
 
@@ -121,7 +254,7 @@ enum MHD_Result http_consumer_handle_request(void *cls,
 
     if (!state->is_post)
         return send_static_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED,
-                                     "Method Not Allowed - use POST\n");
+                                     "text/plain", "Method Not Allowed - use POST\n");
 
     /* Body chunk arriving - accumulate it. */
     if (*upload_data_size != 0)
@@ -133,7 +266,7 @@ enum MHD_Result http_consumer_handle_request(void *cls,
                          "rejecting", HTTP_CONSUMER_MAX_BODY_BYTES);
             *upload_data_size = 0;
             return send_static_response(connection, MHD_HTTP_PAYLOAD_TOO_LARGE,
-                                         "Payload Too Large\n");
+                                         "text/plain", "Payload Too Large\n");
         }
 
         size_t needed = state->body_len + *upload_data_size + 1;
@@ -149,7 +282,7 @@ enum MHD_Result http_consumer_handle_request(void *cls,
                 *upload_data_size = 0;
                 return send_static_response(connection,
                                              MHD_HTTP_INTERNAL_SERVER_ERROR,
-                                             "Internal Server Error\n");
+                                             "text/plain", "Internal Server Error\n");
             }
             state->body = grown;
             state->body_capacity = new_capacity;
@@ -164,24 +297,39 @@ enum MHD_Result http_consumer_handle_request(void *cls,
     }
 
     /* upload_data_size == 0 and we've already seen at least the header
-     * announcement call - body (if any) is fully received. This is the
-     * real Stage 2 dispatch: borrow a session, run the exact same
-     * pipeline File Consumer's worker.c uses, write back whatever it
-     * produces - PASS or ERROR, doesn't matter, both are always a
-     * valid, complete response_body per process_xml_file()'s own
-     * contract.                                                        */
+     * announcement call - body (if any) is fully received. */
+    const char *payload = state->body ? state->body : "";
+
+    /* Session lifecycle requests get routed separately, before the
+     * normal CRUD dispatch - see handle_session_request()'s own doc
+     * comment for why. Sniffed on the root element, not the usual
+     * <operation type="..."> attribute every CRUD request carries. */
+    if (strstr(payload, "<Session_Request") != NULL)
+    {
+        logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
+                     "HTTP Consumer: POST %s - Session_Request detected, "
+                     "routing to session handler", url);
+        return handle_session_request(ctx, connection, payload);
+    }
+
+    /* Otherwise, the real Stage 2 CRUD dispatch: borrow a session, run
+     * the exact same pipeline File Consumer's worker.c uses, write
+     * back whatever it produces - PASS or ERROR, doesn't matter, both
+     * are always a valid, complete response_body per
+     * process_xml_file()'s own contract. */
     logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
                  "HTTP Consumer: POST %s - dispatching %zu byte body",
                  url, state->body_len);
 
     oci_context_t thread_ctx;
+    memset(&thread_ctx, 0, sizeof(thread_ctx));
     if (OCI_Pool_get_session(ctx, &thread_ctx) != 0)
     {
         logger_write(ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
                      "HTTP Consumer: OCI_Pool_get_session failed - no "
                      "session available to service this request");
         return send_static_response(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
-                                     "No database session currently "
+                                     "text/plain", "No database session currently "
                                      "available\n");
     }
 
@@ -194,18 +342,10 @@ enum MHD_Result http_consumer_handle_request(void *cls,
     response_object_init(&resp);
 
     /* session_id_override is NULL - HTTP consumer doesn't participate
-     * in the Session Manager's real session model yet (that's later
-     * work); "http_request" is metadata only, used in logging and the
-     * response envelope, never looked up on disk (see
-     * process_xml_file()'s own doc comment in dispatcher.h).
-     *
-     * state->body can still be NULL here - a POST with no body at all
-     * never triggers the chunk-accumulation branch above, so nothing
-     * ever allocates it. Guard against handing dispatcher.c a raw NULL
-     * payload; an empty request should fail Level 1 parsing cleanly,
-     * not crash.                                                       */
-    const char *payload = state->body ? state->body : "";
-
+     * in real per-client session validation on the CRUD path yet
+     * (that's later work); "http_request" is metadata only, used in
+     * logging and the response envelope, never looked up on disk (see
+     * process_xml_file()'s own doc comment in dispatcher.h).          */
     int rc = process_xml_file(&thread_ctx, payload, (long)state->body_len,
                                "http_request", NULL, &resp);
 
