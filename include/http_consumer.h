@@ -4,75 +4,44 @@
 /* ======================================================================
  * http_consumer.h
  *
- * Stage 0 - bare listener, no business logic.
+ * Stage 2 (2026-08-16) - real dispatch. Every fully-received POST body
+ * now goes through process_xml_file() (dispatcher.c) - the same
+ * reusable entrypoint File Consumer's worker.c calls - and the real
+ * response body (PASS or ERROR envelope, XML or JSON per what
+ * process_xml_file() itself detected) is written back as the HTTP
+ * response.
  *
- * Per the staged plan (2026-08-14): this stage proves the MHD_daemon
- * start/stop lifecycle, TLS enforcement, and thread pool sizing only.
- * It does NOT parse the request envelope, does NOT call Level 1/Level 2,
- * and does NOT enqueue via queue_manager - that's Stage 2 onward, once
- * this bare skeleton is proven stable. The single handler here logs
- * whatever body arrives via ctx->http_consumer_logger and returns a
- * static 200 OK, exactly like file_consumer_scan_once() logging a scan
- * pass before any dispatcher wiring existed.
+ * HTTP status codes stay purely transport-level (Terry, 2026-08-16):
+ * every request that reaches process_xml_file() gets HTTP 200
+ * regardless of whether Data Manager's own result was PASS or ERROR -
+ * that result lives entirely inside the response payload, which the
+ * caller opens to find out. Non-200 is reserved for genuine HTTP/
+ * transport failures that never reach process_xml_file() at all: 405
+ * for non-POST, 413 for an oversized body. The app knows nothing about
+ * HTTP, by design - it stays that way.
+ *
+ * Session handling: borrowed per-request, not per-thread. Every other
+ * long-lived-thread consumer in this codebase (File Consumer, Session
+ * Manager, worker.c) borrows one session per thread and reuses it -
+ * this handler can't do that cleanly because MHD's internal thread
+ * pool is opaque to us (no "this pool thread just started" hook to
+ * borrow against). Per-request borrow/release is simpler and
+ * definitely correct; revisit only if the concurrency stress-testing
+ * stage shows it's actually a bottleneck.
  *
  * TLS is non-negotiable (Terry, 2026-08-14): http_consumer_runner_start()
  * refuses to start the daemon at all if the cert/key can't be loaded.
  * There is no plaintext fallback path anywhere in this module.
- *
- * ---------------------------------------------------------------------
- * REQUIRED WIRING - not part of this file, do before building:
- *
- * 1. oci_context_t (OCI_Connection.h) needs a new field, alongside the
- *    existing file_consumer_logger:
- *
- *        logger_t *http_consumer_logger;
- *
- * 2. app_config_t (ini_reader.h) needs a new block, alongside the
- *    existing file_consumer_log_* fields:
- *
- *        int  http_consumer_port;
- *        char http_consumer_bind_address[64];
- *        int  http_consumer_thread_pool_size;
- *        char http_consumer_tls_cert_file[256];
- *        char http_consumer_tls_key_file[256];
- *        char http_consumer_log_file_name[256];
- *        int  http_consumer_log_file_max_size;
- *        int  http_consumer_log_file_rotation_number;
- *        char http_consumer_log_level[20];
- *
- *    ...plus the matching load_ini()/ini_reader.c parsing lines and a
- *    [http_consumer] section in config.ini, e.g.:
- *
- *        [http_consumer]
- *        http_consumer_port=8443
- *        http_consumer_bind_address=0.0.0.0
- *        http_consumer_thread_pool_size=8
- *        http_consumer_tls_cert_file=Props/http_consumer_cert.pem
- *        http_consumer_tls_key_file=Props/http_consumer_key.pem
- *        http_consumer_log_file_name=logs/http_consumer_Data_Manager.log
- *        http_consumer_log_file_max_size=5242880
- *        http_consumer_log_file_rotation_number=5
- *        http_consumer_log_level=INFO
- *
- * 3. Data_Manager_Bootstrap.c's initialise_loggers() needs a new
- *    logger_t http_consumer_logger local + logger_init_str() call,
- *    same pattern as every other per-subsystem logger there.
- *
- * 4. For local/dev testing, a self-signed cert is enough:
- *
- *        openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
- *          -keyout Props/http_consumer_key.pem \
- *          -out    Props/http_consumer_cert.pem \
- *          -subj   "/CN=localhost"
- *
- *    A real certificate is a pre-req for anything beyond local testing -
- *    tracked separately, not a Stage 0 concern.
  * ====================================================================== */
 
 #include <microhttpd.h>
 
-#include "OCI_Connection.h"   /* oci_context_t */
-#include "ini_reader.h"       /* app_config_t  */
+#include "OCI_Connection.h"      /* oci_context_t */
+#include "ini_reader.h"          /* app_config_t  */
+#include "OCI_Connection_Pool.h" /* OCI_Pool_get_session/_release_session */
+#include "ctx_utils.h"           /* copy_shared_ctx_fields */
+#include "dispatcher.h"          /* process_xml_file */
+#include "response_object.h"     /* response_object_t */
 
 /*
  * http_consumer_handle_request()
@@ -81,14 +50,16 @@
  * request handler; cls is the http_consumer_ctx_t* set up by
  * http_consumer_runner_start() (see http_consumer_runner.h).
  *
- * Stage 0 behaviour only:
+ * Stage 2 behaviour:
  *   - Non-POST methods get 405 Method Not Allowed, logged at WARN.
  *   - POST body is accumulated across MHD's incremental calls (see
- *     http_consumer.c's own doc comment on why this needs con_cls),
- *     then logged in full at INFO once fully received.
- *   - Every request gets a static 200 OK ("Data Manager HTTP Consumer:
- *     Stage 0 - listener alive") regardless of body content - no
- *     parsing, no dispatch, nothing envelope-aware yet.
+ *     http_consumer.c's own doc comment on why this needs con_cls).
+ *   - Once fully received: borrows a session, calls process_xml_file()
+ *     (same entrypoint File Consumer's worker.c uses), writes
+ *     resp.response_body back as the HTTP response with a matching
+ *     Content-Type (resp.is_json decides XML vs JSON), releases the
+ *     session. Always HTTP 200 - see this header's own note above on
+ *     why.
  */
 enum MHD_Result http_consumer_handle_request(void *cls,
                                               struct MHD_Connection *connection,

@@ -627,7 +627,9 @@ typedef struct
   int  http_consumer_log_file_max_size;
   int  http_consumer_log_file_rotation_number;
   char http_consumer_log_level[20];  
-    
+
+  char http_consumer_ini_path[256];
+  int  http_dispatcher_lifetime_seconds;    
 
 } app_config_t;
 
@@ -641,6 +643,7 @@ int         ini_get_bool (const ini_file_t *ini, const char *name, int default_v
 void        ini_dump     (const ini_file_t *ini);
 int         load_ini     (const char *filename, app_config_t *config, oci_context_t *ctx);
 int         load_consumer_ini(const char *filename, app_config_t *config);
+int         load_http_consumer_ini(const char *filename, app_config_t *config);
 int         populate_ctx_from_ini(app_config_t *ini);
 
 #endif /* INI_READER_H */

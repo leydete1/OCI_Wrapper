@@ -505,6 +505,14 @@ static ctx_config_map_t ctx_map[] = {
 		    { "consumer_type",          CFG_STRING, offsetof(app_config_t, consumer_type),          "FILE", 0 },
 		    { "consumer_ini_path",      CFG_STRING, offsetof(app_config_t, consumer_ini_path),      "", 0 },
 
+	    /* HTTP Consumer lifetime decoupling (2026-08-16). Own ini file,
+	     * own path key, deliberately separate from consumer_ini_path
+	     * above - same reasoning as consumer_file.ini's own separation
+	     * from config.ini: HTTP's operational/lifecycle settings
+	     * (currently just lifetime) shouldn't be validated against, or
+	     * confused with, File Consumer's. */
+	    { "http_consumer_ini_path", CFG_STRING, offsetof(app_config_t, http_consumer_ini_path), "", 0 },
+
 };
 
 static size_t ctx_map_count = sizeof(ctx_map) / sizeof(ctx_map[0]);
@@ -872,6 +880,7 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
 
                     else if (!strcmp(m->name,"consumer_type"))                     maxlen=sizeof(config->consumer_type);
                     else if (!strcmp(m->name,"consumer_ini_path"))                 maxlen=sizeof(config->consumer_ini_path);
+                    else if (!strcmp(m->name,"http_consumer_ini_path"))            maxlen=sizeof(config->http_consumer_ini_path);
 
 
                     if (maxlen == 0)
@@ -1176,6 +1185,161 @@ int load_consumer_ini(const char *filename, app_config_t *config)
 
         printf("================================================================\n");
         printf("Refusing to start with %d missing consumer configuration key(s).\n",
+               missing_count);
+        printf("Add the key(s) above to %s and try again.\n", filename);
+        printf("================================================================\n\n");
+
+        free(loaded);
+        ini_free(&ini);
+        return -1;
+    }
+
+    free(loaded);
+    ini_free(&ini);
+    return 0;
+}
+
+
+/* ======================================================================
+ * HTTP Consumer configuration (lifetime decoupling, 2026-08-16)
+ *
+ * Same reasoning as consumer_map/load_consumer_ini() above: this gets
+ * its own map and its own loader, validated independently against
+ * consumer_http.ini, rather than folded into consumer_map (which is
+ * validated against consumer_file.ini specifically and would report
+ * this key as spuriously missing from that file, or vice versa).
+ *
+ * Deliberately just one key for now - http_dispatcher.lifetime_seconds,
+ * same 0-means-forever convention as File Consumer's own
+ * dispatcher.lifetime_seconds, but genuinely independent of it: HTTP
+ * consumer's own lifetime should never be coupled to File Consumer's,
+ * which was exactly the bug this whole change fixes. Room to grow this
+ * map later without disturbing consumer_map, exactly as file_consumer's
+ * own directory keys grew consumer_map over time.
+ * ====================================================================== */
+
+typedef struct {
+    const char *name;
+    cfg_type_t  type;
+    size_t      offset;
+    size_t      maxlen;
+    const char *default_str;
+    int         default_int;
+} http_consumer_config_map_t;
+
+static http_consumer_config_map_t http_consumer_map[] = {
+
+    { "http_dispatcher.lifetime_seconds", CFG_INT, offsetof(app_config_t, http_dispatcher_lifetime_seconds), 0,
+        NULL, 0 },
+};
+
+static size_t http_consumer_map_count = sizeof(http_consumer_map) / sizeof(http_consumer_map[0]);
+
+int load_http_consumer_ini(const char *filename, app_config_t *config)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return -1;
+
+    ini_file_t ini;
+    size_t capacity = 16;
+    ini.entries = malloc(capacity * sizeof(ini_entry_t));
+    ini.count   = 0;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp))
+    {
+        char *p = trim(line);
+        if (*p == '#' || (p[0] == '/' && p[1] == '/')) continue;
+        if (*p == '\0') continue;
+
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = '\0';
+
+        char *name  = trim(p);
+        char *value = trim(eq + 1);
+
+        {
+            char *cp = value;
+            while (*cp)
+            {
+                if ((cp[0] == '#') ||
+                    (cp[0] == '/' && cp[1] == '/'))
+                { *cp = '\0'; break; }
+                cp++;
+            }
+            value = trim(value);
+        }
+
+        if (ini.count >= capacity)
+        {
+            capacity *= 2;
+            ini.entries = realloc(ini.entries, capacity * sizeof(ini_entry_t));
+        }
+        ini.entries[ini.count].name  = strdup(name);
+        ini.entries[ini.count].value = strdup(value);
+        ini.count++;
+    }
+    fclose(fp);
+
+    int *loaded = calloc(http_consumer_map_count, sizeof(int));
+
+    for (size_t i = 0; i < http_consumer_map_count; i++)
+    {
+        http_consumer_config_map_t *m = &http_consumer_map[i];
+        char *field_ptr = (char *)config + m->offset;
+
+        loaded[i] = ini_has_key(&ini, m->name);
+
+        switch (m->type)
+        {
+            case CFG_INT:
+            {
+                int val = ini_get_int(&ini, m->name, m->default_int);
+                *((int *)field_ptr) = val;
+                break;
+            }
+            case CFG_STRING:
+            {
+                const char *val = ini_get_str(&ini, m->name, m->default_str);
+                if (val && m->maxlen > 0)
+                {
+                    strncpy(field_ptr, val, m->maxlen - 1);
+                    field_ptr[m->maxlen - 1] = '\0';
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    int missing_count = 0;
+    for (size_t i = 0; i < http_consumer_map_count; i++)
+        if (!loaded[i]) missing_count++;
+
+    if (missing_count > 0)
+    {
+        printf("\n");
+        printf("================================================================\n");
+        printf("HTTP CONSUMER CONFIG VALIDATION FAILED: %d expected setting(s) missing from %s\n",
+               missing_count, filename);
+        printf("================================================================\n");
+
+        for (size_t i = 0; i < http_consumer_map_count; i++)
+        {
+            if (loaded[i]) continue;
+            http_consumer_config_map_t *m = &http_consumer_map[i];
+            if (m->type == CFG_STRING)
+                printf("  MISSING: %-40s (would default to: \"%s\")\n",
+                       m->name, m->default_str ? m->default_str : "");
+            else
+                printf("  MISSING: %-40s (would default to: %d)\n",
+                       m->name, m->default_int);
+        }
+
+        printf("================================================================\n");
+        printf("Refusing to start with %d missing HTTP consumer configuration key(s).\n",
                missing_count);
         printf("Add the key(s) above to %s and try again.\n", filename);
         printf("================================================================\n\n");

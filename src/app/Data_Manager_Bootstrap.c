@@ -1183,6 +1183,16 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /* HTTP Consumer lifetime decoupling (2026-08-16). Loaded
+     * unconditionally here regardless of consumer_type, same as
+     * load_consumer_ini() above - actually starting HTTP Consumer only
+     * happens later, inside the consumer_type=HTTP branch below.       */
+    if (load_http_consumer_ini(config.http_consumer_ini_path, &config) != 0)
+    {
+        printf("Failed to load HTTP consumer ini file: %s\n", config.http_consumer_ini_path);
+        return -1;
+    }
+
     /* Record the real config.ini path for UT-INI-002's own re-run of
      * load_ini() against this same known-good file - see
      * unit_test_set_ini_path()'s own doc comment in
@@ -1882,28 +1892,12 @@ int main(int argc, char *argv[])
          * unconditionally right after start() told the thread to stop
          * before it ever ran a single pass.                           */
 
-        http_consumer_runner_t *http_runner = http_consumer_runner_start(&ctx, &config);
-        if (!http_runner)
-        {
-            logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "http_consumer_runner_start() failed - see "
-                         "http_consumer log above for the reason (most likely "
-                         "the TLS cert/key path is wrong or unreadable). "
-                         "Continuing with File Consumer only.");
-            /* Deliberately NOT fatal, unlike the fc_runner check above - File
-             * Consumer already started successfully and there's no reason a
-             * broken HTTP listener should take down a working File Consumer
-             * run. Revisit this call if that stance changes later. */
-        }
-        else
-        {
-            logger_write(&logger, LOG_INFO, __func__, 0,
-                         "HTTP Consumer TLS listener started alongside File "
-                         "Consumer");
-        }
-
-
-
+        /* HTTP Consumer no longer starts here (2026-08-16) - it was
+         * previously nested in this FILE-only block, which meant it
+         * only ever ran when consumer_type=FILE, and never ran at all
+         * when consumer_type=HTTP. It now has its own dedicated branch
+         * below, gated on consumer_type=HTTP, with its own lifetime
+         * (consumer_http.ini) fully decoupled from File Consumer's. */
 
 
 
@@ -1955,16 +1949,9 @@ int main(int argc, char *argv[])
                      "exited, all queues should now be empty");
 
 
-        if (http_runner)
-        {
-            logger_write(&logger, LOG_INFO, __func__, 0,
-                         "Stopping HTTP Consumer - blocks until all in-flight "
-                         "connections drain");
-            http_consumer_runner_stop(http_runner);
-            logger_write(&logger, LOG_INFO, __func__, 0,
-                         "HTTP Consumer stopped");
+        /* HTTP Consumer stop no longer happens here (2026-08-16) - see
+         * the matching removal note above where it used to start. */
 
-        }
         /* Session Manager stops AFTER the worker pool, not before or
          * concurrently - workers are the only producers onto touch_q,
          * so stopping them first guarantees no more touches will ever
@@ -1994,6 +1981,73 @@ int main(int argc, char *argv[])
 
         shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
         OCI_Disconnect_pool(&ctx);
+        logger_close(&logger);
+        return 0;
+    }
+
+    /* ================================================================
+     * consumer_type=HTTP (lifetime decoupling, 2026-08-16)
+     *
+     * Structurally parallel to the consumer_type=FILE branch above -
+     * same "own branch, own return 0 at the end" shape - but genuinely
+     * independent of it: File Consumer does not start here, and this
+     * consumer's lifetime comes from consumer_http.ini
+     * (http_dispatcher.lifetime_seconds), never from File Consumer's
+     * own dispatcher.lifetime_seconds in consumer_file.ini.
+     *
+     * http_consumer_runner_join() below plays the identical role
+     * file_consumer_runner_join() plays above - it's what keeps main()
+     * alive for as long as this consumer should run, including
+     * "forever" when http_dispatcher.lifetime_seconds=0 (external kill
+     * only, same convention as File Consumer's own equivalent
+     * setting).
+     *
+     * Stage 0: no worker pool, no queue_manager, no Session Manager -
+     * this consumer doesn't touch the database yet at all (see
+     * http_consumer.h's own Stage 0 scope note). Those get added in
+     * step with the stages that actually need them, not built ahead of
+     * that need.
+     * ================================================================ */
+    if (strcasecmp(config.consumer_type, "HTTP") == 0)
+    {
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "consumer_type=HTTP - File Consumer will not start "
+                     "this run");
+
+        http_consumer_runner_t *http_runner = http_consumer_runner_start(&ctx, &config);
+        if (!http_runner)
+        {
+            logger_write(&logger, LOG_ERROR, __func__, 0,
+                         "http_consumer_runner_start() failed - see "
+                         "http_consumer log above for the reason (most "
+                         "likely the TLS cert/key path is wrong or "
+                         "unreadable). consumer_type=HTTP with no working "
+                         "HTTP listener has nothing left to do - shutting "
+                         "down.");
+            metrics_writer_stop_and_join(ctx.metrics_writer);
+            shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
+            if (use_pool) OCI_Disconnect_pool(&ctx); else OCI_Disconnect(&ctx);
+            logger_close(&logger);
+            return -1;
+        }
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "HTTP Consumer TLS listener started - blocking until "
+                     "its own lifetime ends (http_dispatcher."
+                     "lifetime_seconds=%d in consumer_http.ini)",
+                     config.http_dispatcher_lifetime_seconds);
+
+        http_consumer_runner_join(http_runner);
+
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "HTTP Consumer lifetime ended - shutting down");
+
+        http_consumer_runner_stop(http_runner);   /* idempotent - see
+                                                       http_consumer_runner.h */
+
+        metrics_writer_stop_and_join(ctx.metrics_writer);
+        shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
+        if (use_pool) OCI_Disconnect_pool(&ctx); else OCI_Disconnect(&ctx);
         logger_close(&logger);
         return 0;
     }
