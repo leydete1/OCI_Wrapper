@@ -15,6 +15,7 @@
 
 #include "http_consumer_runner.h"
 #include "http_consumer.h"
+#include "http_worker_pool.h"
 #include "logger.h"
 
 struct http_consumer_runner {
@@ -101,7 +102,18 @@ static void stop_daemon_once(http_consumer_runner_t *runner, int from_watchdog)
                                    : "external stop request");
 
     if (runner->daemon)
-        MHD_stop_daemon(runner->daemon);   /* blocks until fully drained */
+        MHD_stop_daemon(runner->daemon);   /* blocks until fully drained -
+            by this point every in-flight request has already received its
+            response via http_worker_pool_dispatch()'s completion signal */
+
+    /* Stage 4 (2026-08-20) - stop the worker pool only after MHD itself
+     * has fully stopped, guarded by the same idempotency check above so
+     * this only ever runs once regardless of which path (watchdog
+     * self-stop vs explicit http_consumer_runner_stop()) got here
+     * first. Pure idle-worker cleanup at this point, not a race - see
+     * http_consumer_runner.h's own note. */
+    if (runner->hctx && runner->hctx->pool)
+        http_worker_pool_stop(runner->hctx->pool);
 
     if (http_logger)
         logger_write(http_logger, LOG_INFO, __func__, 0,
@@ -195,6 +207,24 @@ http_consumer_runner_t *http_consumer_runner_start(oci_context_t *ctx,
     runner->hctx->ctx    = ctx;
     runner->hctx->config = config;
 
+    /* Stage 4 (2026-08-20) - worker pool created and its threads
+     * running BEFORE MHD_start_daemon() below, so no connection can
+     * ever be accepted before something exists to service it. Treated
+     * as fatal if it fails - a daemon with no way to run CRUD requests
+     * shouldn't start accepting connections for them at all. */
+    runner->hctx->pool = http_worker_pool_start(ctx, config);
+    if (!runner->hctx->pool)
+    {
+        logger_write(ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
+                     "http_consumer_runner_start: http_worker_pool_start "
+                     "failed - refusing to start the listener");
+        free(runner->hctx);
+        free(runner->tls_cert);
+        free(runner->tls_key);
+        free(runner);
+        return NULL;
+    }
+
     int port = config->http_consumer_port > 0 ? config->http_consumer_port : 8443;
     int pool_size = config->http_consumer_thread_pool_size > 0
                     ? config->http_consumer_thread_pool_size : 8;
@@ -216,6 +246,7 @@ http_consumer_runner_t *http_consumer_runner_start(oci_context_t *ctx,
                      "http_consumer_runner_start: MHD_start_daemon failed "
                      "(port=%d, pool_size=%d) - port may already be in use, "
                      "or the TLS material may be malformed", port, pool_size);
+        http_worker_pool_stop(runner->hctx->pool);
         free(runner->tls_cert);
         free(runner->tls_key);
         free(runner->hctx);
@@ -225,8 +256,9 @@ http_consumer_runner_t *http_consumer_runner_start(oci_context_t *ctx,
 
     logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
                  "HTTP Consumer: TLS listener started on %s:%d, "
-                 "thread_pool_size=%d (Stage 0 - bare listener, no "
-                 "request pipeline wired up yet)",
+                 "thread_pool_size=%d, worker pool ready (queue 0 = "
+                 "dedicated writer, see http_worker_pool.c's own log "
+                 "line above for queue count/depth)",
                  config->http_consumer_bind_address[0]
                      ? config->http_consumer_bind_address : "0.0.0.0",
                  port, pool_size);

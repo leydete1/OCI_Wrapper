@@ -629,7 +629,10 @@ typedef struct
   char http_consumer_log_level[20];  
 
   char http_consumer_ini_path[256];
-  int  http_dispatcher_lifetime_seconds;    
+  int  http_dispatcher_lifetime_seconds;   
+  int  http_dispatcher_queue_count;
+  int  http_dispatcher_queue_depth;
+  
 
 } app_config_t;
 

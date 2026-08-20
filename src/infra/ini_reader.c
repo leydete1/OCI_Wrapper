@@ -1231,6 +1231,18 @@ static http_consumer_config_map_t http_consumer_map[] = {
 
     { "http_dispatcher.lifetime_seconds", CFG_INT, offsetof(app_config_t, http_dispatcher_lifetime_seconds), 0,
         NULL, 0 },
+
+    /* Stage 4 (2026-08-20) - HTTP consumer's own queue_manager sizing,
+     * same convention as File Consumer's own dispatcher.queue_count/
+     * queue_depth in consumer_file.ini. Queue 0 is always the
+     * dedicated writer queue (see http_worker_pool.h) - queue_count
+     * therefore needs to be at least 2 for read traffic to have
+     * anywhere else to go; a value of 1 would mean every request,
+     * writes and reads alike, funnels through the single writer queue. */
+    { "http_dispatcher.queue_count", CFG_INT, offsetof(app_config_t, http_dispatcher_queue_count), 0,
+        NULL, 0 },
+    { "http_dispatcher.queue_depth", CFG_INT, offsetof(app_config_t, http_dispatcher_queue_depth), 0,
+        NULL, 0 },
 };
 
 static size_t http_consumer_map_count = sizeof(http_consumer_map) / sizeof(http_consumer_map[0]);

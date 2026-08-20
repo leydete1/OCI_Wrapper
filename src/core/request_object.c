@@ -34,7 +34,18 @@ request_object_t *request_object_create(char       *payload,
             sizeof(req->session_id) - 1);
     req->session_id[sizeof(req->session_id) - 1] = '\0';
 
+    req->completion_ctx = NULL;   /* HTTP Consumer Stage 4 - see request_object.h.
+                                      Always NULL here; set explicitly via
+                                      request_object_set_completion() only by
+                                      the caller that actually needs it.       */
+
     return req;
+}
+
+void request_object_set_completion(request_object_t *req, void *completion_ctx)
+{
+    if (!req) return;
+    req->completion_ctx = completion_ctx;
 }
 
 void request_object_free(request_object_t *req)

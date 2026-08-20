@@ -39,6 +39,24 @@ typedef struct {
                                        (almost always "-" today) - this becomes
                                        the value Stage 3's future validation
                                        actually checks, not just a log label. */
+
+    void  *completion_ctx;         /* HTTP Consumer Stage 4 (2026-08-20). NULL
+                                       for every File Consumer request - always
+                                       set to NULL by request_object_create()
+                                       itself, so this is completely invisible
+                                       to File Consumer's own fire-and-forget
+                                       flow. Opaque to queue_manager/request_
+                                       object.c on purpose (owned/defined by
+                                       http_worker_pool.c) - non-NULL signals
+                                       "a thread is blocked waiting for this
+                                       one to finish; signal it when done"
+                                       instead of the normal write-to-file
+                                       completion. Set via
+                                       request_object_set_completion() below,
+                                       never via the constructor, so every
+                                       existing request_object_create() call
+                                       site across the codebase needs zero
+                                       changes. */
 } request_object_t;
 
 /*
@@ -69,5 +87,16 @@ request_object_t *request_object_create(char       *payload,
  * Frees req->payload and req itself. Safe to call with NULL.
  */
 void request_object_free(request_object_t *req);
+
+/*
+ * request_object_set_completion()   (HTTP Consumer Stage 4, 2026-08-20)
+ *
+ * Attaches an opaque completion context to an already-created
+ * request_object_t - see the completion_ctx field's own doc comment
+ * above for the full rationale. File Consumer never calls this; every
+ * File Consumer request_object_t keeps completion_ctx == NULL for its
+ * entire lifetime, exactly as before this stage existed.
+ */
+void request_object_set_completion(request_object_t *req, void *completion_ctx);
 
 #endif /* REQUEST_OBJECT_H */

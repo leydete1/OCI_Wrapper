@@ -41,6 +41,16 @@
  * may have already stopped the daemon itself in the lifetime_seconds>0
  * case. It always still frees the runner's own resources, regardless
  * of who actually triggered the MHD-level stop.
+ *
+ * Worker pool ownership (Stage 4, 2026-08-20): http_consumer_runner_
+ * start() also creates the http_worker_pool_t (http_worker_pool.h) and
+ * hands it to the request handler via http_consumer_ctx_t.pool -
+ * created BEFORE MHD_start_daemon() so no connection can ever be
+ * accepted before the pool exists to service it. http_consumer_runner_
+ * stop() stops the pool AFTER MHD_stop_daemon() has already returned -
+ * by that point every in-flight request has already received its
+ * response via the completion signal, so this is pure idle-worker
+ * cleanup, not a race with anything still in flight.
  * ====================================================================== */
 
 #include "OCI_Connection.h"   /* oci_context_t */

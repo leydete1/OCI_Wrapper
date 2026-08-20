@@ -2014,6 +2014,21 @@ int main(int argc, char *argv[])
                      "consumer_type=HTTP - File Consumer will not start "
                      "this run");
 
+        /* Bug fix (2026-08-21) - config.consumer_name is a static
+         * config.ini value with no consumer_type-awareness at all
+         * (see metrics.c - it's copied verbatim into every metrics row
+         * regardless of which consumer produced it). Found via a raw
+         * metrics_Data_Manager.csv row showing "Data Manager File
+         * host 1" as consumer_name on a request that was genuinely
+         * processed by HTTP consumer - a leftover File-Consumer-era
+         * label, not evidence File Consumer was actually running.
+         * Overridden here, before http_consumer_runner_start() so
+         * every metrics row this run produces carries the correct
+         * label from the very first request onward. */
+        strncpy(config.consumer_name, "Data Manager HTTP host 1",
+                sizeof(config.consumer_name) - 1);
+        config.consumer_name[sizeof(config.consumer_name) - 1] = '\0';
+
         http_consumer_runner_t *http_runner = http_consumer_runner_start(&ctx, &config);
         if (!http_runner)
         {

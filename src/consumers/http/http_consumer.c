@@ -1,7 +1,7 @@
 /* ======================================================================
  * http_consumer.c
  *
- * See http_consumer.h for the full Stage 2 design rationale.
+ * See http_consumer.h for the full Stage 2/Stage 4 design rationale.
  * ====================================================================== */
 
 #include <stdlib.h>
@@ -312,52 +312,76 @@ enum MHD_Result http_consumer_handle_request(void *cls,
         return handle_session_request(ctx, connection, payload);
     }
 
-    /* Otherwise, the real Stage 2 CRUD dispatch: borrow a session, run
-     * the exact same pipeline File Consumer's worker.c uses, write
-     * back whatever it produces - PASS or ERROR, doesn't matter, both
-     * are always a valid, complete response_body per
-     * process_xml_file()'s own contract. */
+    /* Stage 4 CRUD dispatch: build a RequestObject and hand it to the
+     * worker pool, which routes it to the right queue (T0 for writes,
+     * T1..T(n-1) round-robin for everything else) and blocks this
+     * thread until a dedicated worker thread finishes it. No session
+     * borrow here at all anymore - each worker owns its own session
+     * for its whole lifetime, borrowed once at startup (see
+     * http_worker_pool.c). */
     logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
-                 "HTTP Consumer: POST %s - dispatching %zu byte body",
-                 url, state->body_len);
+                 "HTTP Consumer: POST %s - dispatching %zu byte body via "
+                 "worker pool", url, state->body_len);
 
-    oci_context_t thread_ctx;
-    memset(&thread_ctx, 0, sizeof(thread_ctx));
-    if (OCI_Pool_get_session(ctx, &thread_ctx) != 0)
+    char *payload_copy = malloc(state->body_len + 1);
+    if (!payload_copy)
     {
         logger_write(ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
-                     "HTTP Consumer: OCI_Pool_get_session failed - no "
-                     "session available to service this request");
-        return send_static_response(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
-                                     "text/plain", "No database session currently "
-                                     "available\n");
+                     "HTTP Consumer: malloc failed copying request body "
+                     "for the worker pool");
+        return send_static_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                     "text/plain", "Internal Server Error\n");
+    }
+    memcpy(payload_copy, payload, state->body_len);
+    payload_copy[state->body_len] = '\0';
+
+    /* request_object_create() takes ownership of payload_copy - do not
+     * touch or free it after this call succeeds. filename/paths are
+     * File-Consumer-shaped traceability fields this consumer doesn't
+     * use - "-" placeholders, matching request_object_t's own documented
+     * fallback for "genuinely unavailable". session_id_override stays
+     * unset here too - same as Stage 2/3, HTTP consumer trusts whatever
+     * session_id is actually in the payload; Level 3 validates it. */
+    request_object_t *req = request_object_create(payload_copy, (long)state->body_len,
+                                                    "http_request", "-", "-", "-", NULL);
+    if (!req)
+    {
+        logger_write(ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
+                     "HTTP Consumer: request_object_create failed");
+        free(payload_copy);
+        return send_static_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                     "text/plain", "Internal Server Error\n");
     }
 
-    copy_shared_ctx_fields(&thread_ctx, ctx);
-    thread_ctx.active_tx = NULL;   /* no managed transaction - each HTTP
-                                       request self-commits, same Session
-                                       Model decision worker.c follows   */
-
     response_object_t resp;
-    response_object_init(&resp);
+    int rc = http_worker_pool_dispatch(hctx->pool, req, &resp);
 
-    /* session_id_override is NULL - HTTP consumer doesn't participate
-     * in real per-client session validation on the CRUD path yet
-     * (that's later work); "http_request" is metadata only, used in
-     * logging and the response envelope, never looked up on disk (see
-     * process_xml_file()'s own doc comment in dispatcher.h).          */
-    int rc = process_xml_file(&thread_ctx, payload, (long)state->body_len,
-                               "http_request", NULL, &resp);
+    if (rc != 0)
+    {
+        /* QUEUE_FULL - req was already freed inside dispatch(). Always
+         * HTTP 200 per the same reasoning as everything else in this
+         * file - QUEUE_FULL is a Data Manager-level outcome, not an
+         * HTTP transport failure, so it belongs in the payload, not
+         * the status code. */
+        logger_write(ctx->http_consumer_logger, LOG_WARN, __func__, 0,
+                     "HTTP Consumer: POST %s - QUEUE_FULL, all relevant "
+                     "queue(s) at depth", url);
+        return send_static_response(connection, MHD_HTTP_OK, "application/xml",
+            "<output_xml><execution_envelope><status>ERROR</status>"
+            "<error_code>QUEUE_FULL</error_code>"
+            "<error_text>Every relevant queue is currently at capacity - "
+            "try again shortly.</error_text></execution_envelope>"
+            "</output_xml>\n");
+    }
 
     logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
                  "HTTP Consumer: POST %s - %s (audit_id=%s, operation=%s)",
-                 url, (rc == 0) ? "PASS" : "ERROR",
+                 url, (resp.status == RESPONSE_STATUS_PASS) ? "PASS" : "ERROR",
                  resp.audit_id, resp.operation);
 
     enum MHD_Result ret = send_dispatch_response(connection, &resp);
 
     response_object_free(&resp);
-    OCI_Pool_release_session(ctx, &thread_ctx);
 
     return ret;
 }

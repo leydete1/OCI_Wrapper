@@ -4,12 +4,25 @@
 /* ======================================================================
  * http_consumer.h
  *
- * Stage 2 (2026-08-16) - real dispatch. Every fully-received POST body
- * now goes through process_xml_file() (dispatcher.c) - the same
- * reusable entrypoint File Consumer's worker.c calls - and the real
- * response body (PASS or ERROR envelope, XML or JSON per what
- * process_xml_file() itself detected) is written back as the HTTP
- * response.
+ * Stage 4 (2026-08-20) - CRUD dispatch now routes through
+ * http_worker_pool_dispatch() (http_worker_pool.h) instead of calling
+ * process_xml_file() directly on the MHD handler thread. Every INSERT/
+ * UPDATE/DELETE (and any mixed transaction containing one) goes to
+ * queue 0, the dedicated single-writer queue - one connection, exactly
+ * like File Consumer's contention_manager.mode=single_write_queue.
+ * SELECT/EXECUTE_PROCEDURE round-robin across the remaining queues -
+ * NOT a separate synchronous fast-path, the same queued path as
+ * writes, per Terry's explicit decision. The handler thread blocks on
+ * the dispatch call until a worker signals completion, then writes
+ * whatever it got back - PASS or ERROR, doesn't matter, same contract
+ * process_xml_file() always had.
+ *
+ * Session lifecycle (CREATE_SESSION/END_SESSION) is UNCHANGED from
+ * Stage 2/3 - handle_session_request() still borrows its own session
+ * per-request and calls session_create()/session_end() directly,
+ * bypassing the worker pool entirely. Nothing about session lifecycle
+ * touches contention-prone tables, so there's nothing to gain by
+ * queueing it.
  *
  * Session lifecycle (same day, 2026-08-16): CREATE_SESSION/END_SESSION
  * were never reachable through process_xml_file() at all - Level 2
@@ -60,6 +73,8 @@
 #include "ctx_utils.h"           /* copy_shared_ctx_fields */
 #include "dispatcher.h"          /* process_xml_file */
 #include "response_object.h"     /* response_object_t */
+#include "request_object.h"      /* request_object_t - Stage 4 */
+#include "http_worker_pool.h"    /* http_worker_pool_t, dispatch - Stage 4 */
 
 /*
  * http_consumer_handle_request()
@@ -104,14 +119,20 @@ void http_consumer_request_completed(void *cls,
 /*
  * http_consumer_ctx_t
  *
- * The cls closure handed to every MHD callback. Stage 0 only needs
- * ctx (for the logger) and config (for nothing yet, but every later
- * stage will need it here too - e.g. max body size, execute_async
- * defaults - so it's included now rather than threaded through later).
+ * The cls closure handed to every MHD callback.
+ *
+ * pool added Stage 4 (2026-08-20) - the CRUD dispatch path routes
+ * through it now (http_worker_pool_dispatch()) instead of calling
+ * process_xml_file() directly on the MHD handler thread. Owned/started
+ * by http_consumer_runner_start(), stopped by http_consumer_runner_
+ * stop() - see http_worker_pool.h for the full design. Session
+ * requests (CREATE_SESSION/END_SESSION) do NOT use pool - see
+ * handle_session_request() in the .c file, unchanged from Stage 2/3.
  */
 typedef struct {
-    oci_context_t *ctx;
-    app_config_t  *config;
+    oci_context_t       *ctx;
+    app_config_t         *config;
+    http_worker_pool_t  *pool;
 } http_consumer_ctx_t;
 
 #endif /* HTTP_CONSUMER_H */
