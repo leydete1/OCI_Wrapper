@@ -237,6 +237,24 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
                     }
                     xmlFree(content);
                 }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"execute_async") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->execute_async = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"async_call_back_url") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->async_call_back_url, (const char *)content,
+                                sizeof(req->async_call_back_url) - 1);
+                        trim_inplace(req->async_call_back_url);
+                    }
+                    xmlFree(content);
+                }
             }
 
             req->max_rows              = 0;
@@ -787,6 +805,20 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
             {
                 strncpy(req->sql, sql->valuestring, sizeof(req->sql) - 1);
                 trim_inplace(req->sql);
+            }
+
+            cJSON *async = cJSON_GetObjectItemCaseSensitive(op_json, "execute_async");
+            if (cJSON_IsNumber(async))
+                req->execute_async = (async->valueint != 0);
+            else if (cJSON_IsBool(async))
+                req->execute_async = cJSON_IsTrue(async) ? 1 : 0;
+
+            cJSON *cb_url = cJSON_GetObjectItemCaseSensitive(op_json, "async_call_back_url");
+            if (cJSON_IsString(cb_url) && cb_url->valuestring)
+            {
+                strncpy(req->async_call_back_url, cb_url->valuestring,
+                        sizeof(req->async_call_back_url) - 1);
+                trim_inplace(req->async_call_back_url);
             }
 
             req->max_rows              = 0;

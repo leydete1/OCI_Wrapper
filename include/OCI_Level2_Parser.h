@@ -77,6 +77,10 @@ extern "C" {
 #define LEVEL2_ERR_FIELD_INVALID      -8  /* a field failed validate_field(),
                                             * or referenced an unknown column,
                                             * or a NOT NULL column was omitted */
+#define LEVEL2_ERR_ASYNC_INVALID      -9  /* Stage 5 (2026-08-22) - execute_async=1
+                                            * with an empty/non-HTTPS
+                                            * async_call_back_url, or on a
+                                            * multi-operation transaction.     */
 
 /*
  * level2_validate_select()

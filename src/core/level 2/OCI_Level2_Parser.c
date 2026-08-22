@@ -108,6 +108,38 @@ int level2_validate_select(oci_context_t        *ctx,
         return LEVEL2_ERR_EMPTY_SQL;
     }
 
+    /* Stage 5 (2026-08-22) - execute_async/async_call_back_url. TLS-only,
+     * no exceptions - same stance as HTTP consumer's own inbound
+     * listener (Terry, 2026-08-21: "No one would implement or tolerate
+     * unencrypted traffic today"). Only checked when execute_async=1 -
+     * async_call_back_url is simply ignored on a normal synchronous
+     * request, exactly like every other optional field in this codebase. */
+    if (req->execute_async)
+    {
+        if (!req->async_call_back_url[0])
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "Level 2: execute_async=1 but async_call_back_url "
+                         "is empty");
+            set_error(error_detail, LEVEL2_ERR_ASYNC_INVALID, "LEVEL2_ASYNC_INVALID",
+                      "Request aborted. Level 2 validation failed - "
+                      "execute_async=1 requires a non-empty async_call_back_url.");
+            return LEVEL2_ERR_ASYNC_INVALID;
+        }
+
+        if (strncasecmp(req->async_call_back_url, "https://", 8) != 0)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "Level 2: async_call_back_url is not https:// "
+                         "('%s')", req->async_call_back_url);
+            set_error(error_detail, LEVEL2_ERR_ASYNC_INVALID, "LEVEL2_ASYNC_INVALID",
+                      "Request aborted. Level 2 validation failed - "
+                      "async_call_back_url must be https:// - plaintext "
+                      "callback URLs are not permitted.");
+            return LEVEL2_ERR_ASYNC_INVALID;
+        }
+    }
+
     OCI_DEPENDENCY_LIST deps;
     memset(&deps, 0, sizeof(deps));
 
@@ -1171,8 +1203,36 @@ int level2_validate(oci_context_t *ctx, input_c_request_t *request)
         switch (op->type)
         {
             case OP_SELECT:
+            {
+                /* Stage 5 (2026-08-22) - execute_async=1 is only valid
+                 * when this SELECT is the ONLY operation in its
+                 * transaction. Streaming batches mid-transaction while
+                 * other operations are still pending doesn't have a
+                 * coherent meaning - what would "async batching"
+                 * signify if the whole transaction hasn't committed
+                 * yet, and what happens to already-streamed batches if
+                 * a later operation fails and the transaction rolls
+                 * back? Checked here, not in level2_validate_select()
+                 * itself, since only this dispatch loop knows
+                 * request->operation_count. */
+                select_request_t *sel_req = (select_request_t *)op->payload;
+                if (sel_req && sel_req->execute_async && request->operation_count > 1)
+                {
+                    logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                                 "Level 2: execute_async=1 on a SELECT that "
+                                 "is not the only operation in its "
+                                 "transaction (operation_count=%d)",
+                                 request->operation_count);
+                    set_error(&op->validation_status, LEVEL2_ERR_ASYNC_INVALID,
+                              "LEVEL2_ASYNC_INVALID",
+                              "Request aborted. Level 2 validation failed - "
+                              "execute_async=1 is only valid when the SELECT "
+                              "is the only operation in its transaction.");
+                    break;
+                }
                 level2_validate_select(ctx, op, &op->validation_status);
                 break;
+            }
 
             case OP_INSERT:
                 level2_validate_insert(ctx, op, &op->validation_status);

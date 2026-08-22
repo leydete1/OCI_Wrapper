@@ -422,6 +422,25 @@ typedef struct {
                                     * unless overridden per-request      */
     int  fetch_batch_size;
     int  include_column_names;
+
+    /* Stage 5 (2026-08-22) - execute_async / async_call_back_url. Level 1
+     * only extracts what's on the wire; Level 2 is responsible for
+     * rejecting execute_async=1 on anything that isn't a clean, single-
+     * operation SELECT, and for requiring a valid HTTPS
+     * async_call_back_url whenever execute_async=1 (see
+     * OCI_Level2_Parser.c's own doc comment on this pair for the full
+     * validation contract - TLS-only callback URLs, no exceptions, same
+     * stance as HTTP consumer's own inbound listener). */
+    int  execute_async;               /* 0 (default) = normal synchronous
+                                          response, unchanged from every
+                                          prior stage. 1 = stream each
+                                          fetched batch to
+                                          async_call_back_url as it's
+                                          retrieved instead of building one
+                                          combined response.             */
+    char async_call_back_url[512];    /* "" unless execute_async=1. Must be
+                                          https:// - see Level 2 note
+                                          above.                          */
 } select_request_t;
 
 /* ================================================================== */

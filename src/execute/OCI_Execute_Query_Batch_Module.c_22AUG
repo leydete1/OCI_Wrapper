@@ -1791,42 +1791,6 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     unsigned int abs_rownum = 0;
     sword        fetch_status;
 
-    /* execute_async batch delivery (2026-08-22). cfg->async_batch_callback
-     * set means: don't accumulate rows into the whole-query rs at all
-     * (nobody renders it - this request never returns a normal combined
-     * response), instead render+deliver each fetch's worth of rows as
-     * its own self-contained document, then discard it, before fetching
-     * the next batch.
-     *
-     * Row numbering design decision, worth knowing about: resultset_t is
-     * fixed-size and index-bounds-checked against the record_count it
-     * was created with (resultset_get_row() rejects anything outside
-     * that range - confirmed in OCI_Resultset_Builder.c). A batch-sized
-     * resultset_t therefore CANNOT be indexed by the true, ever-growing
-     * abs_rownum past the first batch - every batch below is built with
-     * LOCAL, batch-relative row numbers (1, 2, 3... resetting each
-     * batch), not continuing global numbering. Each batch's envelope
-     * still carries enough to reconstruct global position if a receiver
-     * needs it (batch_number, and abs_rownum's running total is in the
-     * final batch's cumulative num_rows) - but individual <row number>
-     * values restart at 1 in every batch. Flagging this clearly since
-     * it's a real design choice, not an incidental detail - worth
-     * confirming this is what you want rather than continuous global
-     * row numbers.
-     *
-     * blobs_extracted/clobs_extracted on each batch's own envelope are
-     * genuinely THIS BATCH's counts (batch_blob_index/batch_clob_index,
-     * reset every iteration) - the ORIGINAL ask ("the stats envelope
-     * should only contain stats for current batch"). BLOB_index/
-     * CLOB_index keep accumulating the TRUE cumulative totals in
-     * parallel (added to after every batch), used only in the final
-     * batch's summary and in metrics - unchanged from the synchronous
-     * path's own existing accounting.                                  */
-    int is_async = (cfg->async_batch_callback != NULL);
-    int is_json_async = (cfg->ReturnFormat &&
-                          strcasecmp(cfg->ReturnFormat, "JSON") == 0);
-    int batch_number = 0;
-
     for (;;)
     {
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
@@ -1860,131 +1824,28 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
         if (rows_fetched == 0)
             break;
 
-        resultset_t *batch_rs = NULL;
-        int          batch_blob_index = 0;
-        int          batch_clob_index = 0;
-        uint64_t     batch_clob_bytes = 0;
-
-        if (is_async)
-        {
-            batch_rs = resultset_create((int)rows_fetched, (int)bc.col_count);
-            if (!batch_rs)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "resultset_create failed for async batch - "
-                             "rows_fetched=%u col_count=%u",
-                             rows_fetched, bc.col_count);
-                rc = -1;
-                goto Cleanup;
-            }
-        }
-
         for (ub4 r = 0; r < rows_fetched; r++)
         {
             abs_rownum++;
-            unsigned int row_num_for_rs = is_async ? (r + 1) : abs_rownum;
-
             logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                         "Processing r=%u abs_rownum=%u row_num_for_rs=%u",
-                         r, abs_rownum, row_num_for_rs);
+                         "Processing r=%u abs_rownum=%u", r, abs_rownum);
 
             int row_rc = build_row_xml_batch(ctx, &bc,
-                                              r, row_num_for_rs,
-                                              BLOB_list,
-                                              is_async ? &batch_blob_index : &BLOB_index,
+                                              r, abs_rownum,
+                                              BLOB_list, &BLOB_index,
                                               max_lobs,
-                                              is_async ? &batch_clob_index : &CLOB_index,
+                                              &CLOB_index,
                                               max_clobs,
-                                              is_async ? &batch_clob_bytes : &clob_bytes,
+                                              &clob_bytes,
                                               xml,
-                                              is_async ? batch_rs : rs);
+											  rs);
             if (row_rc != 0)
             {
                 logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                              "build_row_xml_batch failed r=%u", r);
-                if (batch_rs) resultset_free(batch_rs);
                 rc = -1;
                 goto Cleanup;
             }
-        }
-
-        int is_final_batch = (fetch_status == OCI_NO_DATA);
-
-        if (is_async)
-        {
-            batch_number++;
-            BLOB_index += batch_blob_index;   /* fold into the true
-                                                  cumulative totals -
-                                                  same accounting the
-                                                  sync path already does,
-                                                  just deferred per-batch */
-            CLOB_index += batch_clob_index;
-            clob_bytes += batch_clob_bytes;
-
-            char *resultset_body = is_json_async
-                ? response_write_json(ctx, batch_rs)
-                : response_write_xml(ctx, batch_rs);
-
-            if (!resultset_body)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "async batch %d: response_write_%s returned "
-                             "NULL - batch not delivered",
-                             batch_number, is_json_async ? "json" : "xml");
-            }
-            else
-            {
-                xml_builder_t *batch_xml = xml_create(strlen(resultset_body) + 1024);
-                if (batch_xml)
-                {
-                    xml_start_document(batch_xml);
-                    xml_append_raw(batch_xml, "<output_xml>\n");
-                    xml_start_execution(batch_xml);
-                    xml_append(batch_xml, "<batch_number>%d</batch_number>\n", batch_number);
-                    xml_append(batch_xml, "<final>%s</final>\n",
-                               is_final_batch ? "true" : "false");
-                    xml_append(batch_xml, "<blobs_extracted>%d</blobs_extracted>\n",
-                               batch_blob_index);
-                    xml_append(batch_xml, "<clobs_extracted>%d</clobs_extracted>\n",
-                               batch_clob_index);
-
-                    if (is_final_batch)
-                    {
-                        clock_gettime(CLOCK_MONOTONIC, &ts_end);
-                        double elapsed_so_far =
-                            (ts_end.tv_sec  - ts_start.tv_sec) +
-                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
-                        xml_append(batch_xml, "<num_rows>%u</num_rows>\n", abs_rownum);
-                        xml_append(batch_xml,
-                                   "<execution_time_total>%.6f</execution_time_total>\n",
-                                   elapsed_so_far);
-                        xml_append(batch_xml, "<truncated>%s</truncated>\n",
-                                   truncated ? "true" : "false");
-                    }
-
-                    xml_end_execution(batch_xml);
-                    xml_append_raw(batch_xml, resultset_body);
-                    xml_append_raw(batch_xml, "\n</output_xml>\n");
-                    xml_finalize(batch_xml);
-
-                    /* Best-effort, per this module's own design contract
-                     * (see execute_config_t's own doc comment) - return
-                     * value intentionally not checked here. A failed
-                     * delivery is the callback's own concern to log; it
-                     * must never stop this fetch loop or fail the
-                     * request.                                          */
-                    cfg->async_batch_callback(cfg->async_batch_user_data,
-                                               batch_xml->buffer,
-                                               is_json_async,
-                                               is_final_batch,
-                                               batch_number);
-
-                    xml_free(batch_xml);
-                }
-                free(resultset_body);
-            }
-
-            resultset_free(batch_rs);
         }
 
         if (fetch_status == OCI_NO_DATA)

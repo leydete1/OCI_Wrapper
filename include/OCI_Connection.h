@@ -76,10 +76,9 @@ typedef struct oci_context_t {
    logger_t		 *audit_logger;
    logger_t      *session_logger;
    logger_t      *sql_parser_logger;
+   logger_t      *http_consumer_logger;  /* http_Consumer_proposal */
    logger_t      *file_consumer_logger;  /* File_Consumer_proposal v1.2,
                                              Stage 2 - file_consumer.c   */
-   logger_t      *http_consumer_logger;  /* http_Consumer_proposal v1.2,
-                                             Stage 2 - http_consumer.c   */
    logger_t      *dispatcher_logger;     /* File_Consumer_proposal v1.2,
                                              Stage 1 - dispatcher.c   */
    logger_t      *worker_logger;         /* File_Consumer_proposal v1.2,
@@ -207,7 +206,29 @@ typedef struct {
                                   * set only when ReturnFormat is
                                   * "JSON". NULL otherwise.          */
     char *input_file_name;   /* source XML filename - set by dispatcher */
-    
+
+    /* Stage 5 (2026-08-22) - execute_async batch delivery. SELECT +
+     * execute_async=1 only; NULL/0 for every other operation and for a
+     * normal synchronous SELECT. When set, execute_query_batch() fires
+     * this once per fetched batch instead of accumulating the whole
+     * resultset into one combined response - see
+     * OCI_Execute_Query_Batch_Module.c's own doc comment on the fetch
+     * loop for the full design (self-contained per-batch documents,
+     * local batch-relative row numbering, cumulative totals only on
+     * the final batch).
+     *
+     * async_batch_callback's own contract: batch_body is a complete,
+     * well-formed document (the same <output_xml>/JSON-equivalent
+     * envelope shape a normal SELECT response uses) - not a fragment.
+     * is_json mirrors cfg->ReturnFormat. is_final is 1 on the last
+     * batch only. batch_number is 1-based. Return value is ignored -
+     * this is fire-and-forget by design (Terry, 2026-08-21: "best
+     * effort is best... if they timeout they can retry" - retry is the
+     * CALLER's responsibility, not this callback's).                   */
+    int (*async_batch_callback)(void *user_data, const char *batch_body,
+                                 int is_json, int is_final, int batch_number);
+    void *async_batch_user_data;
+
 } execute_config_t;
 
 

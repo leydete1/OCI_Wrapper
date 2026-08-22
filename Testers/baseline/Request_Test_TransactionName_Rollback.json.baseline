@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_txname_rollback_json","operation":"-","error_code":"LEVEL2_FIELD_INVALID","error_text":"Row 1: Field 'NUMBER_COL': invalid character 'n' in numeric value"}

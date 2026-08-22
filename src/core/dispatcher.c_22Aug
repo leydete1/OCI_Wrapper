@@ -46,7 +46,6 @@
 #include "OCI_Level2_Parser.h"
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Execute_Query_Batch_Module.h"
-#include "async_callback_client.h"   /* Stage 5 - execute_async delivery */
 #include "metrics.h"
 #include "OCI_Transaction_Manager.h"   /* tx_begin/tx_commit/tx_rollback -
                                           per-request transaction scoping,
@@ -413,41 +412,6 @@ static int dispatch_select(oci_context_t      *ctx,
 }
 
 /* ================================================================== */
-/*  Stage 5 - execute_async batch delivery                              */
-/*  Bridges execute_query_batch()'s generic per-batch callback          */
-/*  (execute_config_t.async_batch_callback - deliberately just a plain  */
-/*  function pointer + void*, so OCI_Execute_Query_Batch_Module.c stays */
-/*  consumer-agnostic and doesn't need to know async_callback_client.h  */
-/*  exists at all) to the actual outbound POST.                         */
-/* ================================================================== */
-
-typedef struct {
-    oci_context_t *ctx;
-    const char     *url;
-} async_dispatch_ctx_t;
-
-static int async_batch_dispatch_callback(void *user_data, const char *batch_body,
-                                          int is_json, int is_final, int batch_number)
-{
-    async_dispatch_ctx_t *adc = (async_dispatch_ctx_t *)user_data;
-
-    logger_write(adc->ctx->select_logger, LOG_INFO, __func__, 0,
-                 "execute_async: delivering batch %d (%s) to '%s', %zu bytes",
-                 batch_number, is_final ? "final" : "not final",
-                 adc->url, strlen(batch_body));
-
-    /* Best-effort - async_callback_post() itself already logs the
-     * specific failure reason (timeout, connection refused, non-2xx)
-     * at WARN. Nothing further to do here on failure - see this
-     * module's own design note in execute_config_t (OCI_Connection.h)
-     * on why retry is deliberately the caller's own responsibility,
-     * not ours.                                                        */
-    async_callback_post(adc->ctx, adc->url, batch_body, is_json);
-
-    return 0;
-}
-
-/* ================================================================== */
 /*  dispatch_select_new                                                 */
 /*  SELECT via the new format-agnostic pipeline (Level 1 already ran,   */
 /*  Level 2 already validated req->sql - this is purely the thin        */
@@ -508,29 +472,6 @@ static int dispatch_select_new(oci_context_t       *ctx,
      * of what was actually requested.                                  */
     cfg.ReturnFormat = is_json ? "JSON" : "XML";
 
-    /* Stage 5 (2026-08-22) - execute_async. Level 2 has already
-     * validated async_call_back_url (non-empty, https://, sole
-     * operation in its transaction) before this function is ever
-     * reached - see OCI_Level2_Parser.c's own validation for the full
-     * contract. async_dispatch_ctx just needs to outlive the
-     * execute_query_batch() call below, which is synchronous/blocking -
-     * a stack local is safe here, the callback only ever fires DURING
-     * that call, on this same thread.                                  */
-    async_dispatch_ctx_t async_dispatch_ctx;
-    if (req->execute_async)
-    {
-        async_dispatch_ctx.ctx = ctx;
-        async_dispatch_ctx.url = req->async_call_back_url;
-        cfg.async_batch_callback  = async_batch_dispatch_callback;
-        cfg.async_batch_user_data = &async_dispatch_ctx;
-
-        logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                     "SELECT/new audit_id=%s: execute_async=1, batches "
-                     "will be delivered to '%s' instead of one combined "
-                     "response", request->external_audit_id,
-                     req->async_call_back_url);
-    }
-
     int rc = execute_query_batch(ctx, &cfg);
 
     if (rc == 0)
@@ -538,59 +479,31 @@ static int dispatch_select_new(oci_context_t       *ctx,
         logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                      "PASS [SELECT/new] audit_id=%s: %s",
                      request->external_audit_id, filename);
+        if (cfg.xml && cfg.xml->OUTPUT_XML)
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                         "Result XML:\n%s", cfg.xml->OUTPUT_XML);
+        if (cfg.OUTPUT_JSON)
+            logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                         "Result JSON:\n%s", cfg.OUTPUT_JSON);
 
-        if (req->execute_async)
+        char *body = is_json ? cfg.OUTPUT_JSON
+                              : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
+        if (body)
         {
-            /* Batches already went to async_call_back_url during
-             * execute_query_batch() above - cfg.xml->OUTPUT_XML/
-             * cfg.OUTPUT_JSON are deliberately left unpopulated for an
-             * async request (see OCI_Execute_Query_Batch_Module.c's own
-             * design note on why), so build a small, honest
-             * acknowledgement instead of returning a misleadingly-empty
-             * resultset. http_worker_pool.c returns HTTP 202 before this
-             * is even built - see http_consumer.h's own note - but
-             * process_xml_file()'s own contract (a real, complete
-             * response_body on every call) still holds either way.      */
-            char ack[256];
-            snprintf(ack, sizeof(ack),
-                     is_json
-                       ? "{\"status\":\"ACCEPTED\",\"message\":\"Batches delivered to callback URL.\"}"
-                       : "<output_xml><status>ACCEPTED</status>"
-                         "<message>Batches delivered to callback URL.</message></output_xml>");
             resp->status  = RESPONSE_STATUS_PASS;
             resp->is_json = is_json;
             strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
             strncpy(resp->operation, "SELECT", sizeof(resp->operation) - 1);
-            resp->response_body = strdup(ack);
+            resp->response_body = body;
+            if (is_json) cfg.OUTPUT_JSON = NULL;
+            else         cfg.xml->OUTPUT_XML = NULL;
         }
         else
         {
-            if (cfg.xml && cfg.xml->OUTPUT_XML)
-                logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                             "Result XML:\n%s", cfg.xml->OUTPUT_XML);
-            if (cfg.OUTPUT_JSON)
-                logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                             "Result JSON:\n%s", cfg.OUTPUT_JSON);
-
-            char *body = is_json ? cfg.OUTPUT_JSON
-                                  : (cfg.xml ? cfg.xml->OUTPUT_XML : NULL);
-            if (body)
-            {
-                resp->status  = RESPONSE_STATUS_PASS;
-                resp->is_json = is_json;
-                strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
-                strncpy(resp->operation, "SELECT", sizeof(resp->operation) - 1);
-                resp->response_body = body;
-                if (is_json) cfg.OUTPUT_JSON = NULL;
-                else         cfg.xml->OUTPUT_XML = NULL;
-            }
-            else
-            {
-                build_error_envelope(resp, request->external_audit_id, "SELECT",
-                                      "NO_RESULT_BODY",
-                                      "execute_query_batch succeeded but produced no result body",
-                                      is_json);
-            }
+            build_error_envelope(resp, request->external_audit_id, "SELECT",
+                                  "NO_RESULT_BODY",
+                                  "execute_query_batch succeeded but produced no result body",
+                                  is_json);
         }
     }
     else
