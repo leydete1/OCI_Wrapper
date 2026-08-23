@@ -311,7 +311,8 @@ static int build_update_sql(oci_context_t        *ctx,
                               const col_metadata_t *cols,
                               int                   col_meta_count,
                               char                 *sql_buf,
-                              size_t                sql_max)
+                              size_t                sql_max,
+                              int                  *out_bind_pos)
 {
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "Building UPDATE SQL table='%s'", uc->table_name);
@@ -418,15 +419,33 @@ static int build_update_sql(oci_context_t        *ctx,
     }
 
     /* ---- Assemble ---- */
+    /* Bug fix (2026-08-26) - RETURNING ROWID INTO added here, at
+     * bind_pos's own final value after both the SET and WHERE loops
+     * above (unlike build_insert_sql()'s bind_num, bind_pos here already
+     * IS the next free placeholder - it's post-incremented for every
+     * real bind including WHERE keys, so no +1 adjustment needed).
+     * REPLACES the old post-execute OCIAttrGet(..., OCI_ATTR_ROWID, ...)
+     * approach entirely - see build_insert_sql()'s own doc comment
+     * (identical fix, same root cause) for the full rationale. This
+     * also closes the more serious, separate bug: the old LOB-write
+     * code only ever touched row_base, silently leaving every row
+     * after the first in a multi-row UPDATE batch with its BLOB/CLOB
+     * SET value never actually written - EMPTY_BLOB()/EMPTY_CLOB()
+     * with nothing filled in. */
+    int rowid_bind_pos = bind_pos;
+
     int n;
     if (strlen(uc->owner) > 0)
         n = snprintf(sql_buf, sql_max,
-                     "UPDATE %s.%s SET %s WHERE %s",
-                     uc->owner, uc->table_name, set_list, where_list);
+                     "UPDATE %s.%s SET %s WHERE %s "
+                     "RETURNING ROWID INTO :%d",
+                     uc->owner, uc->table_name, set_list, where_list,
+                     rowid_bind_pos);
     else
         n = snprintf(sql_buf, sql_max,
-                     "UPDATE %s SET %s WHERE %s",
-                     uc->table_name, set_list, where_list);
+                     "UPDATE %s SET %s WHERE %s "
+                     "RETURNING ROWID INTO :%d",
+                     uc->table_name, set_list, where_list, rowid_bind_pos);
 
     if (n < 0 || (size_t)n >= sql_max)
     {
@@ -434,6 +453,8 @@ static int build_update_sql(oci_context_t        *ctx,
                      "UPDATE SQL truncated - increase sql_buf size");
         return -1;
     }
+
+    if (out_bind_pos) *out_bind_pos = rowid_bind_pos;
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "UPDATE SQL: %s", sql_buf);
@@ -753,6 +774,16 @@ int execute_update_batch(oci_context_t     *ctx,
     OCIBind      **bind_hdls    = NULL;
     char         **scalar_bufs  = NULL;
     sb2           *indicators   = NULL;
+
+    /* Bug fix (2026-08-26) - RETURNING ROWID INTO array bind, one ROWID
+     * string per row in the current batch, populated directly by
+     * OCIStmtExecute() itself. Same pattern, same rationale as
+     * execute_insert_batch()'s identical fix. */
+    #define UPD_ROWID_BUF_SIZE 24
+    OCIBind       *rowid_bind_hdl   = NULL;
+    char          *rowid_bufs       = NULL;   /* flat [row * UPD_ROWID_BUF_SIZE] */
+    sb2           *rowid_indicators = NULL;   /* [row]                           */
+
     int            execute_count= 0;
     int            rows_updated = 0;
     int            lob_count    = 0;
@@ -894,8 +925,9 @@ int execute_update_batch(oci_context_t     *ctx,
 
     /* Build UPDATE SQL */
     char sql_buf[65536] = {0};
+    int  rowid_bind_num = 0;
     if (build_update_sql(ctx, uc, cols, col_meta_count,
-                          sql_buf, sizeof(sql_buf)) != 0)
+                          sql_buf, sizeof(sql_buf), &rowid_bind_num) != 0)
     {
         rc = -1;
         goto Cleanup;
@@ -976,6 +1008,21 @@ int execute_update_batch(oci_context_t     *ctx,
         scalar_bufs[idx] = calloc((size_t)execute_count,
                                    MAX_COL_VALUE_SIZE);
         if (!scalar_bufs[idx]) { rc = -1; goto Cleanup; }
+    }
+
+    /* Bug fix (2026-08-26) - allocate the RETURNING ROWID INTO array
+     * bind buffers once, sized to execute_count - same allocation
+     * pattern as scalar_bufs[] just above. calloc, not malloc, so
+     * every slot starts zeroed (naturally NUL-terminated once Oracle
+     * writes each row's fixed-length 18-character ROWID). */
+    rowid_bufs = calloc((size_t)execute_count, (size_t)UPD_ROWID_BUF_SIZE);
+    rowid_indicators = calloc((size_t)execute_count, sizeof(sb2));
+    if (!rowid_bufs || !rowid_indicators)
+    {
+        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                     "calloc failed for rowid_bufs/rowid_indicators");
+        rc = -1;
+        goto Cleanup;
     }
 
     /* ================================================================
@@ -1221,6 +1268,33 @@ int execute_update_batch(oci_context_t     *ctx,
             }
         }
 
+        /* Bug fix (2026-08-26) - bind the RETURNING ROWID INTO output,
+         * at the exact position build_update_sql() placed its
+         * placeholder (rowid_bind_num - already the correct next
+         * position, see that function's own comment). Same
+         * OCIBindByPos + OCIBindArrayOfStruct pattern every SET/WHERE
+         * bind above already uses. */
+        CHECK_OCI_UPD(ctx->errhp,
+            OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
+                         (ub4)rowid_bind_num,
+                         rowid_bufs,
+                         (sb4)UPD_ROWID_BUF_SIZE,
+                         SQLT_STR,
+                         rowid_indicators,
+                         NULL, NULL, 0, NULL,
+                         OCI_DEFAULT),
+            ctx, Cleanup);
+
+        if (batch_rows > 1)
+        {
+            CHECK_OCI_UPD(ctx->errhp,
+                OCIBindArrayOfStruct(rowid_bind_hdl, ctx->errhp,
+                                     (ub4)UPD_ROWID_BUF_SIZE,
+                                     (ub4)sizeof(sb2),
+                                     0, 0),
+                ctx, Cleanup);
+        }
+
         /* ---- Execute ---- */
         logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                      "Calling OCIStmtExecute iters=%d", batch_rows);
@@ -1235,49 +1309,35 @@ int execute_update_batch(oci_context_t     *ctx,
 
         rows_updated += batch_rows;
 
-        /* ---- Post-execute: write LOB data ---- */
+        /* ---- Post-execute: write LOB data ----
+         * Bug fix (2026-08-26) - this block used to only ever touch
+         * uc->values[row_base * uc->col_count + bc] - ONLY the first
+         * row of the batch - and fetched a single ROWID via
+         * OCIAttrGet(OCI_ATTR_ROWID) that's only reliable for a
+         * single-row-affecting statement anyway. For a multi-row UPDATE
+         * batch (different WHERE-key per row) with a LOB SET column,
+         * every row after the first silently never had its BLOB/CLOB
+         * value written at all. Fixed the same way as
+         * execute_insert_batch(): a real per-row loop, each row using
+         * its OWN correct ROWID from the RETURNING INTO array bind
+         * above, instead of one fetched-once, row_base-only value.
+         * has_lob is now a pure schema check (does this table's SET
+         * list include any LOB column at all) rather than a data check
+         * on row_base alone - the per-row is_empty check inside the
+         * loop already handles a genuinely empty LOB value on any
+         * individual row correctly. */
         {
-            int has_lob = 0;
-            for (int bc = 0; bc < uc->col_count && !has_lob; bc++)
+            int has_lob_column = 0;
+            for (int bc = 0; bc < uc->col_count && !has_lob_column; bc++)
                 for (int m = 0; m < col_meta_count; m++)
-                    if (strcasecmp(cols[m].col_name,
-                                   uc->col_names[bc]) == 0 &&
+                    if (strcasecmp(cols[m].col_name, uc->col_names[bc]) == 0 &&
                         (strcmp(cols[m].data_type, "BLOB")  == 0 ||
                          strcmp(cols[m].data_type, "CLOB")  == 0 ||
-                         strcmp(cols[m].data_type, "NCLOB") == 0) &&
-                        !uc->values[row_base * uc->col_count + bc].is_empty)
-                    { has_lob = 1; break; }
+                         strcmp(cols[m].data_type, "NCLOB") == 0))
+                    { has_lob_column = 1; break; }
 
-            if (has_lob)
+            if (has_lob_column)
             {
-                OCIRowid *rid_desc = NULL;
-                char      rid_str[100];
-                ub2       rid_len = sizeof(rid_str) - 1;
-
-                CHECK_OCI_UPD(ctx->errhp,
-                    OCIDescriptorAlloc(ctx->envhp,
-                                       (void **)&rid_desc,
-                                       OCI_DTYPE_ROWID, 0, NULL),
-                    ctx, Cleanup);
-
-                CHECK_OCI_UPD(ctx->errhp,
-                    OCIAttrGet(stmt, OCI_HTYPE_STMT,
-                               rid_desc, NULL,
-                               OCI_ATTR_ROWID, ctx->errhp),
-                    ctx, Cleanup);
-
-                CHECK_OCI_UPD(ctx->errhp,
-                    OCIRowidToChar(rid_desc,
-                                   (OraText *)rid_str,
-                                   &rid_len, ctx->errhp),
-                    ctx, Cleanup);
-
-                rid_str[rid_len] = '\0';
-                OCIDescriptorFree(rid_desc, OCI_DTYPE_ROWID);
-
-                logger_write(ctx->update_logger, LOG_DEBUG, __func__, 0,
-                             "Updated row ROWID='%s'", rid_str);
-
                 char tbl_fq[256] = {0};
                 if (strlen(uc->owner) > 0)
                     snprintf(tbl_fq, sizeof(tbl_fq), "%s.%s",
@@ -1286,38 +1346,47 @@ int execute_update_batch(oci_context_t     *ctx,
                     snprintf(tbl_fq, sizeof(tbl_fq), "%s",
                              uc->table_name);
 
-                for (int bc = 0; bc < uc->col_count; bc++)
+                for (int r = 0; r < batch_rows; r++)
                 {
-                    const char *btype = "VARCHAR2";
-                    for (int m = 0; m < col_meta_count; m++)
-                        if (strcasecmp(cols[m].col_name,
-                                       uc->col_names[bc]) == 0)
-                        { btype = cols[m].data_type; break; }
+                    const char *row_rowid =
+                        rowid_bufs + (size_t)r * UPD_ROWID_BUF_SIZE;
 
-                    const upd_field_value_t *fv =
-                        &uc->values[row_base * uc->col_count + bc];
-                    if (fv->is_empty) continue;
+                    logger_write(ctx->update_logger, LOG_DEBUG, __func__, 0,
+                                 "Updated row r=%d ROWID='%s'", r, row_rowid);
 
-                    if (strcmp(btype, "BLOB") == 0)
+                    for (int bc = 0; bc < uc->col_count; bc++)
                     {
-                        if (handle_blob_update(ctx,
-                                               uc->col_names[bc],
-                                               tbl_fq, rid_str,
-                                               fv->value, 0,
-                                               &lob_bytes) != 0)
-                        { rc = -1; goto Cleanup; }
-                        lob_count++;
-                    }
-                    else if (strcmp(btype, "CLOB")  == 0 ||
-                             strcmp(btype, "NCLOB") == 0)
-                    {
-                        if (handle_clob_update(ctx,
-                                               uc->col_names[bc],
-                                               btype, tbl_fq, rid_str,
-                                               upd_field_value_get(fv), 0,
-                                               &clob_bytes) != 0)
-                        { rc = -1; goto Cleanup; }
-                        lob_count++;
+                        const char *btype = "VARCHAR2";
+                        for (int m = 0; m < col_meta_count; m++)
+                            if (strcasecmp(cols[m].col_name,
+                                           uc->col_names[bc]) == 0)
+                            { btype = cols[m].data_type; break; }
+
+                        const upd_field_value_t *fv =
+                            &uc->values[(row_base + r) * uc->col_count + bc];
+                        if (fv->is_empty) continue;
+
+                        if (strcmp(btype, "BLOB") == 0)
+                        {
+                            if (handle_blob_update(ctx,
+                                                   uc->col_names[bc],
+                                                   tbl_fq, row_rowid,
+                                                   fv->value, 0,
+                                                   &lob_bytes) != 0)
+                            { rc = -1; goto Cleanup; }
+                            lob_count++;
+                        }
+                        else if (strcmp(btype, "CLOB")  == 0 ||
+                                 strcmp(btype, "NCLOB") == 0)
+                        {
+                            if (handle_clob_update(ctx,
+                                                   uc->col_names[bc],
+                                                   btype, tbl_fq, row_rowid,
+                                                   upd_field_value_get(fv), 0,
+                                                   &clob_bytes) != 0)
+                            { rc = -1; goto Cleanup; }
+                            lob_count++;
+                        }
                     }
                 }
             }
@@ -1594,6 +1663,13 @@ Cleanup:
     if (old_values) { free(old_values); old_values = NULL; }
     if (indicators) { free(indicators);  }
     if (bind_hdls)  { free(bind_hdls);   }
+    /* Bug fix (2026-08-26) - free the RETURNING ROWID INTO array bind
+     * buffers allocated alongside scalar_bufs/indicators above.
+     * rowid_bind_hdl needs no explicit free - owned by the statement,
+     * released with it via OCIStmtRelease() further down, same as
+     * bind_hdls[]'s own handles already were before this fix. */
+    if (rowid_bufs)       { free(rowid_bufs);       rowid_bufs       = NULL; }
+    if (rowid_indicators) { free(rowid_indicators); rowid_indicators = NULL; }
 
     if (uc)
     {
