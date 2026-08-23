@@ -382,8 +382,7 @@ static int build_insert_sql(oci_context_t        *ctx,
                               const col_metadata_t *cols,
                               int                   col_meta_count,
                               char                 *sql_buf,
-                              size_t                sql_max,
-                              int                  *out_bind_num)
+                              size_t                sql_max)
 {
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "Building INSERT SQL table='%s'", ic->table_name);
@@ -461,36 +460,15 @@ static int build_insert_sql(oci_context_t        *ctx,
     }
 
     int n;
-    /* Bug fix (2026-08-25) - RETURNING ROWID INTO added here, at
-     * bind_num+1 (the next bind position after every scalar column's
-     * own placeholder). This REPLACES the old post-execute
-     * OCIAttrGet(..., OCI_ATTR_ROWID, ...) approach entirely - that
-     * attribute is only reliable for a single-row-affecting statement
-     * (confirmed against real, reproducible test data: the captured
-     * ROWID pointed at a completely different table block than the
-     * row that was actually written), and for a multi-row batch insert
-     * it never told you WHICH row's ROWID you got anyway. Binding
-     * ROWID as an array-bound RETURNING INTO output instead gives one
-     * genuine, correct ROWID per row in the batch, straight from the
-     * statement that wrote it - see execute_insert_batch() for the
-     * array bind setup and how each row's own ROWID then gets used
-     * for that row's own LOB write (the second, more serious bug this
-     * same fix closes - the old code only ever wrote row_base's LOB
-     * content, silently leaving every other row in a multi-row LOB
-     * batch as an unfilled EMPTY_BLOB()/EMPTY_CLOB()).                 */
-    int rowid_bind_pos = bind_num + 1;
-
     if (strlen(ic->owner) > 0)
         n = snprintf(sql_buf, sql_max,
-                     "INSERT INTO %s.%s (%s) VALUES (%s) "
-                     "RETURNING ROWID INTO :%d",
+                     "INSERT INTO %s.%s (%s) VALUES (%s)",
                      ic->owner, ic->table_name,
-                     col_list, bind_list, rowid_bind_pos);
+                     col_list, bind_list);
     else
         n = snprintf(sql_buf, sql_max,
-                     "INSERT INTO %s (%s) VALUES (%s) "
-                     "RETURNING ROWID INTO :%d",
-                     ic->table_name, col_list, bind_list, rowid_bind_pos);
+                     "INSERT INTO %s (%s) VALUES (%s)",
+                     ic->table_name, col_list, bind_list);
 
     if (n < 0 || (size_t)n >= sql_max)
     {
@@ -498,8 +476,6 @@ static int build_insert_sql(oci_context_t        *ctx,
                      "INSERT SQL truncated - increase sql_buf size");
         return -1;
     }
-
-    if (out_bind_num) *out_bind_num = bind_num;
 
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                  "INSERT SQL: %s", sql_buf);
@@ -877,22 +853,6 @@ int execute_insert_batch(oci_context_t    *ctx,
     OCIBind       **bind_hdls  = NULL;   /* [col]                      */
     char          **scalar_bufs= NULL;   /* [col] flat array bind bufs */
     sb2            *indicators  = NULL;   /* [col * max_rows] flat      */
-
-    /* Bug fix (2026-08-25) - RETURNING ROWID INTO array bind. One
-     * ROWID string per row in the current batch, populated directly by
-     * OCIStmtExecute() itself - see build_insert_sql()'s own doc
-     * comment on why this replaces the old post-execute OCIAttrGet()
-     * approach. ROWID_BUF_SIZE=24 - Oracle's extended ROWID format is
-     * always exactly 18 characters; 24 leaves a safety margin. Buffer
-     * is calloc'd (zeroed) so each row's slot is naturally NUL-
-     * terminated after Oracle writes its fixed-length 18 characters,
-     * with no return-length array needed - same simplicity the
-     * existing scalar column binds already rely on. */
-    #define ROWID_BUF_SIZE 24
-    OCIBind       *rowid_bind_hdl   = NULL;
-    char          *rowid_bufs       = NULL;   /* flat [row * ROWID_BUF_SIZE] */
-    sb2           *rowid_indicators = NULL;   /* [row]                       */
-
     int             execute_count = 0;   /* rows per OCIStmtExecute    */
     int             rows_inserted = 0;
     int             lob_count     = 0;
@@ -1070,9 +1030,7 @@ int execute_insert_batch(oci_context_t    *ctx,
 
     /* ---- Build INSERT SQL ---- */
     char sql_buf[65536] = {0};
-    int  rowid_bind_num = 0;
-    if (build_insert_sql(ctx, ic, cols, col_meta_count, sql_buf, sizeof(sql_buf),
-                          &rowid_bind_num) != 0)
+    if (build_insert_sql(ctx, ic, cols, col_meta_count, sql_buf, sizeof(sql_buf)) != 0)
     {
         rc = -1;
         goto Cleanup;
@@ -1154,22 +1112,6 @@ int execute_insert_batch(oci_context_t    *ctx,
             rc = -1;
             goto Cleanup;
         }
-    }
-
-    /* Bug fix (2026-08-25) - allocate the RETURNING ROWID INTO array
-     * bind buffers once, sized to execute_count (the max rows any
-     * single OCIStmtExecute call in this function will ever process) -
-     * same allocation pattern as scalar_bufs[] just above. calloc, not
-     * malloc, so every slot starts zeroed - see the declaration site's
-     * own comment on why that matters for NUL-termination. */
-    rowid_bufs = calloc((size_t)execute_count, (size_t)ROWID_BUF_SIZE);
-    rowid_indicators = calloc((size_t)execute_count, sizeof(sb2));
-    if (!rowid_bufs || !rowid_indicators)
-    {
-        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "calloc failed for rowid_bufs/rowid_indicators");
-        rc = -1;
-        goto Cleanup;
     }
 
     /* ================================================================
@@ -1310,34 +1252,6 @@ int execute_insert_batch(oci_context_t    *ctx,
             }
         }
 
-        /* Bug fix (2026-08-25) - bind the RETURNING ROWID INTO output,
-         * at the exact position build_insert_sql() placed its
-         * placeholder (rowid_bind_num + 1 - see that function's own
-         * comment). Same OCIBindByPos + OCIBindArrayOfStruct pattern
-         * every scalar column above already uses - this is genuinely
-         * just another array bind, OCI's RETURNING clause needs no
-         * special bind mode beyond binding to the right position. */
-        CHECK_OCI_INS(ctx->errhp,
-            OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
-                         (ub4)(rowid_bind_num + 1),
-                         rowid_bufs,
-                         (sb4)ROWID_BUF_SIZE,
-                         SQLT_STR,
-                         rowid_indicators,
-                         NULL, NULL, 0, NULL,
-                         OCI_DEFAULT),
-            ctx, Cleanup);
-
-        if (batch_rows > 1)
-        {
-            CHECK_OCI_INS(ctx->errhp,
-                OCIBindArrayOfStruct(rowid_bind_hdl, ctx->errhp,
-                                     (ub4)ROWID_BUF_SIZE,
-                                     (ub4)sizeof(sb2),
-                                     0, 0),
-                ctx, Cleanup);
-        }
-
         /* ---- Execute this batch ---- */
         logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                      "Calling OCIStmtExecute iters=%d", batch_rows);
@@ -1354,63 +1268,47 @@ int execute_insert_batch(oci_context_t    *ctx,
 
         rows_inserted += batch_rows;
 
-        /* Bug fix (2026-08-25) - the old "always obtain ROWID after
-         * execute" block (OCIDescriptorAlloc/OCIAttrGet(OCI_ATTR_ROWID)/
-         * OCIRowidToChar) is REMOVED here - it's now entirely obsolete.
-         * rowid_bufs already holds one real, correct ROWID string per
-         * row in this batch, populated directly by the OCIStmtExecute()
-         * call above via the RETURNING ROWID INTO array bind - no
-         * separate fetch needed, and (per build_insert_sql()'s own
-         * comment) OCI_ATTR_ROWID was never reliable for a multi-row
-         * statement in the first place.
-         *
-         * rowid_str (function-scoped, used by the audit block after the
-         * main loop) is kept working exactly as before - it held
-         * whatever the LAST batch's single fetched rowid was, so it's
-         * set here to the last row's own rowid in the current batch,
-         * preserving that same "most recently written row" semantic
-         * without changing the audit trail's own behaviour, which is a
-         * separate concern from this fix. */
+        /* ---- Always obtain ROWID after execute ----
+         * rowid_str declared at function scope above the while loop
+         * so it is in scope for the audit block after the loop.       */
+        ub2       rid_len  = sizeof(rowid_str) - 1;
+        OCIRowid *rid_desc = NULL;
         memset(rowid_str, 0, sizeof(rowid_str));
-        if (batch_rows > 0)
+
+        if (OCIDescriptorAlloc(ctx->envhp, (void **)&rid_desc,
+                               OCI_DTYPE_ROWID, 0, NULL) == OCI_SUCCESS)
         {
-            const char *last_row_rowid =
-                rowid_bufs + (size_t)(batch_rows - 1) * ROWID_BUF_SIZE;
-            strncpy(rowid_str, last_row_rowid, sizeof(rowid_str) - 1);
+            if (OCIAttrGet(stmt, OCI_HTYPE_STMT,
+                           rid_desc, NULL,
+                           OCI_ATTR_ROWID, ctx->errhp) == OCI_SUCCESS)
+            {
+                OCIRowidToChar(rid_desc,
+                               (OraText *)rowid_str, &rid_len,
+                               ctx->errhp);
+                rowid_str[rid_len] = '\0';
+            }
+            OCIDescriptorFree(rid_desc, OCI_DTYPE_ROWID);
+            rid_desc = NULL;
         }
 
         logger_write(ctx->insert_logger, LOG_DEBUG, __func__, 0,
-                     "Inserted batch - last row ROWID='%s'", rowid_str);
+                     "Inserted batch ROWID='%s'", rowid_str);
 
-        /* ---- Post-execute: write LOB data via SELECT FOR UPDATE ----
-         * Bug fix (2026-08-25) - this block used to only ever touch
-         * ic->values[row_base * ic->col_count + bc] - i.e. ONLY the
-         * first row of the batch, for every column, regardless of
-         * batch_rows. Any row after the first in a multi-row LOB batch
-         * got its BLOB/CLOB column silently left as an unfilled
-         * EMPTY_BLOB()/EMPTY_CLOB() - real, confirmed silent data loss
-         * for every batch insert with more than one row and at least
-         * one LOB column. Fixed by wrapping the whole block in a real
-         * per-row loop, using row_base+r for the value lookup and
-         * rowid_bufs's own row-r slot (this row's OWN correct ROWID,
-         * from the array bind above) instead of the single, batch-wide
-         * rowid_str. has_blob is now a pure SCHEMA check (does this
-         * table have any LOB column at all) rather than a data check on
-         * row_base alone - the per-row is_empty check inside the loop
-         * already handles skipping a genuinely empty LOB value on any
-         * individual row correctly. */
+        /* ---- Post-execute: write LOB data via SELECT FOR UPDATE ---- */
         {
-            int has_blob_column = 0;
-            for (int bc = 0; bc < ic->col_count && !has_blob_column; bc++)
+            int has_blob = 0;
+            for (int bc = 0; bc < ic->col_count && !has_blob; bc++)
                 for (int m = 0; m < col_meta_count; m++)
-                    if (strcasecmp(cols[m].col_name, ic->col_names[bc]) == 0 &&
-                        (strcmp(cols[m].data_type, "BLOB")  == 0 ||
-                         strcmp(cols[m].data_type, "CLOB")  == 0 ||
-                         strcmp(cols[m].data_type, "NCLOB") == 0))
-                    { has_blob_column = 1; break; }
+                    if (strcasecmp(cols[m].col_name, ic->col_names[bc])==0
+                        && (strcmp(cols[m].data_type, "BLOB")  == 0 ||
+                            strcmp(cols[m].data_type, "CLOB")  == 0 ||
+                            strcmp(cols[m].data_type, "NCLOB") == 0)
+                        && !ic->values[row_base * ic->col_count + bc].is_empty)
+                    { has_blob = 1; break; }
 
-            if (has_blob_column)
+            if (has_blob)
             {
+                /* rowid_str already obtained above - no second fetch  */
                 char tbl_fq[256];
                 if (strlen(ic->owner) > 0)
                     snprintf(tbl_fq, sizeof(tbl_fq), "%s.%s",
@@ -1419,58 +1317,50 @@ int execute_insert_batch(oci_context_t    *ctx,
                     snprintf(tbl_fq, sizeof(tbl_fq), "%s",
                              ic->table_name);
 
-                for (int r = 0; r < batch_rows; r++)
+                for (int bc = 0; bc < ic->col_count; bc++)
                 {
-                    const char *row_rowid =
-                        rowid_bufs + (size_t)r * ROWID_BUF_SIZE;
+                    const char *btype = "VARCHAR2";
+                    for (int m = 0; m < col_meta_count; m++)
+                        if (strcasecmp(cols[m].col_name,
+                                       ic->col_names[bc]) == 0)
+                        { btype = cols[m].data_type; break; }
 
-                    for (int bc = 0; bc < ic->col_count; bc++)
+                    const insert_col_value_t *fv =
+                        &ic->values[row_base * ic->col_count + bc];
+                    if (fv->is_empty) continue;
+
+                    if (strcmp(btype, "BLOB") == 0)
                     {
-                        const char *btype = "VARCHAR2";
-                        for (int m = 0; m < col_meta_count; m++)
-                            if (strcasecmp(cols[m].col_name,
-                                           ic->col_names[bc]) == 0)
-                            { btype = cols[m].data_type; break; }
-
-                        const insert_col_value_t *fv =
-                            &ic->values[(row_base + r) * ic->col_count + bc];
-                        if (fv->is_empty) continue;
-
-                        if (strcmp(btype, "BLOB") == 0)
+                        if (handle_blob_insert(ctx, ic->col_names[bc],
+                                               tbl_fq, rowid_str,
+                                               fv->value, 0,
+                                               &lob_bytes) != 0)
                         {
-                            if (handle_blob_insert(ctx, ic->col_names[bc],
-                                                   tbl_fq, row_rowid,
-                                                   fv->value, 0,
-                                                   &lob_bytes) != 0)
-                            {
-                                logger_write(ctx->insert_logger, LOG_ERROR,
-                                             __func__, 0,
-                                             "handle_blob_insert failed "
-                                             "col=%d row=%d", bc,
-                                             row_base + r);
-                                rc = -1;
-                                goto Cleanup;
-                            }
-                            lob_count++;
+                            logger_write(ctx->insert_logger, LOG_ERROR,
+                                         __func__, 0,
+                                         "handle_blob_insert failed "
+                                         "col=%d row=%d", bc, row_base);
+                            rc = -1;
+                            goto Cleanup;
                         }
-                        else if (strcmp(btype, "CLOB")  == 0 ||
-                                 strcmp(btype, "NCLOB") == 0)
+                        lob_count++;
+                    }
+                    else if (strcmp(btype, "CLOB")  == 0 ||
+                             strcmp(btype, "NCLOB") == 0)
+                    {
+                        if (handle_clob_insert(ctx, ic->col_names[bc],
+                                               btype, tbl_fq, rowid_str,
+                                               insert_col_value_get(fv), 0,
+                                               &clob_bytes) != 0)
                         {
-                            if (handle_clob_insert(ctx, ic->col_names[bc],
-                                                   btype, tbl_fq, row_rowid,
-                                                   insert_col_value_get(fv), 0,
-                                                   &clob_bytes) != 0)
-                            {
-                                logger_write(ctx->insert_logger, LOG_ERROR,
-                                             __func__, 0,
-                                             "handle_clob_insert failed "
-                                             "col=%d row=%d", bc,
-                                             row_base + r);
-                                rc = -1;
-                                goto Cleanup;
-                            }
-                            lob_count++;
+                            logger_write(ctx->insert_logger, LOG_ERROR,
+                                         __func__, 0,
+                                         "handle_clob_insert failed "
+                                         "col=%d row=%d", bc, row_base);
+                            rc = -1;
+                            goto Cleanup;
                         }
+                        lob_count++;
                     }
                 }
             }
@@ -1801,14 +1691,6 @@ Cleanup:
 
     if (indicators) { free(indicators); indicators = NULL; }
     if (bind_hdls)  { free(bind_hdls);  bind_hdls  = NULL; }
-    /* Bug fix (2026-08-25) - free the RETURNING ROWID INTO array bind
-     * buffers allocated alongside scalar_bufs/indicators above.
-     * rowid_bind_hdl itself needs no explicit free - OCI bind handles
-     * are owned by the statement and released with it via
-     * OCIStmtRelease(stmt, ...) further down, same as bind_hdls[]'s own
-     * handles already were before this fix. */
-    if (rowid_bufs)       { free(rowid_bufs);       rowid_bufs       = NULL; }
-    if (rowid_indicators) { free(rowid_indicators); rowid_indicators = NULL; }
     if (ic)
     {
         if (ic->values) { free_insert_ctx_values(ic->values, ic->row_count, ic->col_count); ic->values = NULL; }
