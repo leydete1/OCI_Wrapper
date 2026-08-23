@@ -82,6 +82,27 @@ int process_xml_file(oci_context_t      *ctx,
                       response_object_t  *resp);
 
 /*
+ * validate_async_select_request()   (Stage 5 fix, 2026-08-24)
+ *
+ * Runs Level 1 parse + Level 2 validate ONLY - no session validation,
+ * no transaction, no dispatch/execute. Lets a caller (http_consumer.c)
+ * find out cheaply and synchronously whether a request will actually be
+ * accepted, before committing to a fire-and-forget dispatch path that
+ * has no way to report a rejection back once taken. See dispatcher.c's
+ * own doc comment on this function for the full rationale, including
+ * the specific bug it closes.
+ *
+ * Returns 0 if the request would be accepted (resp untouched - caller
+ * should proceed to dispatch normally). Returns -1 if rejected (resp is
+ * populated with a complete, ready-to-send error envelope - caller
+ * should send that directly and must not dispatch this request).
+ */
+int validate_async_select_request(oci_context_t     *ctx,
+                                   const char        *payload,
+                                   long               payload_length,
+                                   response_object_t *resp);
+
+/*
  * build_error_envelope()
  *
  * Synthesizes resp->response_body as a generic error envelope (XML or

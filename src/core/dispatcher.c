@@ -996,6 +996,109 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 /*  process_xml_file                                                    */
 /*  Read file, extract operation, dispatch to correct handler.         */
 /* ================================================================== */
+/* ================================================================== */
+/*  validate_async_select_request                                       */
+/*  Stage 5 fix (2026-08-24)                                            */
+/* ================================================================== */
+/*
+ * Runs Level 1 parse + Level 2 validate ONLY - no session validation,
+ * no transaction, no dispatch/execute. Built specifically to let
+ * http_consumer.c know, cheaply and synchronously, whether an
+ * execute_async=1 request will actually be accepted BEFORE deciding to
+ * route it onto the fire-and-forget path and tell the client 202.
+ *
+ * The bug this closes (found via real testing, 2026-08-23/24): the
+ * fire-and-forget path decided sync-vs-async purely from a text sniff
+ * on the raw payload ("does it contain execute_async=1"), with no idea
+ * whether Level 2 would actually accept the request. A request with an
+ * empty or non-HTTPS async_call_back_url, or execute_async=1 alongside
+ * a sibling write in the same transaction, would still get told
+ * "202 Accepted - batches will be delivered" - then get correctly
+ * rejected by Level 2 on the worker thread a moment later, with nowhere
+ * for that rejection to go (fire-and-forget has no completion signal to
+ * report through). The client was told success; nothing was ever
+ * delivered, silently.
+ *
+ * Cost of running Level 1/Level 2 twice (once here, once again on the
+ * worker thread once accepted) is genuinely small - both are pure
+ * parsing/validation, no database round trip at all - versus the
+ * multi-second cost of blocking on the full fetch+deliver loop this
+ * gate exists specifically to avoid.
+ *
+ * Returns 0 if the request would be accepted (Level 1 and Level 2 both
+ * pass, or the payload isn't even the new envelope format Level 1/
+ * Level 2 apply to at all) - resp is left untouched, caller should
+ * proceed to dispatch normally.
+ *
+ * Returns -1 if rejected - resp is populated with a complete, ready-to-
+ * send error envelope (the exact same shape build_error_envelope()
+ * always produces, matching every other rejection path in this file) -
+ * caller should send that directly as a normal response and must not
+ * dispatch this request at all.
+ */
+int validate_async_select_request(oci_context_t     *ctx,
+                                   const char        *payload,
+                                   long               payload_length,
+                                   response_object_t *resp)
+{
+    if (!level1_looks_like_new_format(payload, (size_t)payload_length))
+    {
+        /* Not the new envelope format - nothing for this gate to
+         * validate; let the normal path handle whatever this actually
+         * is. */
+        return 0;
+    }
+
+    input_c_request_t  new_request;
+    operation_status_t level1_error;
+    memset(&new_request, 0, sizeof(new_request));
+    memset(&level1_error, 0, sizeof(level1_error));
+
+    int level1_rc = level1_parse(ctx, payload, (size_t)payload_length,
+                                  &new_request, &level1_error);
+    if (level1_rc != LEVEL1_OK)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "execute_async pre-check FAIL [Level1] error_code=%s "
+                     "error_text=%s", level1_error.error_code,
+                     level1_error.error_text);
+        build_error_envelope(resp, "-", "-", level1_error.error_code,
+                              level1_error.error_text, 0);
+        return -1;
+    }
+
+    int is_json = (new_request.source_format == INPUT_FORMAT_JSON);
+
+    int level2_rc = level2_validate(ctx, &new_request);
+    if (level2_rc != LEVEL2_OK)
+    {
+        /* Same one-response-per-file limitation process_xml_file()
+         * itself already has (see its own comment on that) - the
+         * first operation's error is what surfaces as the whole
+         * request's result. */
+        const char *err_code = "-";
+        const char *err_text = "Level 2 validation failed";
+        if (new_request.operation_count > 0)
+        {
+            err_code = new_request.operations[0].validation_status.error_code;
+            err_text = new_request.operations[0].validation_status.error_text;
+        }
+
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "execute_async pre-check FAIL [Level2] audit_id=%s "
+                     "error_code=%s error_text=%s",
+                     new_request.external_audit_id, err_code, err_text);
+
+        build_error_envelope(resp, new_request.external_audit_id, "-",
+                              err_code, err_text, is_json);
+        level1_free_request(&new_request);
+        return -1;
+    }
+
+    level1_free_request(&new_request);
+    return 0;
+}
+
 int process_xml_file(oci_context_t      *ctx,
                       const char         *payload,
                       long                payload_length,

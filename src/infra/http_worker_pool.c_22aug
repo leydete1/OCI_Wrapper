@@ -143,20 +143,12 @@ static void *http_worker_thread_main(void *arg_v)
         }
         else
         {
-            /* Stage 5 (2026-08-23): this is now an EXPECTED outcome,
-             * not just a defensive fallback - http_worker_pool_dispatch_
-             * async() deliberately never attaches a completion_ctx for
-             * execute_async requests, since nobody's waiting for this
-             * response (the real result already went out via the
-             * per-batch callback). Still fine as a genuine fallback too,
-             * if some future caller ever forgets to attach one by
-             * mistake - either way there's nothing to signal and
-             * nothing to leak. Downgraded from WARN to INFO now that
-             * it's a normal, expected code path rather than an anomaly. */
-            logger_write(pool->base_ctx->http_consumer_logger, LOG_INFO, __func__, 0,
-                         "HTTP worker %d: dequeued a fire-and-forget "
-                         "request (no completion_ctx) - discarding its "
-                         "response, as expected",
+            /* Shouldn't happen on HTTP's own path - every request built by
+               http_consumer.c has a completion attached - but fail safe
+               rather than leak if it ever does. */
+            logger_write(pool->base_ctx->http_consumer_logger, LOG_WARN, __func__, 0,
+                         "HTTP worker %d: dequeued a request with no "
+                         "completion_ctx - discarding its response",
                          queue_index);
             response_object_free(&resp);
         }
@@ -294,38 +286,6 @@ int http_worker_pool_dispatch(http_worker_pool_t *pool,
 
     pthread_mutex_destroy(&completion.mutex);
     pthread_cond_destroy(&completion.cond);
-    return 0;
-}
-
-int http_request_is_async_select(const char *payload)
-{
-    return (contains_ci(payload, "<execute_async>1</execute_async>") ||
-            contains_ci(payload, "\"execute_async\":1")              ||
-            contains_ci(payload, "\"execute_async\": 1")             ||
-            contains_ci(payload, "\"execute_async\":true")           ||
-            contains_ci(payload, "\"execute_async\": true"));
-}
-
-int http_worker_pool_dispatch_async(http_worker_pool_t *pool,
-                                     request_object_t   *req)
-{
-    /* Deliberately no request_object_set_completion() call - a NULL
-     * completion_ctx is exactly what tells the worker thread this is
-     * fire-and-forget (see http_worker_thread_main()'s own handling of
-     * that case). Always the round-robin path, never queue 0 - Level 2
-     * has already confirmed execute_async only ever applies to a SELECT
-     * with no sibling writes in its transaction, so there is nothing to
-     * write-detect here. */
-    pthread_mutex_lock(&pool->enqueue_mutex);
-    int enqueue_rc = queue_manager_enqueue_excluding(pool->qm, req, 0);
-    pthread_mutex_unlock(&pool->enqueue_mutex);
-
-    if (enqueue_rc != 0)
-    {
-        request_object_free(req);
-        return -1;
-    }
-
     return 0;
 }
 

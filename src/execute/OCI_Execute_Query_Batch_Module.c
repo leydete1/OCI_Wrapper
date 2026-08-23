@@ -1140,11 +1140,25 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Checking Resultsetcache setup");
 
+        /* Bug fix (2026-08-23), found via real testing - moved up from
+         * just before the fetch loop, where it used to be computed too
+         * late to matter here. An execute_async=1 request must NEVER
+         * take the cache-hit shortcut a few lines below (which jumps
+         * straight to Cleanup and returns) - that shortcut skips the
+         * fetch loop entirely, and the fetch loop is where every batch
+         * actually gets built and delivered. A cache hit on an async
+         * request would otherwise return HTTP 202 and then silently
+         * deliver zero batches, with no error at all - worse than the
+         * separate cache-poisoning bug fixed alongside this one, since
+         * there's nothing to even notice went wrong. Treating async
+         * requests as an automatic cache miss forces them to always run
+         * for real. */
+        int is_async = (cfg->async_batch_callback != NULL);
 
        char cache_key[8192] = {0};
         int  served_from_cache = 0;
 
-        if (ctx->resultset_cache &&
+        if (ctx->resultset_cache && !is_async &&
             resultset_cache_make_key(cfg->SQL, cache_key, sizeof(cache_key)))
         {
             /* Compute both hashes as soon as the key is available     */
@@ -1821,8 +1835,10 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
      * CLOB_index keep accumulating the TRUE cumulative totals in
      * parallel (added to after every batch), used only in the final
      * batch's summary and in metrics - unchanged from the synchronous
-     * path's own existing accounting.                                  */
-    int is_async = (cfg->async_batch_callback != NULL);
+     * path's own existing accounting.
+     *
+     * is_async itself is no longer declared here - moved up before the
+     * cache lookup (see the fix there for why) and still in scope. */
     int is_json_async = (cfg->ReturnFormat &&
                           strcasecmp(cfg->ReturnFormat, "JSON") == 0);
     int batch_number = 0;
@@ -1908,7 +1924,22 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
             }
         }
 
-        int is_final_batch = (fetch_status == OCI_NO_DATA);
+        int is_final_batch = (fetch_status == OCI_NO_DATA) ||
+                              (abs_rownum >= (unsigned int)record_count);
+
+        /* Bug fix (2026-08-23), found via real testing - two consecutive
+         * live runs both showed every batch, including the true last
+         * one, marked (not final). Root cause: fetch_status ==
+         * OCI_NO_DATA is NOT reliably set on the same OCIStmtFetch2
+         * call that returns the last real row - Oracle typically only
+         * signals it on the NEXT call, which returns rows_fetched == 0
+         * and hits this loop's early "if (rows_fetched == 0) break;"
+         * before is_final_batch is ever evaluated for that (empty)
+         * iteration. record_count is already the correct, truncation-
+         * adjusted effective row limit (set above, before this loop
+         * even starts) - comparing the running abs_rownum against it
+         * is deterministic and doesn't depend on OCI's own exact
+         * NO_DATA-signalling timing. */
 
         if (is_async)
         {
@@ -1932,13 +1963,101 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                              "NULL - batch not delivered",
                              batch_number, is_json_async ? "json" : "xml");
             }
+            else if (is_json_async)
+            {
+                /* Bug fix (2026-08-24), found via real output on
+                 * webhook.site - this branch never existed before. The
+                 * resultset BODY was correctly rendered as JSON
+                 * (response_write_json() above), but the ENVELOPE
+                 * wrapping it (batch_number/final/blobs_extracted/etc)
+                 * was ALWAYS built with hardcoded XML tags via
+                 * xml_append(), regardless of is_json_async - which was
+                 * only ever consulted for picking the resultset
+                 * renderer and for the callback's own is_json flag, not
+                 * for the envelope shape itself. The result was a
+                 * malformed, mixed document: a real XML shell
+                 * ("<output_xml><execution_envelope>...") with a real
+                 * JSON blob spliced raw inside it. This branch builds a
+                 * genuine JSON envelope instead - one JSON object,
+                 * envelope fields and the resultset's own "resultset"
+                 * key together at the same top level, exactly mirroring
+                 * what the XML branch below already does correctly for
+                 * XML. */
+                clock_gettime(CLOCK_MONOTONIC, &ts_end);
+                double elapsed_so_far =
+                    (ts_end.tv_sec  - ts_start.tv_sec) +
+                    (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+
+                /* resultset_body is a complete JSON object of exactly
+                 * one key - {"resultset":[...]} (response_write_json()'s
+                 * own documented shape). Strip its outer braces so its
+                 * inner content ("resultset":[...]) can be merged into
+                 * THIS object at the same top level, rather than nested
+                 * as a sub-object under its own extra layer. */
+                size_t body_len = strlen(resultset_body);
+                const char *inner_start = resultset_body;
+                size_t      inner_len   = body_len;
+                if (body_len >= 2 && resultset_body[0] == '{' &&
+                    resultset_body[body_len - 1] == '}')
+                {
+                    inner_start = resultset_body + 1;
+                    inner_len   = body_len - 2;
+                }
+
+                size_t buf_size = inner_len + 512;
+                char  *json_buf = malloc(buf_size);
+                if (json_buf)
+                {
+                    int written = snprintf(json_buf, buf_size,
+                        "{\"batch_number\":%d,\"final\":%s,"
+                        "\"blobs_extracted\":%d,\"clobs_extracted\":%d,",
+                        batch_number, is_final_batch ? "true" : "false",
+                        batch_blob_index, batch_clob_index);
+
+                    if (is_final_batch && written > 0 && (size_t)written < buf_size)
+                    {
+                        written += snprintf(json_buf + written, buf_size - written,
+                            "\"num_rows\":%u,\"execution_time_total\":%.6f,"
+                            "\"truncated\":%s,",
+                            abs_rownum, elapsed_so_far,
+                            truncated ? "true" : "false");
+                    }
+
+                    if (written > 0 && (size_t)written < buf_size)
+                    {
+                        snprintf(json_buf + written, buf_size - written,
+                                 "%.*s}", (int)inner_len, inner_start);
+                    }
+
+                    /* Best-effort, per this module's own design contract
+                     * (see execute_config_t's own doc comment) - return
+                     * value intentionally not checked here. */
+                    cfg->async_batch_callback(cfg->async_batch_user_data,
+                                               json_buf,
+                                               is_json_async,
+                                               is_final_batch,
+                                               batch_number);
+                    free(json_buf);
+                }
+                free(resultset_body);
+            }
             else
             {
                 xml_builder_t *batch_xml = xml_create(strlen(resultset_body) + 1024);
                 if (batch_xml)
                 {
+                    /* Bug fix (2026-08-23), found via real output on
+                     * webhook.site - xml_start_document() already
+                     * writes "<output_xml>" itself (and xml_finalize()
+                     * already writes the closing tag) - the two manual
+                     * xml_append_raw() calls that used to sit here
+                     * duplicated both, producing "<output_xml>
+                     * <output_xml>..." Removed; xml_start_document()/
+                     * xml_finalize() alone are the correct, complete
+                     * pair, matching the exact same pattern the normal
+                     * synchronous response already uses elsewhere in
+                     * this file. */
                     xml_start_document(batch_xml);
-                    xml_append_raw(batch_xml, "<output_xml>\n");
                     xml_start_execution(batch_xml);
                     xml_append(batch_xml, "<batch_number>%d</batch_number>\n", batch_number);
                     xml_append(batch_xml, "<final>%s</final>\n",
@@ -1964,7 +2083,6 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
                     xml_end_execution(batch_xml);
                     xml_append_raw(batch_xml, resultset_body);
-                    xml_append_raw(batch_xml, "\n</output_xml>\n");
                     xml_finalize(batch_xml);
 
                     /* Best-effort, per this module's own design contract
@@ -2224,7 +2342,26 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     char *json_output = NULL;
     int   json_rc = response_writer_cache_store(
                         ctx,
-                        (ctx->resultset_cache && !served_from_cache && cache_key[0])
+                        /* Bug fix (2026-08-23), found via real cache
+                         * poisoning - an execute_async request leaves
+                         * rs deliberately empty (all row data went to
+                         * per-batch batch_rs instead - see the fetch
+                         * loop above), but this call ran unconditionally
+                         * regardless, storing that empty rs into
+                         * resultset_cache under the request's own SQL
+                         * text. Any LATER request sharing that exact SQL
+                         * - sync or async, this fixture or a completely
+                         * different one - then hit the same cache entry
+                         * and got the empty result back. Confirmed
+                         * directly: Test_Async_Valid.xml and
+                         * Request_Test_Select_2.json/.xml both use
+                         * "SELECT * FROM OCI_FIELD_TEST" - one poisoned
+                         * the cache, the other one silently inherited
+                         * it. !is_async added to the existing skip
+                         * condition below, same pattern already used for
+                         * served_from_cache/cache_key[0].              */
+                        (ctx->resultset_cache && !served_from_cache &&
+                         cache_key[0] && !is_async)
                             ? ctx->resultset_cache : NULL,
                         cache_key,
                         rs,

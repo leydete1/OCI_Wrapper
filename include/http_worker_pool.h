@@ -58,6 +58,16 @@
  * metrics showed write traffic split across three different
  * connections instead of one, with read/write traffic mixed on the
  * same connections that should have been strictly separated.
+ *
+ * execute_async fire-and-forget dispatch (Stage 5, 2026-08-23):
+ * http_worker_pool_dispatch_async() is a second entry point alongside
+ * the normal blocking http_worker_pool_dispatch() - same queue routing,
+ * same enqueue_mutex serialization, but no completion signal and no
+ * blocking. Lets http_consumer.c return HTTP 202 immediately for an
+ * execute_async=1 SELECT rather than holding the connection open for
+ * the whole fetch+deliver duration (which can genuinely take several
+ * seconds - confirmed directly, ~4.4s for a 5-batch delivery in first
+ * real testing).
  * ====================================================================== */
 
 #include <pthread.h>
@@ -107,6 +117,50 @@ http_worker_pool_t *http_worker_pool_start(oci_context_t *base_ctx,
 int http_worker_pool_dispatch(http_worker_pool_t *pool,
                                request_object_t   *req,
                                response_object_t  *out_resp);
+
+/*
+ * http_worker_pool_dispatch_async()   (Stage 5, 2026-08-23)
+ *
+ * Fire-and-forget variant of http_worker_pool_dispatch(). Routes req to
+ * the correct queue the same way, but does NOT attach a completion
+ * signal and does NOT block - returns as soon as the request is
+ * successfully enqueued. The eventual response gets silently discarded
+ * by the worker thread itself (completion_ctx == NULL is exactly what
+ * signals that - see http_worker_pool.c's own worker loop); nobody is
+ * waiting for it, by design. The real result already went to the
+ * request's own async_call_back_url via execute_query_batch()'s
+ * per-batch callback (see execute_config_t in OCI_Connection.h) - this
+ * function's only job is getting the request onto a queue and getting
+ * out of the way, so http_consumer.c can return HTTP 202 immediately.
+ *
+ * Only ever called for execute_async=1 SELECTs (Level 2 has already
+ * confirmed that's the only thing execute_async can apply to before
+ * this is ever reached), so this always routes via the round-robin
+ * path - never queue 0, no write-detection needed.
+ *
+ * req is ALWAYS consumed by this call, same contract as
+ * http_worker_pool_dispatch() - freed internally on a QUEUE_FULL
+ * failure, freed by the worker thread after processing on success.
+ *
+ * Returns 0 once the request is successfully enqueued. Returns -1 on
+ * QUEUE_FULL - the caller should build its own error response, since
+ * there is no completion signal to report through in this mode.
+ */
+int http_worker_pool_dispatch_async(http_worker_pool_t *pool,
+                                     request_object_t   *req);
+
+/*
+ * http_request_is_async_select()   (Stage 5, 2026-08-23)
+ *
+ * Cheap content sniff (not real parsing, same technique as
+ * http_request_is_write()) for execute_async=1 on the raw payload -
+ * XML or JSON. Used by http_consumer.c to decide between
+ * http_worker_pool_dispatch() (blocks, normal response) and
+ * http_worker_pool_dispatch_async() (fire-and-forget, immediate 202) -
+ * called BEFORE building the RequestObject, on the same payload string
+ * http_request_is_write() would also inspect.
+ */
+int http_request_is_async_select(const char *payload);
 
 /*
  * http_request_is_write()

@@ -353,6 +353,82 @@ enum MHD_Result http_consumer_handle_request(void *cls,
                                      "text/plain", "Internal Server Error\n");
     }
 
+    /* Stage 5 (2026-08-23) - execute_async fire-and-forget path. Sniffed
+     * on the payload BEFORE building/consuming req via the normal
+     * blocking dispatch, same lightweight content-check technique as
+     * write-detection (http_request_is_write()). Level 2 has already
+     * confirmed, upstream, that execute_async=1 only ever appears on a
+     * SELECT with no sibling writes - nothing further to validate here,
+     * this is purely a routing decision between the two dispatch modes. */
+    if (http_request_is_async_select(req->payload ? req->payload : ""))
+    {
+        /* Bug fix (2026-08-24), found via real testing - this sniff
+         * alone can't tell whether Level 2 will actually ACCEPT the
+         * request (empty/non-HTTPS async_call_back_url, or execute_
+         * async=1 alongside a sibling write, both get rejected by
+         * Level 2 - see OCI_Level2_Parser.c). Committing to the fire-
+         * and-forget path before knowing that meant an invalid request
+         * still got told "202 Accepted - batches will be delivered",
+         * then got correctly rejected on the worker thread a moment
+         * later with nowhere for that rejection to go - a false
+         * success told to the client, silently, every time. This gate
+         * runs Level 1/Level 2 synchronously first (cheap - pure
+         * parsing/validation, no DB round trip) so an invalid request
+         * gets its real error envelope now, on this thread, and never
+         * reaches the fire-and-forget path at all. See dispatcher.h's
+         * own doc comment on validate_async_select_request() for the
+         * full rationale. */
+        response_object_t validation_resp;
+        response_object_init(&validation_resp);
+
+        if (validate_async_select_request(ctx, req->payload ? req->payload : "",
+                                           (long)state->body_len, &validation_resp) != 0)
+        {
+            logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
+                         "HTTP Consumer: POST %s - execute_async=1 request "
+                         "rejected by Level 1/Level 2 pre-check, never "
+                         "reaches the async dispatch path (audit_id=%s)",
+                         url, validation_resp.audit_id);
+
+            enum MHD_Result ret = send_dispatch_response(connection, &validation_resp);
+            response_object_free(&validation_resp);
+            request_object_free(req);
+            return ret;
+        }
+        response_object_free(&validation_resp);
+
+        logger_write(ctx->http_consumer_logger, LOG_INFO, __func__, 0,
+                     "HTTP Consumer: POST %s - execute_async=1, enqueueing "
+                     "and returning 202 immediately - batches will be "
+                     "delivered to the request's own async_call_back_url",
+                     url);
+
+        int async_rc = http_worker_pool_dispatch_async(hctx->pool, req);
+        if (async_rc != 0)
+        {
+            /* QUEUE_FULL - req already freed inside dispatch_async().
+             * No completion signal exists in this mode to report a
+             * Data-Manager-level QUEUE_FULL envelope through the normal
+             * way, so this is the one case in the whole file where an
+             * enqueue failure surfaces as a real HTTP status rather
+             * than a 200 with an ERROR payload - there is no request-
+             * scoped response object left to put that payload in. */
+            logger_write(ctx->http_consumer_logger, LOG_WARN, __func__, 0,
+                         "HTTP Consumer: POST %s - QUEUE_FULL on the "
+                         "async path, all relevant queue(s) at depth",
+                         url);
+            return send_static_response(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                                         "text/plain",
+                                         "Every relevant queue is currently "
+                                         "at capacity - try again shortly.\n");
+        }
+
+        return send_static_response(connection, MHD_HTTP_ACCEPTED, "application/xml",
+            "<output_xml><status>ACCEPTED</status>"
+            "<message>Request accepted - batches will be delivered to "
+            "the provided callback URL.</message></output_xml>\n");
+    }
+
     response_object_t resp;
     int rc = http_worker_pool_dispatch(hctx->pool, req, &resp);
 
