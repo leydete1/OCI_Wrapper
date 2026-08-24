@@ -56,6 +56,13 @@
 #include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
 #include "OCI_Transaction_Manager.h"
 
+/* Bug fix (2026-08-25/27) - moved to file scope from inside
+ * execute_update_batch() itself, since the dynamic ROWID collector
+ * helpers below (added 2026-08-27) also need it, and they're defined
+ * ahead of that function in this file. Oracle's extended ROWID format
+ * is always exactly 18 characters; 24 leaves a safety margin. */
+#define ROWID_BUF_SIZE 24
+
 /* ------------------------------------------------------------------ */
 /*  OCI error macro                                                     */
 /* ------------------------------------------------------------------ */
@@ -312,7 +319,7 @@ static int build_update_sql(oci_context_t        *ctx,
                               int                   col_meta_count,
                               char                 *sql_buf,
                               size_t                sql_max,
-                              int                  *out_bind_pos)
+                              int                  *out_bind_num)
 {
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "Building UPDATE SQL table='%s'", uc->table_name);
@@ -419,22 +426,19 @@ static int build_update_sql(oci_context_t        *ctx,
     }
 
     /* ---- Assemble ---- */
-    /* Bug fix (2026-08-26) - RETURNING ROWID INTO added here, at
-     * bind_pos's own final value after both the SET and WHERE loops
-     * above (unlike build_insert_sql()'s bind_num, bind_pos here already
-     * IS the next free placeholder - it's post-incremented for every
-     * real bind including WHERE keys, so no +1 adjustment needed).
-     * REPLACES the old post-execute OCIAttrGet(..., OCI_ATTR_ROWID, ...)
-     * approach entirely - see build_insert_sql()'s own doc comment
-     * (identical fix, same root cause) for the full rationale. This
-     * also closes the more serious, separate bug: the old LOB-write
-     * code only ever touched row_base, silently leaving every row
-     * after the first in a multi-row UPDATE batch with its BLOB/CLOB
-     * SET value never actually written - EMPTY_BLOB()/EMPTY_CLOB()
-     * with nothing filled in. */
+    int n;
+    /* Bug fix (2026-08-25) - RETURNING ROWID INTO, same fix as
+     * execute_insert_batch()'s own (see build_insert_sql()'s doc
+     * comment for the full rationale - OCI_ATTR_ROWID unreliable for
+     * multi-row statements, and the old code only ever wrote row_base's
+     * LOB content regardless of how many rows the UPDATE actually
+     * matched). One difference from the INSERT side worth noting:
+     * bind_pos here is POST-incremented throughout the SET and WHERE
+     * loops above (used, then incremented) - so its final value is
+     * ALREADY the next available bind position, unlike build_insert_
+     * sql()'s bind_num which needed +1. Using bind_pos directly here. */
     int rowid_bind_pos = bind_pos;
 
-    int n;
     if (strlen(uc->owner) > 0)
         n = snprintf(sql_buf, sql_max,
                      "UPDATE %s.%s SET %s WHERE %s "
@@ -454,7 +458,7 @@ static int build_update_sql(oci_context_t        *ctx,
         return -1;
     }
 
-    if (out_bind_pos) *out_bind_pos = rowid_bind_pos;
+    if (out_bind_num) *out_bind_num = rowid_bind_pos;
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "UPDATE SQL: %s", sql_buf);
@@ -763,6 +767,166 @@ Cleanup:
 /* ================================================================== */
 /*  execute_update_batch - main entry point                            */
 /* ================================================================== */
+/* ================================================================== */
+/*  Dynamic ROWID collector - OCIBindDynamic support for multi-row     */
+/*  RETURNING ROWID INTO                                                */
+/*  Bug fix (2026-08-27)                                                */
+/* ================================================================== */
+/*
+ * Closes the remaining gap in the 2026-08-25 RETURNING ROWID INTO fix.
+ * uc->row_count is ALWAYS 1 (single WHERE + single SET per UPDATE
+ * request - see build_update_ctx_from_request()'s own comment), so
+ * OCIStmtExecute() always runs with iters=1 - but that ONE execution's
+ * WHERE clause can still match MANY physical rows if it isn't unique
+ * (confirmed directly against real data: WHERE NUMBER_COL=300 matching
+ * 209 rows). A STATIC array bind, sized to execute_count (the number
+ * of BIND ITERATIONS, always 1 here - never the number of rows one
+ * iteration's WHERE clause might match), can only ever receive ONE
+ * ROWID back - Oracle silently reports just one of the 209 affected
+ * rows, and only that one row's LOB content ever got written.
+ *
+ * OCIBindDynamic replaces the static bind for the ROWID output only.
+ * Oracle invokes rowid_out_callback() once per row it's actually
+ * returning a value for - genuinely unknown in advance how many times,
+ * since it depends on how many rows the WHERE clause matches at
+ * execute time. The callback grows this collector as needed and hands
+ * back a fresh slot each call; after OCIStmtExecute() returns,
+ * collector.count is the REAL number of affected rows.
+ *
+ * All discovered rows share the exact same SET-clause field values -
+ * there's only ever ONE set of values, since that's what a normal
+ * UPDATE...WHERE genuinely does. This fix's job is purely "write that
+ * one set of LOB content to every row Oracle says was actually
+ * affected", using each row's own correct ROWID - not "give each row
+ * different content", which isn't what's happening here and isn't
+ * something today's request schema can even express (see
+ * HTTP_Consumer_Design_Specification.docx Section 12 for the separate,
+ * still-out-of-scope case that would need genuinely per-row values).
+ */
+typedef struct {
+    char           *bufs;       /* flat, growable: [count * ROWID_BUF_SIZE] */
+    sb2            *inds;       /* growable: [count]                        */
+    ub2            *rcodes;     /* growable: [count] - return codes, kept
+                                    for completeness, not currently
+                                    inspected                                */
+    ub4             alen;       /* struct-owned, not shared/static - see
+                                    rowid_out_callback()'s own note below    */
+    ub4             count;      /* rows Oracle has actually reported so far */
+    ub4             capacity;   /* allocated capacity, in rows               */
+    oci_context_t  *ctx;        /* for logging on growth failure only        */
+} dynamic_rowid_collector_t;
+
+static void dynamic_rowid_collector_init(dynamic_rowid_collector_t *c, oci_context_t *ctx)
+{
+    memset(c, 0, sizeof(*c));
+    c->ctx = ctx;
+}
+
+static void dynamic_rowid_collector_free(dynamic_rowid_collector_t *c)
+{
+    free(c->bufs);
+    free(c->inds);
+    free(c->rcodes);
+    memset(c, 0, sizeof(*c));
+}
+
+/* Grows the collector to hold at least (index+1) rows if it doesn't
+ * already - doubling growth, starting capacity 16 (handles the common
+ * "matches a handful of rows" case with zero reallocation). Returns 1
+ * on success, 0 on allocation failure. */
+static int dynamic_rowid_collector_ensure(dynamic_rowid_collector_t *c, ub4 index)
+{
+    if (index < c->capacity) return 1;
+
+    ub4 new_capacity = c->capacity == 0 ? 16 : c->capacity * 2;
+    while (new_capacity <= index) new_capacity *= 2;
+
+    char *new_bufs   = realloc(c->bufs,   (size_t)new_capacity * ROWID_BUF_SIZE);
+    sb2  *new_inds   = realloc(c->inds,   (size_t)new_capacity * sizeof(sb2));
+    ub2  *new_rcodes = realloc(c->rcodes, (size_t)new_capacity * sizeof(ub2));
+    if (!new_bufs || !new_inds || !new_rcodes)
+    {
+        logger_write(c->ctx->update_logger, LOG_ERROR, __func__, 0,
+                     "dynamic_rowid_collector: realloc failed growing to "
+                     "%u rows", new_capacity);
+        if (new_bufs)   c->bufs   = new_bufs;
+        if (new_inds)   c->inds   = new_inds;
+        if (new_rcodes) c->rcodes = new_rcodes;
+        return 0;
+    }
+
+    /* Zero the newly-added region - each new ROWID slot is naturally
+     * NUL-terminated once Oracle writes its fixed-length 18 characters,
+     * same reasoning the earlier static array bind's own calloc used. */
+    memset(new_bufs + (size_t)c->capacity * ROWID_BUF_SIZE, 0,
+           (size_t)(new_capacity - c->capacity) * ROWID_BUF_SIZE);
+
+    c->bufs = new_bufs;
+    c->inds = new_inds;
+    c->rcodes = new_rcodes;
+    c->capacity = new_capacity;
+    return 1;
+}
+
+/* OCI's required input-callback signature for a dynamically-bound
+ * placeholder - even though this bind is RETURNING-only (write-only
+ * from Oracle's perspective; nothing for us to supply going in), OCI
+ * still requires a real, non-NULL input callback to be registered.
+ * Always hands back the same empty, read-only, zero-length buffer -
+ * genuinely safe to share across any number of calls, since nothing
+ * ever writes through it. */
+static sb4 rowid_in_callback(void *ictxp, OCIBind *bindp, ub4 iter, ub4 index,
+                              void **bufpp, ub4 *alenp, ub1 *piecep, void **indpp)
+{
+    (void)ictxp; (void)bindp; (void)iter; (void)index;
+    static const char empty = '\0';
+    *bufpp  = (void *)&empty;
+    *alenp  = 0;
+    *piecep = OCI_ONE_PIECE;
+    *indpp  = NULL;
+    return OCI_CONTINUE;
+}
+
+/* OCI's required output-callback signature. Invoked once per row
+ * Oracle is returning a RETURNING value for - iter is always 0 here
+ * (this statement has exactly one bind iteration; the multiplicity is
+ * in ROWS the WHERE clause matches, not iterations), index increments
+ * 0, 1, 2... once per row discovered, in whatever order Oracle
+ * processes them.
+ *
+ * c->alen is struct-owned, deliberately not a shared/static local.
+ * Every write path in this codebase is already serialized through a
+ * single dedicated writer queue (both consumers' own contention
+ * managers), so a static variable would very likely have been "safe"
+ * in practice - but relying on that invariant holding forever, this
+ * deep inside an OCI callback, is exactly the kind of thing that
+ * becomes a silent, hard-to-diagnose bug the one time it doesn't. */
+static sb4 rowid_out_callback(void *octxp, OCIBind *bindp,
+                               ub4 iter, ub4 index,
+                               void **outbufpp, ub4 **alenpp,
+                               ub1 *piecep, void **indpp, ub2 **rcodepp)
+{
+    dynamic_rowid_collector_t *c = (dynamic_rowid_collector_t *)octxp;
+    (void)bindp; (void)iter;
+
+    if (!dynamic_rowid_collector_ensure(c, index))
+    {
+        *outbufpp = NULL;
+        return OCI_ERROR;
+    }
+
+    c->alen   = (ub4)ROWID_BUF_SIZE;
+    *outbufpp = c->bufs + (size_t)index * ROWID_BUF_SIZE;
+    *alenpp   = &c->alen;
+    *piecep   = OCI_ONE_PIECE;
+    *indpp    = &c->inds[index];
+    *rcodepp  = &c->rcodes[index];
+
+    if (index + 1 > c->count) c->count = index + 1;
+
+    return OCI_CONTINUE;
+}
+
 int execute_update_batch(oci_context_t     *ctx,
                           update_request_t  *req,
                           execute_config_t  *cfg)
@@ -775,14 +939,16 @@ int execute_update_batch(oci_context_t     *ctx,
     char         **scalar_bufs  = NULL;
     sb2           *indicators   = NULL;
 
-    /* Bug fix (2026-08-26) - RETURNING ROWID INTO array bind, one ROWID
-     * string per row in the current batch, populated directly by
-     * OCIStmtExecute() itself. Same pattern, same rationale as
-     * execute_insert_batch()'s identical fix. */
-    #define UPD_ROWID_BUF_SIZE 24
-    OCIBind       *rowid_bind_hdl   = NULL;
-    char          *rowid_bufs       = NULL;   /* flat [row * UPD_ROWID_BUF_SIZE] */
-    sb2           *rowid_indicators = NULL;   /* [row]                           */
+    /* Bug fix (2026-08-25, superseded by the dynamic version 2026-08-27) -
+     * RETURNING ROWID INTO. Originally a static array bind mirroring
+     * execute_insert_batch()'s own fix, sized to execute_count - but
+     * execute_count is always 1 for UPDATE (see build_update_ctx_from_
+     * request()'s own comment), while the WHERE clause it binds against
+     * can still match many physical rows if it isn't unique. Replaced
+     * with dynamic_rowid_collector_t (defined above this function) -
+     * see that struct's own doc comment for the full rationale. */
+    OCIBind                   *rowid_bind_hdl = NULL;
+    dynamic_rowid_collector_t  rowid_collector = {0};
 
     int            execute_count= 0;
     int            rows_updated = 0;
@@ -1010,20 +1176,12 @@ int execute_update_batch(oci_context_t     *ctx,
         if (!scalar_bufs[idx]) { rc = -1; goto Cleanup; }
     }
 
-    /* Bug fix (2026-08-26) - allocate the RETURNING ROWID INTO array
-     * bind buffers once, sized to execute_count - same allocation
-     * pattern as scalar_bufs[] just above. calloc, not malloc, so
-     * every slot starts zeroed (naturally NUL-terminated once Oracle
-     * writes each row's fixed-length 18-character ROWID). */
-    rowid_bufs = calloc((size_t)execute_count, (size_t)UPD_ROWID_BUF_SIZE);
-    rowid_indicators = calloc((size_t)execute_count, sizeof(sb2));
-    if (!rowid_bufs || !rowid_indicators)
-    {
-        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
-                     "calloc failed for rowid_bufs/rowid_indicators");
-        rc = -1;
-        goto Cleanup;
-    }
+    /* Bug fix (2026-08-27) - the dynamic collector needs no upfront
+     * allocation at all (that's the whole point - it grows to whatever
+     * size Oracle actually reports at execute time, not a size guessed
+     * in advance). Just initialize it here, in scope for the whole
+     * function. */
+    dynamic_rowid_collector_init(&rowid_collector, ctx);
 
     /* ================================================================
      *  Stage 2 Audit - Fetch before-image BEFORE the UPDATE executes
@@ -1268,32 +1426,43 @@ int execute_update_batch(oci_context_t     *ctx,
             }
         }
 
-        /* Bug fix (2026-08-26) - bind the RETURNING ROWID INTO output,
-         * at the exact position build_update_sql() placed its
-         * placeholder (rowid_bind_num - already the correct next
-         * position, see that function's own comment). Same
-         * OCIBindByPos + OCIBindArrayOfStruct pattern every SET/WHERE
-         * bind above already uses. */
+        /* Bug fix (2026-08-27) - bind the RETURNING ROWID INTO output
+         * via OCIBindDynamic instead of a static array (see
+         * dynamic_rowid_collector_t's own doc comment above this
+         * function for the full rationale). OCIBindByPos() still
+         * establishes the position/datatype exactly as before, but
+         * with a NULL value buffer and OCI_DATA_AT_EXEC mode (instead
+         * of OCI_DEFAULT) - this tells OCI the real data will be
+         * supplied dynamically via callback, not directly here.
+         * OCIBindDynamic() then registers the two callback functions
+         * that do the actual work. */
+        rowid_collector.count = 0;   /* defensive reset - see
+                                         dynamic_rowid_collector_t's own
+                                         comment on why the outer while
+                                         loop only ever runs once today
+                                         (uc->row_count is always 1),
+                                         making this a no-op in
+                                         practice, not dead code for a
+                                         reason - if that assumption is
+                                         ever relaxed later, this still
+                                         does the right thing. */
+
         CHECK_OCI_UPD(ctx->errhp,
             OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
                          (ub4)rowid_bind_num,
-                         rowid_bufs,
-                         (sb4)UPD_ROWID_BUF_SIZE,
+                         NULL,
+                         (sb4)ROWID_BUF_SIZE,
                          SQLT_STR,
-                         rowid_indicators,
+                         NULL,
                          NULL, NULL, 0, NULL,
-                         OCI_DEFAULT),
+                         OCI_DATA_AT_EXEC),
             ctx, Cleanup);
 
-        if (batch_rows > 1)
-        {
-            CHECK_OCI_UPD(ctx->errhp,
-                OCIBindArrayOfStruct(rowid_bind_hdl, ctx->errhp,
-                                     (ub4)UPD_ROWID_BUF_SIZE,
-                                     (ub4)sizeof(sb2),
-                                     0, 0),
-                ctx, Cleanup);
-        }
+        CHECK_OCI_UPD(ctx->errhp,
+            OCIBindDynamic(rowid_bind_hdl, ctx->errhp,
+                           (void *)&rowid_collector, rowid_in_callback,
+                           (void *)&rowid_collector, rowid_out_callback),
+            ctx, Cleanup);
 
         /* ---- Execute ---- */
         logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
@@ -1310,22 +1479,33 @@ int execute_update_batch(oci_context_t     *ctx,
         rows_updated += batch_rows;
 
         /* ---- Post-execute: write LOB data ----
-         * Bug fix (2026-08-26) - this block used to only ever touch
-         * uc->values[row_base * uc->col_count + bc] - ONLY the first
-         * row of the batch - and fetched a single ROWID via
-         * OCIAttrGet(OCI_ATTR_ROWID) that's only reliable for a
-         * single-row-affecting statement anyway. For a multi-row UPDATE
-         * batch (different WHERE-key per row) with a LOB SET column,
-         * every row after the first silently never had its BLOB/CLOB
-         * value written at all. Fixed the same way as
-         * execute_insert_batch(): a real per-row loop, each row using
-         * its OWN correct ROWID from the RETURNING INTO array bind
-         * above, instead of one fetched-once, row_base-only value.
-         * has_lob is now a pure schema check (does this table's SET
-         * list include any LOB column at all) rather than a data check
-         * on row_base alone - the per-row is_empty check inside the
-         * loop already handles a genuinely empty LOB value on any
-         * individual row correctly. */
+         * Bug fix (2026-08-25, extended 2026-08-27) - this block used
+         * to only ever touch uc->values[row_base * uc->col_count + bc] -
+         * ONLY the first row of the batch, for every column, regardless
+         * of how many physical rows the WHERE clause actually matched.
+         * The 2026-08-25 fix wrapped this in a per-row loop bounded by
+         * batch_rows - correct in shape, but batch_rows is always 1 for
+         * UPDATE (see build_update_ctx_from_request()'s own comment),
+         * so it never actually exercised more than one row either. The
+         * real bound is rowid_collector.count - the number of rows
+         * Oracle's own RETURNING clause reported as affected, which can
+         * genuinely be many when the WHERE clause isn't unique
+         * (confirmed directly: WHERE NUMBER_COL=300 matching 209 rows).
+         *
+         * The value lookup is deliberately NOT row_base + r here - r
+         * now indexes DISCOVERED ROWS (from the dynamic collector), not
+         * VALUE rows. There is only ever one set of SET-clause values
+         * for the whole UPDATE (uc->values[row_base * col_count + bc],
+         * fixed), and that same one set of values gets written to
+         * EVERY row Oracle reports as affected - that's what a normal
+         * UPDATE...WHERE genuinely does; this fix's job is making sure
+         * every one of those rows actually receives it, not giving each
+         * row different content (which isn't what's happening here and
+         * isn't something today's request schema could even express).
+         *
+         * has_lob_column is a pure schema check - the per-row is_empty
+         * check inside the loop still correctly skips a genuinely empty
+         * LOB value.                                                    */
         {
             int has_lob_column = 0;
             for (int bc = 0; bc < uc->col_count && !has_lob_column; bc++)
@@ -1346,13 +1526,18 @@ int execute_update_batch(oci_context_t     *ctx,
                     snprintf(tbl_fq, sizeof(tbl_fq), "%s",
                              uc->table_name);
 
-                for (int r = 0; r < batch_rows; r++)
+                logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
+                             "UPDATE affected %u row(s) (RETURNING ROWID "
+                             "reported via OCIBindDynamic) - writing LOB "
+                             "content to every one", rowid_collector.count);
+
+                for (ub4 r = 0; r < rowid_collector.count; r++)
                 {
                     const char *row_rowid =
-                        rowid_bufs + (size_t)r * UPD_ROWID_BUF_SIZE;
+                        rowid_collector.bufs + (size_t)r * ROWID_BUF_SIZE;
 
                     logger_write(ctx->update_logger, LOG_DEBUG, __func__, 0,
-                                 "Updated row r=%d ROWID='%s'", r, row_rowid);
+                                 "Updated row r=%u ROWID='%s'", r, row_rowid);
 
                     for (int bc = 0; bc < uc->col_count; bc++)
                     {
@@ -1363,7 +1548,7 @@ int execute_update_batch(oci_context_t     *ctx,
                             { btype = cols[m].data_type; break; }
 
                         const upd_field_value_t *fv =
-                            &uc->values[(row_base + r) * uc->col_count + bc];
+                            &uc->values[row_base * uc->col_count + bc];
                         if (fv->is_empty) continue;
 
                         if (strcmp(btype, "BLOB") == 0)
@@ -1663,13 +1848,11 @@ Cleanup:
     if (old_values) { free(old_values); old_values = NULL; }
     if (indicators) { free(indicators);  }
     if (bind_hdls)  { free(bind_hdls);   }
-    /* Bug fix (2026-08-26) - free the RETURNING ROWID INTO array bind
-     * buffers allocated alongside scalar_bufs/indicators above.
-     * rowid_bind_hdl needs no explicit free - owned by the statement,
-     * released with it via OCIStmtRelease() further down, same as
-     * bind_hdls[]'s own handles already were before this fix. */
-    if (rowid_bufs)       { free(rowid_bufs);       rowid_bufs       = NULL; }
-    if (rowid_indicators) { free(rowid_indicators); rowid_indicators = NULL; }
+    /* Bug fix (2026-08-27) - free the dynamic ROWID collector's own
+     * growable buffers. rowid_bind_hdl needs no explicit free - OCI
+     * bind handles are owned by the statement, released with it via
+     * OCIStmtRelease, same as before this fix. */
+    dynamic_rowid_collector_free(&rowid_collector);
 
     if (uc)
     {
