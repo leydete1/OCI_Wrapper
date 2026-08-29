@@ -1,0 +1,7 @@
+<auth>
+  <operation>AUTHENTICATE</operation>
+  <status>SUCCESS</status>
+  <session_id>afbef951-75ef-43f5-bd78-266b09be8e5f</session_id>
+  <display_name>Auth Test Near-Lockout User</display_name>
+  <ttl_seconds>1800</ttl_seconds>
+</auth>

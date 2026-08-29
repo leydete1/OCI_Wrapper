@@ -1,0 +1,52 @@
+-- ============================================================================
+-- Seed_Auth_Test_Users.txt
+--
+-- Test data for Security Module Stage 2 (OP_AUTHENTICATE, LOCAL source only).
+-- Run once after Create_Auth_Source_Table.txt / Create_App_User_Table.txt
+-- have created the schema (Stage 0) and the AUTH_SOURCE seed row
+-- ('Local Database') has been inserted per Security_Module_Design_
+-- Specification.docx Section 4.1.
+--
+-- Companion to Unit_Test_Authenticate_Round_1/2/3 (.json/.xml) below.
+-- ============================================================================
+
+-- Round 1 (success case): password is "Str0ng!TestPass2026"
+-- Hash generated with libsodium crypto_pwhash_str() at this project's
+-- config.ini defaults (auth_argon2_time_cost=3, auth_argon2_mem_cost_kb=65536)
+-- and verified round-trip before being committed here - this is a real,
+-- working Argon2id hash, not a placeholder.
+INSERT INTO APP_USER (USERNAME, DISPLAY_NAME, AUTH_SOURCE_ID,
+                       PASSWORD_HASH, ENABLED, LOCKED, FAILED_ATTEMPTS)
+    VALUES ('auth.test.user', 'Auth Test User',
+            (SELECT AUTH_SOURCE_ID FROM AUTH_SOURCE WHERE NAME = 'Local Database'),
+            '$argon2id$v=19$m=65536,t=3,p=1$KUP2QqiaqFo9/Smy5iUnHQ$UrSMwH+4Vsx3DjZeQUvecHjpHOKKiVGkMdGTE7lUWiQ',
+            'Y', 'N', 0);
+
+-- Round 2 (denial case - disabled account). Credential in the test
+-- fixture is deliberately correct - proves ENABLED is checked ahead of
+-- the password verify, not that the password itself is wrong.
+INSERT INTO APP_USER (USERNAME, DISPLAY_NAME, AUTH_SOURCE_ID,
+                       PASSWORD_HASH, ENABLED, LOCKED, FAILED_ATTEMPTS)
+    VALUES ('auth.test.disabled', 'Auth Test Disabled User',
+            (SELECT AUTH_SOURCE_ID FROM AUTH_SOURCE WHERE NAME = 'Local Database'),
+            '$argon2id$v=19$m=65536,t=3,p=1$KUP2QqiaqFo9/Smy5iUnHQ$UrSMwH+4Vsx3DjZeQUvecHjpHOKKiVGkMdGTE7lUWiQ',
+            'N', 'N', 0);
+
+-- Round 4/5 (lockout case): FAILED_ATTEMPTS deliberately one below
+-- config.ini's auth_max_failed_attempts default (5) - a single more
+-- bad-credential attempt against this user should flip LOCKED to 'Y'.
+-- Used to prove the lockout threshold itself, separate from Round 3's
+-- "one bad attempt increments the counter" check.
+INSERT INTO APP_USER (USERNAME, DISPLAY_NAME, AUTH_SOURCE_ID,
+                       PASSWORD_HASH, ENABLED, LOCKED, FAILED_ATTEMPTS)
+    VALUES ('auth.test.nearlock', 'Auth Test Near-Lockout User',
+            (SELECT AUTH_SOURCE_ID FROM AUTH_SOURCE WHERE NAME = 'Local Database'),
+            '$argon2id$v=19$m=65536,t=3,p=1$KUP2QqiaqFo9/Smy5iUnHQ$UrSMwH+4Vsx3DjZeQUvecHjpHOKKiVGkMdGTE7lUWiQ',
+            'Y', 'N', 4);
+
+COMMIT;
+
+-- Cleanup, once Stage 2 testing is done:
+-- DELETE FROM APP_USER WHERE USERNAME IN
+--     ('auth.test.user', 'auth.test.disabled', 'auth.test.nearlock');
+-- COMMIT;

@@ -28,6 +28,8 @@
                                             MAX_TABLE_COLUMNS                */
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"         /* metadata_cache_get_or_fetch()    */
+#include "OCI_Auth_Manager.h"            /* authenticate_request_t - new,
+                                           * Security Module Stage 2         */
 
 /* ------------------------------------------------------------------ */
 /*  set_error / set_ok - fill error_detail consistently                 */
@@ -1189,6 +1191,58 @@ int level2_validate_procedure(oci_context_t        *ctx,
 }
 
 /* ================================================================== */
+/*  level2_validate_authenticate                                        */
+/*  Security Module Stage 2 (2026-08-27). Deliberately shallow - just   */
+/*  "are both fields present" - everything else (does the user exist,   */
+/*  is the credential correct, is the account locked/disabled) is       */
+/*  auth_authenticate()'s job (OCI_Auth_Manager.c), not Level 2's,       */
+/*  exactly as SQL correctness is execute_query_batch()'s job rather    */
+/*  than level2_validate_select()'s.                                    */
+/* ================================================================== */
+int level2_validate_authenticate(oci_context_t        *ctx,
+                                  input_c_operation_t  *op,
+                                  operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "AUTHENTICATE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    authenticate_request_t *req = (authenticate_request_t *)op->payload;
+
+    if (!req->username[0])
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: AUTHENTICATE operation has empty username");
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  "Request aborted. Level 2 validation failed - username "
+                  "is required.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    if (!req->credential[0])
+    {
+        /* Deliberately does not echo username here or anywhere in this
+         * error path beyond the internal log line above - an empty-
+         * credential rejection and a wrong-credential rejection should
+         * look the same to anything downstream of Level 2 too.        */
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: AUTHENTICATE operation has empty credential "
+                     "(username='%s')", req->username);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  "Request aborted. Level 2 validation failed - credential "
+                  "is required.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
 /*  level2_validate                                                      */
 /* ================================================================== */
 int level2_validate(oci_context_t *ctx, input_c_request_t *request)
@@ -1248,6 +1302,10 @@ int level2_validate(oci_context_t *ctx, input_c_request_t *request)
 
             case OP_EXECUTE_PROCEDURE:
                 level2_validate_procedure(ctx, op, &op->validation_status);
+                break;
+
+            case OP_AUTHENTICATE:
+                level2_validate_authenticate(ctx, op, &op->validation_status);
                 break;
 
             /* Not yet implemented - fail closed. An operation type with

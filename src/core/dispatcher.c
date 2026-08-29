@@ -38,6 +38,8 @@
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Execute_Procedure_Module.h"
+#include "OCI_Auth_Manager.h"             /* auth_authenticate() - new,
+                                            * Security Module Stage 2 */
 #include "logger.h"
 #include "OCI_Session_Manager.h"   /* session_validate() - Session Manager
                                       proposal, Stage 3 (2026-08-08) */
@@ -993,6 +995,98 @@ static int dispatch_procedure_new(oci_context_t       *ctx,
 }
 
 /* ================================================================== */
+/*  dispatch_authenticate_new                                           */
+/*  AUTHENTICATE via the same format-agnostic pipeline every other      */
+/*  operation uses - Level 1/2 already parsed and validated             */
+/*  authenticate_request_t; this is the thin adapter that calls         */
+/*  auth_authenticate() (OCI_Auth_Manager.c) and renders the result,    */
+/*  matching the shape of dispatch_select_new() etc. exactly. Security  */
+/*  Module Stage 2 (2026-08-27) - LOCAL auth source only.               */
+/* ================================================================== */
+static int dispatch_authenticate_new(oci_context_t       *ctx,
+                                      const char          *filename,
+                                      input_c_request_t   *request,
+                                      input_c_operation_t *op,
+                                      response_object_t   *resp)
+{
+    authenticate_request_t *req = (authenticate_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [AUTHENTICATE/new]: %s - no authenticate_request_t "
+                     "payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "AUTHENTICATE",
+                              "NO_PAYLOAD", "No authenticate_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *session_id   = NULL;
+    char *display_name = NULL;
+    int   ttl_seconds  = 0;
+
+    int rc = auth_authenticate(ctx, req, &session_id, &display_name, &ttl_seconds);
+
+    if (rc == AUTH_OK)
+    {
+        logger_write(ctx->security_logger, LOG_INFO, __func__, 0,
+                     "PASS [AUTHENTICATE/new] audit_id=%s: username=%s",
+                     request->external_audit_id, req->username);
+
+        char *body = malloc(1024);
+        if (body)
+        {
+            if (is_json)
+            {
+                snprintf(body, 1024,
+                    "{\"operation\":\"AUTHENTICATE\",\"status\":\"SUCCESS\","
+                    "\"session_id\":\"%s\",\"display_name\":\"%s\","
+                    "\"ttl_seconds\":%d}",
+                    session_id, display_name, ttl_seconds);
+            }
+            else
+            {
+                snprintf(body, 1024,
+                    "<auth>\n  <operation>AUTHENTICATE</operation>\n"
+                    "  <status>SUCCESS</status>\n"
+                    "  <session_id>%s</session_id>\n"
+                    "  <display_name>%s</display_name>\n"
+                    "  <ttl_seconds>%d</ttl_seconds>\n</auth>\n",
+                    session_id, display_name, ttl_seconds);
+            }
+        }
+
+        resp->status        = RESPONSE_STATUS_PASS;
+        resp->is_json       = is_json;
+        resp->response_body = body;   /* ownership transferred, same as every
+                                        * other dispatch_*_new() in this file */
+        rc = 0;
+    }
+    else
+    {
+        /* AUTH_ERR_DENIED covers unknown user / disabled / locked / bad
+         * credential / (Stage 2 only) non-LOCAL source alike,
+         * deliberately - see auth_authenticate()'s own doc comment and
+         * Security_Module_Design_Specification.docx Section 5. Not
+         * distinguished to the caller here either - the specific
+         * reason is already in the security_logger line
+         * auth_authenticate() itself wrote.                           */
+        logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
+                     "FAIL [AUTHENTICATE/new] audit_id=%s: username=%s rc=%d",
+                     request->external_audit_id, req->username, rc);
+        build_error_envelope(resp, request->external_audit_id, "AUTHENTICATE",
+                              "DENIED", "Authentication failed", is_json);
+        rc = -1;
+    }
+
+    free(session_id);
+    free(display_name);
+    return rc;
+}
+
+/* ================================================================== */
 /*  process_xml_file                                                    */
 /*  Read file, extract operation, dispatch to correct handler.         */
 /* ================================================================== */
@@ -1353,6 +1447,10 @@ int process_xml_file(oci_context_t      *ctx,
                 {
                     rc = dispatch_procedure_new(ctx, filename, &new_request, op, resp);
                 }
+                else if (op->type == OP_AUTHENTICATE)
+                {
+                    rc = dispatch_authenticate_new(ctx, filename, &new_request, op, resp);
+                }
                 else
                 {
                     /* Every other operation type still runs through the
@@ -1365,8 +1463,9 @@ int process_xml_file(oci_context_t      *ctx,
                     logger_write(ctx->dispatcher_logger, LOG_WARN, __func__, 0,
                                  "File='%s' operation[%d] type=%d - new "
                                  "pipeline only implements SELECT/INSERT/"
-                                 "UPDATE/DELETE/EXECUTE_PROCEDURE so far, "
-                                 "skipping", filename, i, (int)op->type);
+                                 "UPDATE/DELETE/EXECUTE_PROCEDURE/"
+                                 "AUTHENTICATE so far, skipping",
+                                 filename, i, (int)op->type);
                     build_error_envelope(resp, new_request.external_audit_id, "-",
                                          "UNSUPPORTED_OPERATION_TYPE",
                                          "This operation type isn't implemented by the "

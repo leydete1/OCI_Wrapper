@@ -297,6 +297,24 @@ int level2_validate_procedure(oci_context_t        *ctx,
                                operation_status_t   *error_detail);
 
 /*
+ * level2_validate_authenticate()
+ *
+ * Security Module Stage 2 (2026-08-27). Validates one OP_AUTHENTICATE
+ * operation's already-built authenticate_request_t (op->payload) -
+ * username and credential both present, nothing more. See
+ * OCI_Auth_Manager.h for the struct itself and Security_Module_Design_
+ * Specification.docx Section 6 for why the deeper checks (does the
+ * user exist, is the credential correct) live in auth_authenticate()
+ * instead of here.
+ *
+ * Returns LEVEL2_OK on success, LEVEL2_ERR_FIELD_INVALID or
+ * LEVEL2_ERR_INVALID_ARG otherwise.
+ */
+int level2_validate_authenticate(oci_context_t        *ctx,
+                                  input_c_operation_t  *op,
+                                  operation_status_t   *error_detail);
+
+/*
  * level2_validate()
  *
  * Runs the appropriate validator against every operation in request,

@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_authenticate_round_7","operation":"-","error_code":"LEVEL2_FIELD_INVALID","error_text":"Request aborted. Level 2 validation failed - credential is required."}

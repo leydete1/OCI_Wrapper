@@ -1352,6 +1352,7 @@ libsnappy1v5:amd64				install
 libsndfile1:amd64				install
 libsnmp-base					install
 libsnmp40t64:amd64				install
+libsodium-dev:amd64				install
 libsodium23:amd64				install
 libsonic0:amd64					install
 libsord-0-0:amd64				install

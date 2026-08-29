@@ -110,6 +110,8 @@
 #include "worker.h"
 #include "build_number.h"
 #include "http_consumer_runner.h"
+#include "crypt_helper.h"      /* crypt_init() - Security Module Stage 1,
+                                 * 2026-08-27 */
 
 
 /* looks_like_new_request_format()'s own forward declaration removed
@@ -1020,6 +1022,25 @@ static int initialise_loggers(oci_context_t *ctx,
       ctx->crypt_logger = crypt_logger;
       printf("Initialize crypt logger name =%s complete successful.\n",
              ctx->ini->crypt_log_file_name);
+
+      /* ---- Security Module Stage 1 (2026-08-27): libsodium init ----
+       * Must happen exactly once, before any thread touches libsodium
+       * (crypt_hash_password()/crypt_verify_password(), crypt_helper.h) -
+       * done here, right after crypt_logger exists and well before the
+       * worker pool / File Consumer / HTTP Consumer threads start
+       * further down in this function, so no thread can ever race this
+       * one-time setup. sodium_init() itself is safe to call more than
+       * once, but there is no reason to call it anywhere else.         */
+      if (crypt_init() != CRYPT_OK)
+      {
+          logger_write(ctx->crypt_logger, LOG_ERROR, __func__, 0,
+                       "crypt_init() (libsodium sodium_init()) failed - "
+                       "cannot proceed, AUTHENTICATE would be unsafe to serve");
+          printf("Failed to initialise libsodium (crypt_init())\n");
+          return -1;
+      }
+      logger_write(ctx->crypt_logger, LOG_INFO, __func__, 0,
+                   "crypt_init() (libsodium) OK");
 
 
 

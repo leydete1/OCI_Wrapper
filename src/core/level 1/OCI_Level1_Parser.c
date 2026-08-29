@@ -22,6 +22,8 @@
 #include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
                                               procedure_param_t,
                                               param_direction_t          */
+#include "OCI_Auth_Manager.h"             /* authenticate_request_t - new,
+                                            * Security Module Stage 2 */
 #include "logger.h"
 
 #include <libxml/parser.h>
@@ -122,6 +124,7 @@ static operation_type_t map_operation_type(const char *s)
     if (strcasecmp(s, "EXECUTE_PROCEDURE") == 0)  return OP_EXECUTE_PROCEDURE;
     if (strcasecmp(s, "CREATE_SESSION") == 0)     return OP_CREATE_SESSION;
     if (strcasecmp(s, "END_SESSION") == 0)        return OP_END_SESSION;
+    if (strcasecmp(s, "AUTHENTICATE") == 0)       return OP_AUTHENTICATE;
     return OP_UNKNOWN;
 }
 
@@ -786,6 +789,49 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
 
             return req;
         }
+        case OP_AUTHENTICATE:
+        {
+            /* Security Module Stage 2 - deliberately minimal: two plain
+             * string fields, no nested structure, matching the request
+             * shape in Security_Module_Design_Specification.docx
+             * Section 8.1. Empty/missing elements are left as empty
+             * strings - Level 2's level2_validate_authenticate() is
+             * where "username/credential required" is actually
+             * enforced, same division of responsibility as every other
+             * operation type here.                                    */
+            authenticate_request_t *req = calloc(1, sizeof(authenticate_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"username") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->username, (const char *)content,
+                                sizeof(req->username) - 1);
+                        trim_inplace(req->username);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"credential") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->credential, (const char *)content,
+                                sizeof(req->credential) - 1);
+                        trim_inplace(req->credential);
+                    }
+                    xmlFree(content);
+                }
+            }
+
+            return req;
+        }
         default:
             return NULL;
     }
@@ -1061,6 +1107,24 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
                 if (cJSON_IsString(pvalue) && pvalue->valuestring)
                     strncpy(pp->param_value, pvalue->valuestring, sizeof(pp->param_value) - 1);
             }
+
+            return req;
+        }
+        case OP_AUTHENTICATE:
+        {
+            /* Same shape as the XML case above - see Security_Module_
+             * Design_Specification.docx Section 8.1 for the JSON
+             * example this mirrors.                                   */
+            authenticate_request_t *req = calloc(1, sizeof(authenticate_request_t));
+            if (!req) return NULL;
+
+            cJSON *username = cJSON_GetObjectItemCaseSensitive(op_json, "username");
+            if (cJSON_IsString(username) && username->valuestring)
+                strncpy(req->username, username->valuestring, sizeof(req->username) - 1);
+
+            cJSON *credential = cJSON_GetObjectItemCaseSensitive(op_json, "credential");
+            if (cJSON_IsString(credential) && credential->valuestring)
+                strncpy(req->credential, credential->valuestring, sizeof(req->credential) - 1);
 
             return req;
         }

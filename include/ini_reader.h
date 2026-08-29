@@ -239,6 +239,26 @@ typedef struct
   /*End Additional logs  error , metrics, tx , sec . crypt, audit , session added 31-May-2026*/
 
     /* ----------------------------------------------------------------
+     * Security Module - authentication (Stage 2, 2026-08-27)
+     * Config.ini keys documented in Security_Module_Design_
+     * Specification.docx, Section 9. Logging for OP_AUTHENTICATE goes
+     * through security_log_* above (existing logger) - these are the
+     * behavioural knobs, not another log file.
+     * ---------------------------------------------------------------- */
+    int  auth_max_failed_attempts;      /* failed local-auth attempts before
+                                          * LOCKED='Y' - manual unlock only,
+                                          * no auto-expiry (see OCI_Auth_
+                                          * Manager.c)                       */
+    int  auth_argon2_mem_cost_kb;       /* libsodium crypto_pwhash() memory
+                                          * cost, KB                        */
+    int  auth_argon2_time_cost;         /* libsodium crypto_pwhash() time
+                                          * cost (iterations)                */
+    int  auth_log_success;              /* log successful authentications  */
+    int  auth_log_failure;              /* log failed authentications      */
+    int  authz_cache_ttl_seconds;       /* Stage 5 - permission cache TTL,
+                                          * mirrors session TTL by default  */
+
+    /* ----------------------------------------------------------------
      * Database credentials / connection string
      * ---------------------------------------------------------------- */
     char TEST_SQL_FILE_NAME[256];

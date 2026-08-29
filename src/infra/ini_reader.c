@@ -301,6 +301,19 @@ static ctx_config_map_t ctx_map[] = {
 
 #	/*End Additional logs  error , metrics, tx , sec . crypt, audit , session added 31-May-2026*/
 
+	/* ----------------------------------------------------------------
+     * Security Module - authentication (Stage 2, 2026-08-27)
+     * See Security_Module_Design_Specification.docx Section 9 - all
+     * CFG_INT/CFG_BOOL, so none of these need a maxlen guard branch
+     * further down in load_ini() (that chain is CFG_STRING-only).
+     * ---------------------------------------------------------------- */
+    { "auth_max_failed_attempts", CFG_INT,  offsetof(app_config_t, auth_max_failed_attempts), NULL, 5     },
+    { "auth_argon2_mem_cost_kb",  CFG_INT,  offsetof(app_config_t, auth_argon2_mem_cost_kb),  NULL, 65536 },
+    { "auth_argon2_time_cost",    CFG_INT,  offsetof(app_config_t, auth_argon2_time_cost),    NULL, 3     },
+    { "auth_log_success",         CFG_BOOL, offsetof(app_config_t, auth_log_success),         NULL, 1     },
+    { "auth_log_failure",         CFG_BOOL, offsetof(app_config_t, auth_log_failure),         NULL, 1     },
+    { "authz_cache_ttl_seconds",  CFG_INT,  offsetof(app_config_t, authz_cache_ttl_seconds),  NULL, 1800  },
+
 
 	/* ----------------------------------------------------------------
      * XML directories
