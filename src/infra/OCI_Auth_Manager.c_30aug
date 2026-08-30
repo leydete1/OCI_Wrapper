@@ -25,7 +25,6 @@
 #include "crypt_helper.h"                 /* crypt_verify_password() - Stage 1 */
 #include "ldap_auth_helper.h"             /* ldap_auth_bind_check() - Stage 3 */
 #include "cJSON.h"                        /* AUTH_SOURCE.CONFIGURATION parsing */
-#include "OCI_Audit_Trail_Manager.h"      /* audit_trail_insert() - Stage 4 */
 #include "logger.h"
 #include "ini_reader.h"                   /* app_config_t - ctx->ini->auth_* */
 
@@ -259,24 +258,8 @@ Cleanup:
  * matches the spec's "There is no automatic unlock" stance (Section
  * 5): once written, only a manual administrator action can clear
  * LOCKED again, nothing in this codebase does so automatically.
- *
- * Stage 4 (2026-08-30): also writes an AUDIT_TRAIL row for this
- * change, via audit_trail_insert() directly (OCI_Audit_Trail_Manager.h)
- * - the same function OCI_Insert_Execute_Module.c calls for a plain
- * business INSERT. This bypasses execute_update_batch()'s own before-
- * image-fetch machinery deliberately: that pipeline exists for
- * generic client-driven UPDATE requests where the caller doesn't
- * already know the old values, which isn't the case here - this
- * function already knows both the old and new FAILED_ATTEMPTS/LOCKED
- * values itself, so fetching them again via a SELECT would be pure
- * overhead. Only FAILED_ATTEMPTS and (when it changes) LOCKED are
- * audited - LOCKED_TS/MODIFIED_TS are server-generated SYSTIMESTAMP
- * values this function never reads back, and are already implicit in
- * the audit row's own timestamp; auditing them would need an extra
- * round-trip for no real audit value.
  */
 static void record_auth_failure(oci_context_t *ctx, int user_id,
-                                 const char *username,
                                  int current_failed_attempts,
                                  int max_failed_attempts)
 {
@@ -324,88 +307,6 @@ static void record_auth_failure(oci_context_t *ctx, int user_id,
 
     OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
 
-    /* Stage 4: AUDIT_TRAIL row for this change - see this function's
-     * own doc comment above for why audit_trail_insert() is called
-     * directly rather than routing through execute_update_batch().
-     *
-     * IMPORTANT (2026-08-30 crash fix): audit_trail_insert()'s
-     * UPDATE/DELETE path casts atr->new_values/old_values (both
-     * declared void* in audit_trail_request_t) to an INTERNAL,
-     * private struct - audit_field_value_t { char value[32768];
-     * int is_empty; } - defined only inside OCI_Audit_Trail_Manager.c
-     * itself, not exposed in its header at all. The first version of
-     * this fix used field_value_t (OCI_Request_Response_Types.h)
-     * instead, which has a completely different size and layout -
-     * audit_trail_insert() then read far past the end of those much
-     * smaller stack arrays, corrupting memory and crashing the whole
-     * process. auth_field_value_t below MUST be kept byte-for-byte in
-     * sync with OCI_Audit_Trail_Manager.c's own audit_field_value_t -
-     * this is a genuinely fragile, undocumented contract (the
-     * project's own code mirrors this same private struct per-file
-     * rather than exposing it), not something introduced by this fix.
-     */
-    {
-        typedef struct { char value[32768]; int is_empty; } auth_field_value_t;
-
-        char user_id_str[32];
-        snprintf(user_id_str, sizeof(user_id_str), "%d", user_id);
-
-        char col_names[2][128];
-        auth_field_value_t old_values[2];
-        auth_field_value_t new_values[2];
-        memset(old_values, 0, sizeof(old_values));
-        memset(new_values, 0, sizeof(new_values));
-        int col_count = 0;
-
-        strncpy(col_names[col_count], "FAILED_ATTEMPTS", sizeof(col_names[0]) - 1);
-        snprintf(old_values[col_count].value, sizeof(old_values[0].value),
-                 "%d", current_failed_attempts);
-        snprintf(new_values[col_count].value, sizeof(new_values[0].value),
-                 "%d", new_failed_attempts);
-        col_count++;
-
-        if (should_lock)
-        {
-            strncpy(col_names[col_count], "LOCKED", sizeof(col_names[0]) - 1);
-            strncpy(old_values[col_count].value, "N", sizeof(old_values[0].value) - 1);
-            strncpy(new_values[col_count].value, "Y", sizeof(new_values[0].value) - 1);
-            col_count++;
-        }
-
-        audit_trail_request_t atr;
-        memset(&atr, 0, sizeof(atr));
-        strncpy(atr.table_name, "APP_USER", sizeof(atr.table_name) - 1);
-        strncpy(atr.action_type, "UPDATE", sizeof(atr.action_type) - 1);
-        strncpy(atr.record_id, user_id_str, sizeof(atr.record_id) - 1);
-        strncpy(atr.changed_by, username ? username : "-",
-                sizeof(atr.changed_by) - 1);
-        strncpy(atr.module_name, "OCI_Auth_Manager", sizeof(atr.module_name) - 1);
-        if (should_lock)
-            snprintf(atr.change_reason, sizeof(atr.change_reason),
-                     "Account locked after %d failed login attempts "
-                     "(manual unlock only)", new_failed_attempts);
-        else
-            strncpy(atr.change_reason, "Failed login attempt",
-                    sizeof(atr.change_reason) - 1);
-        strncpy(atr.session_id, "-", sizeof(atr.session_id) - 1);
-        strncpy(atr.client_ip, "-", sizeof(atr.client_ip) - 1);
-
-        atr.col_names  = col_names;
-        atr.col_types  = NULL;
-        atr.new_values = new_values;
-        atr.old_values = old_values;
-        atr.row_count  = 1;
-        atr.col_count  = col_count;
-        atr.audit_mode = AUDIT_MODE_FIELD;
-
-        int audit_rc = audit_trail_insert(ctx, &atr);
-        if (audit_rc != 0)
-            logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
-                         "AUDIT_TRAIL insert failed (rc=%d) for user_id=%d "
-                         "- lockout bookkeeping is NOT rolled back",
-                         audit_rc, user_id);
-    }
-
     if (should_lock)
         logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
                      "user_id=%d LOCKED after %d failed attempts "
@@ -428,19 +329,8 @@ Cleanup:
  * a failure here is logged but does not fail the authentication
  * itself (the user already proved their credential; losing this
  * bookkeeping update is not a reason to deny them).
- *
- * Stage 4 (2026-08-30): also writes an AUDIT_TRAIL row when
- * FAILED_ATTEMPTS actually changes (i.e. was non-zero) - a login that
- * resets an existing failure count is the security-relevant fact
- * worth a record; a routine login with no prior failures produces no
- * audit noise. LAST_LOGIN_TS itself is not audited (server-generated
- * SYSTIMESTAMP this function never reads back, already implicit in
- * the audit row's own timestamp - same reasoning as record_auth_
- * failure()'s own doc comment on LOCKED_TS/MODIFIED_TS).
  */
-static void record_auth_success(oci_context_t *ctx, int user_id,
-                                 const char *username,
-                                 int previous_failed_attempts)
+static void record_auth_success(oci_context_t *ctx, int user_id)
 {
     int db_failure = 0;
     OCIStmt *stmt = NULL;
@@ -471,61 +361,6 @@ static void record_auth_success(oci_context_t *ctx, int user_id,
         ctx, Cleanup);
 
     OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
-
-    /* Stage 4: only audit this when it's actually meaningful - a
-     * login that resets a genuine prior failure count, not every
-     * routine successful login (see this function's own doc comment
-     * above). See record_auth_failure()'s own comment on why
-     * auth_field_value_t must exactly mirror OCI_Audit_Trail_
-     * Manager.c's private audit_field_value_t struct - the crash this
-     * fixed was this exact mismatch.                                 */
-    if (previous_failed_attempts > 0)
-    {
-        typedef struct { char value[32768]; int is_empty; } auth_field_value_t;
-
-        char user_id_str[32];
-        snprintf(user_id_str, sizeof(user_id_str), "%d", user_id);
-
-        char col_names[1][128];
-        auth_field_value_t old_values[1];
-        auth_field_value_t new_values[1];
-        memset(old_values, 0, sizeof(old_values));
-        memset(new_values, 0, sizeof(new_values));
-
-        strncpy(col_names[0], "FAILED_ATTEMPTS", sizeof(col_names[0]) - 1);
-        snprintf(old_values[0].value, sizeof(old_values[0].value),
-                 "%d", previous_failed_attempts);
-        strncpy(new_values[0].value, "0", sizeof(new_values[0].value) - 1);
-
-        audit_trail_request_t atr;
-        memset(&atr, 0, sizeof(atr));
-        strncpy(atr.table_name, "APP_USER", sizeof(atr.table_name) - 1);
-        strncpy(atr.action_type, "UPDATE", sizeof(atr.action_type) - 1);
-        strncpy(atr.record_id, user_id_str, sizeof(atr.record_id) - 1);
-        strncpy(atr.changed_by, username ? username : "-",
-                sizeof(atr.changed_by) - 1);
-        strncpy(atr.module_name, "OCI_Auth_Manager", sizeof(atr.module_name) - 1);
-        strncpy(atr.change_reason,
-                "Successful login - failed attempt counter reset",
-                sizeof(atr.change_reason) - 1);
-        strncpy(atr.session_id, "-", sizeof(atr.session_id) - 1);
-        strncpy(atr.client_ip, "-", sizeof(atr.client_ip) - 1);
-
-        atr.col_names  = col_names;
-        atr.col_types  = NULL;
-        atr.new_values = new_values;
-        atr.old_values = old_values;
-        atr.row_count  = 1;
-        atr.col_count  = 1;
-        atr.audit_mode = AUDIT_MODE_FIELD;
-
-        int audit_rc = audit_trail_insert(ctx, &atr);
-        if (audit_rc != 0)
-            logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
-                         "AUDIT_TRAIL insert failed (rc=%d) for user_id=%d "
-                         "- successful-login bookkeeping is NOT rolled back",
-                         audit_rc, user_id);
-    }
 
 Cleanup:
     if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
@@ -630,8 +465,7 @@ int auth_authenticate(oci_context_t                 *ctx,
             logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
                          "DENIED username='%s' user_id=%d: bad credential",
                          req->username, user.user_id);
-            record_auth_failure(ctx, user.user_id, req->username,
-                                 user.failed_attempts,
+            record_auth_failure(ctx, user.user_id, user.failed_attempts,
                                  ctx->ini->auth_max_failed_attempts);
         }
     }
@@ -799,7 +633,7 @@ int auth_authenticate(oci_context_t                 *ctx,
     /* Best-effort bookkeeping - see record_auth_success()'s own doc
      * comment on why this never turns a successful login into a
      * denial. */
-    record_auth_success(ctx, user.user_id, req->username, user.failed_attempts);
+    record_auth_success(ctx, user.user_id);
 
     logger_write(ctx->security_logger, LOG_INFO, __func__, 0,
                  "SUCCESS username='%s' user_id=%d session_id=%s",
