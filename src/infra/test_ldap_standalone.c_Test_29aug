@@ -1,0 +1,42 @@
+/*
+ * test_ldap_standalone.c
+ *
+ * Standalone isolation test for ldap_auth_helper.c - compiles and
+ * runs completely outside OCI_Wrapper (no OCI, no ASan-sanitized
+ * runtime, no worker threads) to determine whether "Can't contact
+ * LDAP server" is coming from ldap_auth_helper.c itself or from
+ * something specific to running inside the full app.
+ *
+ * Build (from the same directory as ldap_auth_helper.c/.h):
+ *   gcc -o test_ldap_standalone test_ldap_standalone.c ldap_auth_helper.c -lldap
+ *
+ * Run:
+ *   ./test_ldap_standalone
+ *
+ * Expect: "RESULT: OK" if the bind succeeds against the Docker
+ * OpenLDAP container the same way `ldapwhoami` just did.
+ */
+
+#include <stdio.h>
+#include "ldap_auth_helper.h"
+
+int main(void)
+{
+    char err_buf[256] = {0};
+
+    int rc = ldap_auth_bind_check(
+        "ldap://localhost:389",
+        "uid=ldap.test.user,ou=people,dc=example,dc=com",
+        "LdapTest!2026",
+        err_buf, sizeof(err_buf));
+
+    printf("rc = %d\n", rc);
+    printf("err_buf = '%s'\n", err_buf);
+
+    if (rc == LDAP_AUTH_BIND_OK)
+        printf("RESULT: OK\n");
+    else
+        printf("RESULT: FAILED\n");
+
+    return 0;
+}

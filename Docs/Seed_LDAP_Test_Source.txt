@@ -1,0 +1,36 @@
+-- ============================================================================
+-- Seed_LDAP_Test_Source.txt
+--
+-- Test data for Security Module Stage 3 (delegated LDAP authentication).
+-- Targets the Docker OpenLDAP test instance set up alongside this stage:
+--   docker run -d --name openldap-test -p 389:389 -p 636:636 \
+--     -e LDAP_ORGANISATION="Test Org" -e LDAP_DOMAIN="example.com" \
+--     -e LDAP_ADMIN_PASSWORD="admin_password" osixia/openldap:1.5.0
+-- with test_user.ldif loaded (uid=ldap.test.user,ou=people,dc=example,dc=com).
+--
+-- CONFIGURATION is a JSON object read by auth_authenticate()
+-- (OCI_Auth_Manager.c): host, port, use_tls, bind_dn_pattern. Exactly
+-- one %s in bind_dn_pattern, filled with the raw username at bind time.
+-- ============================================================================
+
+INSERT INTO AUTH_SOURCE (NAME, SOURCE_TYPE, CONFIGURATION, ENABLED)
+    VALUES ('Docker Test LDAP', 'LDAP',
+            '{"host":"localhost","port":389,"use_tls":false,"bind_dn_pattern":"uid=%s,ou=people,dc=example,dc=com"}',
+            'Y');
+
+-- APP_USER row for the LDAP-backed identity. Note PASSWORD_HASH is left
+-- NULL - it's never read for a non-LOCAL source (Security_Module_Design_
+-- Specification.docx Section 4.2) - the actual credential lives entirely
+-- in the directory, checked by ldap_auth_helper.c's bind, not here.
+INSERT INTO APP_USER (USERNAME, DISPLAY_NAME, AUTH_SOURCE_ID,
+                       PASSWORD_HASH, ENABLED, LOCKED, FAILED_ATTEMPTS)
+    VALUES ('ldap.test.user', 'LDAP Test User',
+            (SELECT AUTH_SOURCE_ID FROM AUTH_SOURCE WHERE NAME = 'Docker Test LDAP'),
+            NULL, 'Y', 'N', 0);
+
+COMMIT;
+
+-- Cleanup, once Stage 3 testing is done:
+-- DELETE FROM APP_USER WHERE USERNAME = 'ldap.test.user';
+-- DELETE FROM AUTH_SOURCE WHERE NAME = 'Docker Test LDAP';
+-- COMMIT;

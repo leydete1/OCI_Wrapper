@@ -995,6 +995,7 @@ libldacbt-enc2:amd64				install
 libldap-common					install
 libldap-dev:amd64				install
 libldap2:amd64					install
+libldap2-dev					install
 libldb2:amd64					install
 liblerc-dev:amd64				install
 liblerc4:amd64					install

@@ -1,0 +1,17 @@
+# Test user for Security Module Stage 3 (LDAP/AD delegated authentication)
+# Load with:
+#   docker cp test_user.ldif openldap-test:/tmp/test_user.ldif
+#   docker exec openldap-test ldapadd -x -D "cn=admin,dc=example,dc=com" \
+#       -w admin_password -f /tmp/test_user.ldif
+
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=ldap.test.user,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: ldap.test.user
+cn: LDAP Test User
+sn: User
+mail: ldap.test.user@example.com
+userPassword: LdapTest!2026
