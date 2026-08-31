@@ -30,6 +30,8 @@
 #include "metadata_cache_meta.h"         /* metadata_cache_get_or_fetch()    */
 #include "OCI_Auth_Manager.h"            /* authenticate_request_t - new,
                                            * Security Module Stage 2         */
+#include "OCI_Authz_Manager.h"           /* check_permission_request_t -
+                                           * new, Security Module Stage 5    */
 
 /* ------------------------------------------------------------------ */
 /*  set_error / set_ok - fill error_detail consistently                 */
@@ -1243,6 +1245,43 @@ int level2_validate_authenticate(oci_context_t        *ctx,
 }
 
 /* ================================================================== */
+/*  level2_validate_check_permission                                     */
+/*  Security Module Stage 5 (2026-08-31). Same shallow-validation      */
+/*  philosophy as level2_validate_authenticate() above - "is           */
+/*  permission_code present", nothing more. The actual authorization   */
+/*  decision (is this permission granted for this session) is          */
+/*  authz_has_permission()'s job (OCI_Authz_Manager.c), not Level 2's.  */
+/* ================================================================== */
+int level2_validate_check_permission(oci_context_t        *ctx,
+                                      input_c_operation_t  *op,
+                                      operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "CHECK_PERMISSION payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    check_permission_request_t *req = (check_permission_request_t *)op->payload;
+
+    if (!req->permission_code[0])
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: CHECK_PERMISSION operation has empty "
+                     "permission_code");
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  "Request aborted. Level 2 validation failed - "
+                  "permission_code is required.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
 /*  level2_validate                                                      */
 /* ================================================================== */
 int level2_validate(oci_context_t *ctx, input_c_request_t *request)
@@ -1306,6 +1345,10 @@ int level2_validate(oci_context_t *ctx, input_c_request_t *request)
 
             case OP_AUTHENTICATE:
                 level2_validate_authenticate(ctx, op, &op->validation_status);
+                break;
+
+            case OP_CHECK_PERMISSION:
+                level2_validate_check_permission(ctx, op, &op->validation_status);
                 break;
 
             /* Not yet implemented - fail closed. An operation type with

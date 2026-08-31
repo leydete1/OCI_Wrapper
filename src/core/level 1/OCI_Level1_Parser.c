@@ -24,6 +24,8 @@
                                               param_direction_t          */
 #include "OCI_Auth_Manager.h"             /* authenticate_request_t - new,
                                             * Security Module Stage 2 */
+#include "OCI_Authz_Manager.h"            /* check_permission_request_t -
+                                            * new, Security Module Stage 5 */
 #include "logger.h"
 
 #include <libxml/parser.h>
@@ -125,6 +127,7 @@ static operation_type_t map_operation_type(const char *s)
     if (strcasecmp(s, "CREATE_SESSION") == 0)     return OP_CREATE_SESSION;
     if (strcasecmp(s, "END_SESSION") == 0)        return OP_END_SESSION;
     if (strcasecmp(s, "AUTHENTICATE") == 0)       return OP_AUTHENTICATE;
+    if (strcasecmp(s, "CHECK_PERMISSION") == 0)   return OP_CHECK_PERMISSION;
     return OP_UNKNOWN;
 }
 
@@ -832,6 +835,39 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
 
             return req;
         }
+        case OP_CHECK_PERMISSION:
+        {
+            /* Security Module Stage 5 - a single plain string field.
+             * session_id is deliberately NOT parsed here - it comes
+             * from the envelope's own session_id (already parsed
+             * elsewhere into input_c_request_t.session_id), matching
+             * every other operation type's existing session handling
+             * rather than duplicating it per-operation (see
+             * OCI_Authz_Manager.h's own doc comment on check_
+             * permission_request_t).                                  */
+            check_permission_request_t *req =
+                calloc(1, sizeof(check_permission_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"permission_code") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->permission_code, (const char *)content,
+                                sizeof(req->permission_code) - 1);
+                        trim_inplace(req->permission_code);
+                    }
+                    xmlFree(content);
+                }
+            }
+
+            return req;
+        }
         default:
             return NULL;
     }
@@ -1125,6 +1161,22 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
             cJSON *credential = cJSON_GetObjectItemCaseSensitive(op_json, "credential");
             if (cJSON_IsString(credential) && credential->valuestring)
                 strncpy(req->credential, credential->valuestring, sizeof(req->credential) - 1);
+
+            return req;
+        }
+        case OP_CHECK_PERMISSION:
+        {
+            /* Same shape as the XML case in build_payload_xml() - see
+             * Security_Module_Design_Specification.docx Section 8.2. */
+            check_permission_request_t *req =
+                calloc(1, sizeof(check_permission_request_t));
+            if (!req) return NULL;
+
+            cJSON *permission_code =
+                cJSON_GetObjectItemCaseSensitive(op_json, "permission_code");
+            if (cJSON_IsString(permission_code) && permission_code->valuestring)
+                strncpy(req->permission_code, permission_code->valuestring,
+                        sizeof(req->permission_code) - 1);
 
             return req;
         }

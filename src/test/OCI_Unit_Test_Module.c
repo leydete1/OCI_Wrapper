@@ -6087,6 +6087,23 @@ static oci_context_t *acquire_test_ctx(oci_context_t *ctx,
      * until a test finally tried to read back what it had just
      * written.                                                          */
     worker_ctx_storage->session_cache        = ctx->session_cache;
+    worker_ctx_storage->authz_cache          = ctx->authz_cache;   /* Security
+                                                       * Module Stage 5,
+                                                       * 2026-08-31 - same
+                                                       * class of bug as
+                                                       * session_cache's own
+                                                       * note just above:
+                                                       * authz_cache_store()
+                                                       * silently returns -1
+                                                       * on a NULL cache
+                                                       * pointer rather than
+                                                       * crashing, so this
+                                                       * also sat undetected
+                                                       * until a real
+                                                       * CHECK_PERMISSION
+                                                       * test tried to read
+                                                       * back a permission it
+                                                       * had just granted. */
 
     *owns_worker = 1;
     return worker_ctx_storage;

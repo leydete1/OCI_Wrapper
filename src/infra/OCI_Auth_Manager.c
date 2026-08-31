@@ -26,6 +26,8 @@
 #include "ldap_auth_helper.h"             /* ldap_auth_bind_check() - Stage 3 */
 #include "cJSON.h"                        /* AUTH_SOURCE.CONFIGURATION parsing */
 #include "OCI_Audit_Trail_Manager.h"      /* audit_trail_insert() - Stage 4 */
+#include "OCI_Authz_Manager.h"            /* authz_build_permission_cache() -
+                                            * Stage 5 */
 #include "logger.h"
 #include "ini_reader.h"                   /* app_config_t - ctx->ini->auth_* */
 
@@ -800,6 +802,27 @@ int auth_authenticate(oci_context_t                 *ctx,
      * comment on why this never turns a successful login into a
      * denial. */
     record_auth_success(ctx, user.user_id, req->username, user.failed_attempts);
+
+    /* Stage 5: build the permission cache for this session, right here
+     * at the point Security_Module_Design_Specification.docx Section
+     * 6.6 means by "built once per session at session_create() time" -
+     * this function already has user.user_id and *session_id_out at
+     * hand, so there's no need to route this through OCI_Session_
+     * Manager.c at all (which has no reason to know about ROLE/
+     * PERMISSION tables). Same best-effort philosophy as record_auth_
+     * success() immediately above - a failure here is logged but does
+     * not turn this successful authentication into a denial; the
+     * resulting session simply has no cached permissions (every
+     * authz_has_permission() call for it will deny) until the user
+     * logs in again.                                                 */
+    int authz_rc = authz_build_permission_cache(ctx, *session_id_out,
+                                                 user.user_id);
+    if (authz_rc != AUTHZ_OK)
+        logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
+                     "authz_build_permission_cache failed (rc=%d) for "
+                     "session_id=%s user_id=%d - CHECK_PERMISSION will "
+                     "deny every request on this session until next "
+                     "login", authz_rc, *session_id_out, user.user_id);
 
     logger_write(ctx->security_logger, LOG_INFO, __func__, 0,
                  "SUCCESS username='%s' user_id=%d session_id=%s",

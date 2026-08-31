@@ -31,4 +31,20 @@ void copy_shared_ctx_fields(oci_context_t *dst, oci_context_t *src)
     dst->worker_logger         = src->worker_logger;
     dst->metadata_cache        = src->metadata_cache;
     dst->session_cache         = src->session_cache;
+    dst->authz_cache           = src->authz_cache;   /* Security Module
+                                                       * Stage 5, 2026-08-31 -
+                                                       * missing here was the
+                                                       * actual cause of every
+                                                       * authz_cache_store()
+                                                       * call silently failing
+                                                       * on worker threads:
+                                                       * ctx->authz_cache was
+                                                       * correctly set on the
+                                                       * bootstrap ctx, but
+                                                       * every per-worker ctx
+                                                       * copy left it NULL,
+                                                       * since this field
+                                                       * didn't exist yet when
+                                                       * this function was
+                                                       * last written. */
 }

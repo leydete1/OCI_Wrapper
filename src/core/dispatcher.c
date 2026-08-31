@@ -40,6 +40,8 @@
 #include "OCI_Execute_Procedure_Module.h"
 #include "OCI_Auth_Manager.h"             /* auth_authenticate() - new,
                                             * Security Module Stage 2 */
+#include "OCI_Authz_Manager.h"            /* authz_has_permission() - new,
+                                            * Security Module Stage 5 */
 #include "logger.h"
 #include "OCI_Session_Manager.h"   /* session_validate() - Session Manager
                                       proposal, Stage 3 (2026-08-08) */
@@ -1087,6 +1089,84 @@ static int dispatch_authenticate_new(oci_context_t       *ctx,
 }
 
 /* ================================================================== */
+/*  dispatch_check_permission_new                                        */
+/*  CHECK_PERMISSION via the same format-agnostic pipeline every other  */
+/*  operation uses - Level 1/2 already parsed and validated             */
+/*  check_permission_request_t; this is the thin adapter that calls     */
+/*  authz_has_permission() (OCI_Authz_Manager.c) and renders the        */
+/*  result, matching dispatch_authenticate_new()'s own shape exactly.   */
+/*  Security Module Stage 5 (2026-08-31).                               */
+/*                                                                       */
+/*  session_id comes from request->session_id (the envelope's own       */
+/*  field, already parsed by Level 1 for every operation type) - not    */
+/*  from op->payload, matching OCI_Authz_Manager.h's own doc comment    */
+/*  on why check_permission_request_t doesn't duplicate it.             */
+/* ================================================================== */
+static int dispatch_check_permission_new(oci_context_t       *ctx,
+                                          const char          *filename,
+                                          input_c_request_t   *request,
+                                          input_c_operation_t *op,
+                                          response_object_t   *resp)
+{
+    check_permission_request_t *req = (check_permission_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CHECK_PERMISSION/new]: %s - no check_permission_"
+                     "request_t payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "CHECK_PERMISSION",
+                              "NO_PAYLOAD", "No check_permission_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    int rc = authz_has_permission(ctx, request->session_id, req->permission_code);
+
+    char *body = malloc(512);
+    if (body)
+    {
+        const char *result_str = (rc == AUTHZ_OK) ? "ALLOWED" : "DENIED";
+        if (is_json)
+        {
+            snprintf(body, 512,
+                "{\"operation\":\"CHECK_PERMISSION\",\"permission_code\":\"%s\","
+                "\"result\":\"%s\"}",
+                req->permission_code, result_str);
+        }
+        else
+        {
+            snprintf(body, 512,
+                "<authz>\n  <operation>CHECK_PERMISSION</operation>\n"
+                "  <permission_code>%s</permission_code>\n"
+                "  <result>%s</result>\n</authz>\n",
+                req->permission_code, result_str);
+        }
+    }
+
+    /* Unlike AUTHENTICATE's DENIED (a real error - no session was
+     * created), a CHECK_PERMISSION result of DENIED is still a
+     * successfully-answered request - the caller asked a yes/no
+     * question and got a real answer. resp->status is PASS either
+     * way; ALLOWED/DENIED is carried in the body, matching Security_
+     * Module_Design_Specification.docx Section 8.2's own response
+     * shape (there is no separate error envelope for a plain denial
+     * here, unlike AUTHENTICATE's).                                   */
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    resp->response_body = body;
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [CHECK_PERMISSION/new] audit_id=%s: session_id=%s "
+                 "permission_code=%s result=%s",
+                 request->external_audit_id, request->session_id,
+                 req->permission_code, (rc == AUTHZ_OK) ? "ALLOWED" : "DENIED");
+
+    return 0;
+}
+
+/* ================================================================== */
 /*  process_xml_file                                                    */
 /*  Read file, extract operation, dispatch to correct handler.         */
 /* ================================================================== */
@@ -1311,8 +1391,37 @@ int process_xml_file(oci_context_t      *ctx,
          * payload's own value if nothing overrode it) - and before
          * Level 2, so an invalid session is rejected without spending
          * effort on field-level validation for a request that's being
-         * rejected regardless.                                        */
-        if (ctx->ini->session_validation_enabled)
+         * rejected regardless.
+         *
+         * EXEMPTION (Security Module, 2026-08-31): a standalone
+         * OP_AUTHENTICATE request is exempt from this gate entirely.
+         * This predates the Security Module and had no reason to
+         * account for AUTHENTICATE when it was written (2026-08-08) -
+         * but by definition, a client calling AUTHENTICATE does not
+         * have a session yet; that's the entire point of the call.
+         * Requiring a valid session just to attempt authentication is
+         * backwards - it would mean a genuinely new client, with no
+         * prior connection/session at all, could never successfully
+         * authenticate in the first place. This was masked in every
+         * round of Security Module testing so far because Run.sh's
+         * own tester keeps one persistent connection open for its
+         * whole run and always has a real session_id_override
+         * available (from its own initial CREATE_SESSION) by the time
+         * any AUTHENTICATE fixture runs on that connection - a
+         * genuinely fresh client (or a standalone script issuing one
+         * cold request, like test_check_permission.sh) has no such
+         * override and was being rejected here, never reaching
+         * auth_authenticate() at all. Scoped narrowly: only a request
+         * containing EXACTLY ONE operation, of type OP_AUTHENTICATE -
+         * matching how CREATE_SESSION/END_SESSION are already
+         * standalone-only by convention elsewhere in this file, not a
+         * blanket "skip validation whenever AUTHENTICATE appears
+         * anywhere in a transaction" exemption.                       */
+        int is_standalone_authenticate =
+            (new_request.operation_count == 1 &&
+             new_request.operations[0].type == OP_AUTHENTICATE);
+
+        if (ctx->ini->session_validation_enabled && !is_standalone_authenticate)
         {
             int session_rc = session_validate(ctx, new_request.session_id, NULL);
             if (session_rc != SESSION_OK)
@@ -1451,6 +1560,10 @@ int process_xml_file(oci_context_t      *ctx,
                 {
                     rc = dispatch_authenticate_new(ctx, filename, &new_request, op, resp);
                 }
+                else if (op->type == OP_CHECK_PERMISSION)
+                {
+                    rc = dispatch_check_permission_new(ctx, filename, &new_request, op, resp);
+                }
                 else
                 {
                     /* Every other operation type still runs through the
@@ -1464,7 +1577,8 @@ int process_xml_file(oci_context_t      *ctx,
                                  "File='%s' operation[%d] type=%d - new "
                                  "pipeline only implements SELECT/INSERT/"
                                  "UPDATE/DELETE/EXECUTE_PROCEDURE/"
-                                 "AUTHENTICATE so far, skipping",
+                                 "AUTHENTICATE/CHECK_PERMISSION so far, "
+                                 "skipping",
                                  filename, i, (int)op->type);
                     build_error_envelope(resp, new_request.external_audit_id, "-",
                                          "UNSUPPORTED_OPERATION_TYPE",

@@ -109,6 +109,7 @@ typedef struct oci_context_t {
     cache_t  *resultset_cache;   // NULL when cache is disabled
     cache_t  *metadata_cache;    // NULL when disabled
     cache_t  *session_cache;     // NULL when disabled          <-- ADD THIS
+    cache_t  *authz_cache;       // NULL when disabled - Security Module Stage 5
 
     uint64_t    start_time_us;
     uint64_t    end_time_us;

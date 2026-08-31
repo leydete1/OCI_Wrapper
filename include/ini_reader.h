@@ -257,6 +257,11 @@ typedef struct
     int  auth_log_failure;              /* log failed authentications      */
     int  authz_cache_ttl_seconds;       /* Stage 5 - permission cache TTL,
                                           * mirrors session TTL by default  */
+    int  authz_cache_enabled;
+    int  authz_cache_max_entries;
+    int  authz_cache_max_memory_mb;
+    int  authz_cache_bucket_count;
+    char authz_cache_hash_algorithm[20];
 
     /* ----------------------------------------------------------------
      * Database credentials / connection string

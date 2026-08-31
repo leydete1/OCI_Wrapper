@@ -313,6 +313,11 @@ static ctx_config_map_t ctx_map[] = {
     { "auth_log_success",         CFG_BOOL, offsetof(app_config_t, auth_log_success),         NULL, 1     },
     { "auth_log_failure",         CFG_BOOL, offsetof(app_config_t, auth_log_failure),         NULL, 1     },
     { "authz_cache_ttl_seconds",  CFG_INT,  offsetof(app_config_t, authz_cache_ttl_seconds),  NULL, 1800  },
+    { "authz_cache_enabled",         CFG_INT,    offsetof(app_config_t, authz_cache_enabled),         NULL, 1        },
+    { "authz_cache_max_entries",     CFG_INT,    offsetof(app_config_t, authz_cache_max_entries),     NULL, 5000     },
+    { "authz_cache_max_memory_mb",   CFG_INT,    offsetof(app_config_t, authz_cache_max_memory_mb),   NULL, 32       },
+    { "authz_cache_bucket_count",    CFG_INT,    offsetof(app_config_t, authz_cache_bucket_count),    NULL, 1024     },
+    { "authz_cache_hash_algorithm",  CFG_STRING, offsetof(app_config_t, authz_cache_hash_algorithm),  "fnv1a", 0     },
 
 
 	/* ----------------------------------------------------------------
@@ -797,6 +802,8 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
 					         maxlen=sizeof(config->statement_cache_hash_algorithm);
 					else if (!strcmp(m->name,"session_cache_hash_algorithm"))
 					         maxlen=sizeof(config->session_cache_hash_algorithm);
+					else if (!strcmp(m->name,"authz_cache_hash_algorithm"))
+					         maxlen=sizeof(config->authz_cache_hash_algorithm);
 
 
 

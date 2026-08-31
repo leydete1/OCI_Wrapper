@@ -112,6 +112,8 @@
 #include "http_consumer_runner.h"
 #include "crypt_helper.h"      /* crypt_init() - Security Module Stage 1,
                                  * 2026-08-27 */
+#include "authz_cache.h"       /* authz_cache_init/destroy() - Security
+                                 * Module Stage 5, 2026-08-31 */
 
 
 /* looks_like_new_request_format()'s own forward declaration removed
@@ -1299,6 +1301,23 @@ int main(int argc, char *argv[])
                      "session_cache disabled or failed to initialise");
 
 
+    /* ---- Initialise authz (permission) cache - Security Module
+     * Stage 5. Uses ctx.security_logger, not a dedicated logger of
+     * its own - there was no case made for splitting this out into
+     * yet another log file the way session/crypt/audit each have
+     * their own; authz_has_permission() denials already go through
+     * security_logger, same as auth_authenticate()'s own DENIED
+     * lines, so cache lifecycle messages sit in the same place as
+     * the events they're about.                                     */
+    ctx.authz_cache = authz_cache_init(ctx.ini, ctx.security_logger);
+    if (ctx.authz_cache)
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "authz_cache initialised");
+    else
+        logger_write(&logger, LOG_INFO, __func__, 0,
+                     "authz_cache disabled or failed to initialise");
+
+
 
     /* ---- Determine connection mode ---- */
     /*
@@ -2393,6 +2412,18 @@ int main(int argc, char *argv[])
    {
        logger_write(&logger, LOG_INFO, __func__, 0,
                     "Skip session_cache_destroy - not running.");
+   }
+
+   if (ctx.authz_cache)
+   {
+       logger_write(&logger, LOG_INFO, __func__, 0,
+                    "Calling authz_cache_destroy");
+       authz_cache_destroy(ctx.authz_cache);
+   }
+   else
+   {
+       logger_write(&logger, LOG_INFO, __func__, 0,
+                    "Skip authz_cache_destroy - not running.");
    }
 
    logger_close(&logger);

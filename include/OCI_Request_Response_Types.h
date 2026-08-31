@@ -89,11 +89,12 @@ typedef enum {
     OP_EXECUTE_PROCEDURE,
     OP_CREATE_SESSION,
     OP_END_SESSION,
-    OP_AUTHENTICATE          /* new - Security Module, Stage 2 (2026-08-27).
+    OP_AUTHENTICATE,         /* new - Security Module, Stage 2 (2026-08-27).
                                * LOCAL auth source only for now - see
-                               * OCI_Auth_Manager.h. OP_CHECK_PERMISSION is
-                               * deliberately NOT added yet - that's Stage 5,
-                               * once the permission cache exists to back it. */
+                               * OCI_Auth_Manager.h.                       */
+    OP_CHECK_PERMISSION      /* new - Security Module, Stage 5 (2026-08-31).
+                               * Cache-only permission check - see
+                               * OCI_Authz_Manager.h. */
 } operation_type_t;
 
 /* ------------------------------------------------------------------ */
