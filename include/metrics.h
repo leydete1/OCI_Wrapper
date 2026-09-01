@@ -103,6 +103,21 @@ typedef struct metrics_record_s
     uint64_t    level2_parse_us;
     uint64_t    sql_parse_us;
 
+    /* Security Module (2026-09-01) - Argon2id verify time (LOCAL
+     * source) and LDAP/AD bind round-trip time (delegated source),
+     * measured inside OCI_Auth_Manager.c around the two respective
+     * calls. Only one of these two is ever non-zero for a given
+     * AUTHENTICATE request - a LOCAL-source login never calls
+     * ldap_auth_bind_check(), and vice versa. Both are 0 for every
+     * non-AUTHENTICATE operation (metrics_init() zeroes them, and
+     * nothing else in this codebase sets them). Exists specifically
+     * to answer "was it us or was it LDAP" without cross-referencing
+     * separate log files - see the original request for why this
+     * matters operationally (avoiding the corporate blame-game over
+     * slow logins).                                                   */
+    uint64_t    ldap_bind_us;
+    uint64_t    crypt_verify_us;
+
     uint64_t    execution_us;
     uint64_t    total_us;
 
@@ -171,6 +186,8 @@ typedef struct metrics_record_s
     "level1_parse_us,"     \
     "level2_parse_us,"     \
     "sql_parse_us,"        \
+    "ldap_bind_us,"        \
+    "crypt_verify_us,"     \
     "execution_us,"        \
     "total_us,"            \
     "rows_affected,"       \

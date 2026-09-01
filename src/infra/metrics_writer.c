@@ -183,12 +183,12 @@ static OCIStmt *g_metrics_insert_stmt = NULL;   /* prepared once, reused
     "LEVEL1_PARSE_US, LEVEL2_PARSE_US, SQL_PARSE_US, EXECUTION_US, TOTAL_US, " \
     "ROWS_AFFECTED, OUTPUT_XML_BYTES, CLOB_BYTES, LOB_BYTES, BYTES_PROCESSED, " \
     "CACHE_HIT, STATUS_CODE, ERROR_CODE, ERROR_TEXT, CONNECTION_WAIT_US, " \
-    "CONNECTION_CREATE_US, CONNECTION_ACQUIRE_US" \
+    "CONNECTION_CREATE_US, CONNECTION_ACQUIRE_US, LDAP_BIND_US, CRYPT_VERIFY_US" \
     ") VALUES (" \
     ":1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15, :16, " \
     ":17, :18, TO_TIMESTAMP(:19,'YYYY-MM-DD HH24:MI:SS.FF6'), " \
     "TO_TIMESTAMP(:20,'YYYY-MM-DD HH24:MI:SS.FF6'), :21, :22, :23, :24, :25, " \
-    ":26, :27, :28, :29, :30, :31, :32, :33, :34, :35, :36, :37, :38)"
+    ":26, :27, :28, :29, :30, :31, :32, :33, :34, :35, :36, :37, :38, :39, :40)"
 
 /* Simple bind helper - matches SQLT_STR string binding already used
  * throughout this codebase's own insert modules (see
@@ -272,7 +272,9 @@ static void metrics_db_bulk_insert(oci_context_t *ctx,
                   bytes_processed = (long long)m->bytes_processed,
                   connection_wait_us = (long long)m->connection_wait_us,
                   connection_create_us = (long long)m->connection_create_us,
-                  connection_acquire_us = (long long)m->connection_acquire_us;
+                  connection_acquire_us = (long long)m->connection_acquire_us,
+                  ldap_bind_us = (long long)m->ldap_bind_us,
+                  crypt_verify_us = (long long)m->crypt_verify_us;
 
         sword rc = OCI_SUCCESS;
         rc |= BIND_STR(1,  consumer_name);
@@ -317,6 +319,23 @@ static void metrics_db_bulk_insert(oci_context_t *ctx,
             rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 38,
                                (dvoid *)&connection_acquire_us,
                                (sb4)sizeof(connection_acquire_us), SQLT_INT,
+                               NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+
+        /* Security Module (2026-09-01) - appended as :39/:40, deliberately
+         * NOT inserted in the "logical" position alongside level1_parse_us
+         * etc. (which would have required renumbering every single bind
+         * position from :25 onward) - functionally identical either way,
+         * since these are positional binds matched to the VALUES(...)
+         * list above, not required to mirror the CSV column order.      */
+        if (rc == OCI_SUCCESS)
+            rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 39,
+                               (dvoid *)&ldap_bind_us,
+                               (sb4)sizeof(ldap_bind_us), SQLT_INT,
+                               NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+        if (rc == OCI_SUCCESS)
+            rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 40,
+                               (dvoid *)&crypt_verify_us,
+                               (sb4)sizeof(crypt_verify_us), SQLT_INT,
                                NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
             /* Position 38, the 38th and final column - matches
              * CONNECTION_ACQUIRE_US as the last column in both the SQL's

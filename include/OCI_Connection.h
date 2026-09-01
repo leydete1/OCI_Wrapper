@@ -169,6 +169,18 @@ typedef struct oci_context_t {
      * level1_parse()/level2_validate() at all).                        */
     uint64_t level1_parse_us;
     uint64_t level2_parse_us;
+    uint64_t ldap_bind_us;      /* Security Module (2026-09-01) - per-
+                                 * request scalar, mirrors level1_parse_us/
+                                 * level2_parse_us's own pattern exactly:
+                                 * set inside OCI_Auth_Manager.c around
+                                 * ldap_auth_bind_check(), read back by
+                                 * auth_authenticate() itself when it
+                                 * assembles the AUTHENTICATE metrics
+                                 * record. Plain per-request scalar, not
+                                 * a shared pointer like ctx->authz_cache -
+                                 * no context-propagation risk the way
+                                 * that field had (Stage 5).             */
+    uint64_t crypt_verify_us;  /* same pattern, around crypt_verify_password() */
 
 } oci_context_t;
 

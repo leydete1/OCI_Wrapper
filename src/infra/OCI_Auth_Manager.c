@@ -28,6 +28,9 @@
 #include "OCI_Audit_Trail_Manager.h"      /* audit_trail_insert() - Stage 4 */
 #include "OCI_Authz_Manager.h"            /* authz_build_permission_cache() -
                                             * Stage 5 */
+#include "metrics.h"                      /* metrics_record_t, metrics_now_us() -
+                                            * timing metrics, 2026-09-01 */
+#include "metrics_writer.h"               /* metrics_finalise_and_enqueue() */
 #include "logger.h"
 #include "ini_reader.h"                   /* app_config_t - ctx->ini->auth_* */
 
@@ -277,6 +280,39 @@ Cleanup:
  * the audit row's own timestamp; auditing them would need an extra
  * round-trip for no real audit value.
  */
+/*
+ * finalise_and_enqueue_auth_metrics()
+ *
+ * Small shared helper (2026-09-01) - the same six-line "stamp end_time_us/
+ * ldap_bind_us/crypt_verify_us/status_code/error/enqueue" sequence was
+ * about to get copy-pasted at four separate return points inside
+ * auth_authenticate() (credential denied, session_create() failure,
+ * session_id-parse failure, alloc failure) - all four happen AFTER
+ * credential verification, so ctx->ldap_bind_us/crypt_verify_us are
+ * already meaningfully set by the time any of them fire. Factored out
+ * once here instead, so all four - and the final success path, which
+ * calls this too - stay in lockstep by construction rather than by
+ * four separately-maintained copies.
+ */
+static void finalise_and_enqueue_auth_metrics(oci_context_t *ctx,
+                                               metrics_record_t *metrics,
+                                               int status_code,
+                                               const char *error_code,
+                                               const char *error_text)
+{
+    metrics->end_time_us     = metrics_now_us();
+    metrics->ldap_bind_us    = ctx->ldap_bind_us;
+    metrics->crypt_verify_us = ctx->crypt_verify_us;
+    metrics->execution_us    = ctx->ldap_bind_us + ctx->crypt_verify_us;
+    metrics->status_code     = status_code;
+    if (error_code)
+        strncpy(metrics->error_code, error_code, sizeof(metrics->error_code) - 1);
+    if (error_text)
+        strncpy(metrics->error_text, error_text, sizeof(metrics->error_text) - 1);
+    metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger,
+                                  metrics);
+}
+
 static void record_auth_failure(oci_context_t *ctx, int user_id,
                                  const char *username,
                                  int current_failed_attempts,
@@ -585,6 +621,27 @@ int auth_authenticate(oci_context_t                 *ctx,
         !session_id_out || !display_name_out || !ttl_seconds_out)
         return AUTH_ERR_INVALID_ARG;
 
+    /* Metrics (2026-09-01) - deliberately built here, not at the very
+     * top, and deliberately only finalised/enqueued (via the shared
+     * finalise_and_enqueue_auth_metrics() helper below) from the
+     * credential-denied point onward - the shared credential_ok
+     * check, every failure point after it (session_create() failure,
+     * session_id-parse failure, alloc failure), and this function's
+     * own final AUTH_OK return - not at any of this function's
+     * several EARLIER return points (invalid arg, unknown user,
+     * disabled, locked, the initial lookup_user() DB failure). Those
+     * earlier paths never call crypt_verify_password()/ldap_auth_
+     * bind_check() at all, so ldap_bind_us/crypt_verify_us would
+     * always be 0 for them - a metrics row there wouldn't answer the
+     * actual question this was built for ("was it us or was it
+     * LDAP"). Scoped deliberately, not an oversight.                  */
+    metrics_record_t metrics;
+    metrics_init(&metrics);
+    metrics.start_time_us = metrics_now_us();
+    strncpy(metrics.operation, "AUTHENTICATE", sizeof(metrics.operation) - 1);
+    strncpy(metrics.object_name, req->username, sizeof(metrics.object_name) - 1);
+    metrics_set_context(&metrics, ctx);
+
     auth_user_row_t user;
     memset(&user, 0, sizeof(user));
 
@@ -621,8 +678,10 @@ int auth_authenticate(oci_context_t                 *ctx,
 
     if (strcasecmp(user.source_type, "LOCAL") == 0)
     {
+        uint64_t crypt_start = metrics_now_us();
         int verify_rc = crypt_verify_password(ctx, req->credential,
                                                user.password_hash);
+        ctx->crypt_verify_us = metrics_now_us() - crypt_start;
         if (verify_rc == CRYPT_OK)
         {
             credential_ok = 1;
@@ -709,9 +768,11 @@ int auth_authenticate(oci_context_t                 *ctx,
                              pattern_json->valuestring, req->username);
 
                     char ldap_err[256] = {0};
+                    uint64_t ldap_start = metrics_now_us();
                     int bind_rc = ldap_auth_bind_check(ldap_url, bind_dn,
                                                         req->credential,
                                                         ldap_err, sizeof(ldap_err));
+                    ctx->ldap_bind_us = metrics_now_us() - ldap_start;
                     if (bind_rc == LDAP_AUTH_BIND_OK)
                     {
                         credential_ok = 1;
@@ -739,6 +800,9 @@ int auth_authenticate(oci_context_t                 *ctx,
 
     if (!credential_ok)
     {
+        finalise_and_enqueue_auth_metrics(ctx, &metrics, AUTH_ERR_DENIED,
+                                           "AUTH_ERR_DENIED",
+                                           "Authentication denied");
         free(user.ldap_configuration);
         return AUTH_ERR_DENIED;
     }
@@ -765,6 +829,9 @@ int auth_authenticate(oci_context_t                 *ctx,
                      "session_create() failed (rc=%d) - treating as a DB "
                      "failure, not a denial",
                      req->username, user.user_id, session_rc);
+        finalise_and_enqueue_auth_metrics(ctx, &metrics, AUTH_ERR_DB_FAILURE,
+                                           "AUTH_ERR_DB_FAILURE",
+                                           "session_create() failed");
         free(session_xml);
         return AUTH_ERR_DB_FAILURE;
     }
@@ -781,6 +848,9 @@ int auth_authenticate(oci_context_t                 *ctx,
                      "username='%s' user_id=%d: session_create() succeeded "
                      "but session_id could not be parsed from its result",
                      req->username, user.user_id);
+        finalise_and_enqueue_auth_metrics(ctx, &metrics, AUTH_ERR_DB_FAILURE,
+                                           "AUTH_ERR_DB_FAILURE",
+                                           "session_id not parseable from session_create() result");
         return AUTH_ERR_DB_FAILURE;
     }
 
@@ -791,6 +861,9 @@ int auth_authenticate(oci_context_t                 *ctx,
 
     if (!*session_id_out || !*display_name_out)
     {
+        finalise_and_enqueue_auth_metrics(ctx, &metrics, AUTH_ERR_ALLOC,
+                                           "AUTH_ERR_ALLOC",
+                                           "strdup() failed");
         free(*session_id_out);
         free(*display_name_out);
         *session_id_out = NULL;
@@ -827,6 +900,9 @@ int auth_authenticate(oci_context_t                 *ctx,
     logger_write(ctx->security_logger, LOG_INFO, __func__, 0,
                  "SUCCESS username='%s' user_id=%d session_id=%s",
                  req->username, user.user_id, session_id);
+
+    strncpy(metrics.session_id, *session_id_out, sizeof(metrics.session_id) - 1);
+    finalise_and_enqueue_auth_metrics(ctx, &metrics, AUTH_OK, NULL, NULL);
 
     return AUTH_OK;
 }

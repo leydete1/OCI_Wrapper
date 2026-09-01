@@ -16,6 +16,8 @@
 #include "OCI_Authz_Manager.h"
 #include "authz_cache.h"
 #include "logger.h"
+#include "metrics.h"          /* metrics_record_t, metrics_now_us() - 2026-09-01 */
+#include "metrics_writer.h"   /* metrics_finalise_and_enqueue() */
 
 /* Same shape as OCI_Table_Metadata_Module.c's own CHECK_OCI_META and
  * OCI_Auth_Manager.c's own CHECK_OCI_AUTH - logs to ctx->security_logger
@@ -168,6 +170,35 @@ Cleanup:
 /* ================================================================== */
 /*  authz_has_permission                                                */
 /* ================================================================== */
+/*
+ * finalise_and_enqueue_authz_metrics()
+ *
+ * Same shape as OCI_Auth_Manager.c's own finalise_and_enqueue_auth_
+ * metrics() helper - authz_has_permission() has several return points
+ * (cache disabled, cache miss, decode failure, ALLOWED, DENIED-in-
+ * list) that all need the same "stamp end_time_us/status/enqueue"
+ * sequence; factored out once rather than repeated five times.
+ * ldap_bind_us/crypt_verify_us are never set here (left at 0 from
+ * metrics_init()) - this operation never touches LDAP or Argon2id at
+ * all, that's the whole point of it being a pure cache lookup.
+ */
+static void finalise_and_enqueue_authz_metrics(oci_context_t *ctx,
+                                                metrics_record_t *metrics,
+                                                int status_code,
+                                                const char *error_code,
+                                                const char *error_text)
+{
+    metrics->end_time_us  = metrics_now_us();
+    metrics->execution_us = metrics->end_time_us - metrics->start_time_us;
+    metrics->status_code  = status_code;
+    if (error_code)
+        strncpy(metrics->error_code, error_code, sizeof(metrics->error_code) - 1);
+    if (error_text)
+        strncpy(metrics->error_text, error_text, sizeof(metrics->error_text) - 1);
+    metrics_finalise_and_enqueue(ctx->metrics_writer, ctx->metrics_writer_logger,
+                                  metrics);
+}
+
 int authz_has_permission(oci_context_t *ctx,
                           const char    *session_id,
                           const char    *permission_code)
@@ -176,12 +207,25 @@ int authz_has_permission(oci_context_t *ctx,
         !permission_code || !permission_code[0])
         return AUTHZ_ERR_INVALID_ARG;
 
+    metrics_record_t metrics;
+    metrics_init(&metrics);
+    metrics.start_time_us = metrics_now_us();
+    strncpy(metrics.operation, "CHECK_PERMISSION", sizeof(metrics.operation) - 1);
+    strncpy(metrics.object_name, permission_code, sizeof(metrics.object_name) - 1);
+    strncpy(metrics.session_id, session_id, sizeof(metrics.session_id) - 1);
+    metrics_set_context(&metrics, ctx);
+
     /* A disabled/failed-to-initialise authz_cache is the same as a
      * permanent, universal cache miss - fails closed, exactly like a
      * disabled session_cache would fail every session_validate()
      * call (see authz_cache_init()'s own doc comment).                */
     if (!ctx->authz_cache)
+    {
+        finalise_and_enqueue_authz_metrics(ctx, &metrics, AUTHZ_ERR_DENIED,
+                                            "AUTHZ_ERR_DENIED",
+                                            "authz_cache disabled");
         return AUTHZ_ERR_DENIED;
+    }
 
     cache_entry_t *entry = authz_cache_lookup(ctx->authz_cache, session_id);
     if (!entry)
@@ -191,6 +235,9 @@ int authz_has_permission(oci_context_t *ctx,
                      "cached permission list (unknown, expired, or "
                      "never-authenticated session)",
                      session_id, permission_code);
+        finalise_and_enqueue_authz_metrics(ctx, &metrics, AUTHZ_ERR_DENIED,
+                                            "AUTHZ_ERR_DENIED",
+                                            "no cached permission list");
         return AUTHZ_ERR_DENIED;
     }
 
@@ -206,6 +253,9 @@ int authz_has_permission(oci_context_t *ctx,
                      "DENIED session_id=%s permission_code='%s': cached "
                      "entry failed to decode (stale encoding version?)",
                      session_id, permission_code);
+        finalise_and_enqueue_authz_metrics(ctx, &metrics, AUTHZ_ERR_DENIED,
+                                            "AUTHZ_ERR_DENIED",
+                                            "cache entry failed to decode");
         return AUTHZ_ERR_DENIED;
     }
 
@@ -221,6 +271,8 @@ int authz_has_permission(oci_context_t *ctx,
             logger_write(ctx->security_logger, LOG_INFO, __func__, 0,
                          "ALLOWED session_id=%s permission_code='%s'",
                          session_id, permission_code);
+            finalise_and_enqueue_authz_metrics(ctx, &metrics, AUTHZ_OK,
+                                                NULL, NULL);
             return AUTHZ_OK;
         }
         token = strtok_r(NULL, ",", &saveptr);
@@ -229,5 +281,8 @@ int authz_has_permission(oci_context_t *ctx,
     logger_write(ctx->security_logger, LOG_WARN, __func__, 0,
                  "DENIED session_id=%s permission_code='%s': not in "
                  "cached permission list", session_id, permission_code);
+    finalise_and_enqueue_authz_metrics(ctx, &metrics, AUTHZ_ERR_DENIED,
+                                        "AUTHZ_ERR_DENIED",
+                                        "not in cached permission list");
     return AUTHZ_ERR_DENIED;
 }

@@ -478,6 +478,8 @@ void metrics_write(logger_t         *metrics_logger,
             "%llu,"     /* level1_parse_us      */
             "%llu,"     /* level2_parse_us      */
             "%llu,"     /* sql_parse_us         */
+            "%llu,"     /* ldap_bind_us         */
+            "%llu,"     /* crypt_verify_us      */
             "%llu,"     /* execution_us         */
             "%llu,"     /* total_us             */
             "%llu,"     /* rows_affected        */
@@ -520,6 +522,8 @@ void metrics_write(logger_t         *metrics_logger,
             (unsigned long long)m->level1_parse_us,
             (unsigned long long)m->level2_parse_us,
             (unsigned long long)m->sql_parse_us,
+            (unsigned long long)m->ldap_bind_us,
+            (unsigned long long)m->crypt_verify_us,
             (unsigned long long)m->execution_us,
             (unsigned long long)m->total_us,
             (unsigned long long)m->rows_affected,
