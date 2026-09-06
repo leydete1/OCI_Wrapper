@@ -24,6 +24,29 @@
                                               param_direction_t          */
 #include "OCI_Auth_Manager.h"             /* authenticate_request_t - new,
                                             * Security Module Stage 2 */
+#include "OCI_DDL_Create_User_Module.h"   /* create_user_request_t - new,
+                                              Independent DDL Module
+                                              proposal (03-Sep) */
+#include "OCI_DDL_Grant_Module.h"         /* grant_request_t - new,
+                                              Independent DDL Module
+                                              proposal (03-Sep), second
+                                              operation */
+#include "OCI_DDL_Create_Table_Module.h"  /* create_table_request_t - new,
+                                              Independent DDL Module
+                                              proposal (03-Sep), third
+                                              operation */
+#include "OCI_DDL_Drop_Table_Module.h"    /* drop_table_request_t - new,
+                                              Independent DDL Module
+                                              proposal (03-Sep), fourth
+                                              operation */
+#include "OCI_DDL_Create_View_Module.h"   /* create_view_request_t - new,
+                                              Independent DDL Module
+                                              proposal (03-Sep), fifth
+                                              operation */
+#include "OCI_DDL_Create_Procedure_Module.h" /* create_procedure_request_t -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), sixth
+                                              operation */
 #include "OCI_Authz_Manager.h"            /* check_permission_request_t -
                                             * new, Security Module Stage 5 */
 #include "logger.h"
@@ -128,6 +151,12 @@ static operation_type_t map_operation_type(const char *s)
     if (strcasecmp(s, "END_SESSION") == 0)        return OP_END_SESSION;
     if (strcasecmp(s, "AUTHENTICATE") == 0)       return OP_AUTHENTICATE;
     if (strcasecmp(s, "CHECK_PERMISSION") == 0)   return OP_CHECK_PERMISSION;
+    if (strcasecmp(s, "CREATE_USER") == 0)        return OP_CREATE_USER;
+    if (strcasecmp(s, "GRANT") == 0)              return OP_GRANT;
+    if (strcasecmp(s, "CREATE_TABLE") == 0)       return OP_CREATE_TABLE;
+    if (strcasecmp(s, "DROP_TABLE") == 0)         return OP_DROP_TABLE;
+    if (strcasecmp(s, "CREATE_VIEW") == 0)        return OP_CREATE_VIEW;
+    if (strcasecmp(s, "CREATE_PROCEDURE") == 0)   return OP_CREATE_PROCEDURE;
     return OP_UNKNOWN;
 }
 
@@ -868,6 +897,519 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
 
             return req;
         }
+        case OP_CREATE_USER:
+        {
+            create_user_request_t *req = calloc(1, sizeof(create_user_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"username") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->username, (const char *)content, sizeof(req->username) - 1);
+                        trim_inplace(req->username);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"identified_by") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->identified_by, (const char *)content, sizeof(req->identified_by) - 1);
+                        trim_inplace(req->identified_by);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"default_tablespace") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->default_tablespace, (const char *)content, sizeof(req->default_tablespace) - 1);
+                        trim_inplace(req->default_tablespace);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"temp_tablespace") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->temp_tablespace, (const char *)content, sizeof(req->temp_tablespace) - 1);
+                        trim_inplace(req->temp_tablespace);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"quota") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->quota, (const char *)content, sizeof(req->quota) - 1);
+                        trim_inplace(req->quota);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"quota_tablespace") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->quota_tablespace, (const char *)content, sizeof(req->quota_tablespace) - 1);
+                        trim_inplace(req->quota_tablespace);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"profile") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->profile, (const char *)content, sizeof(req->profile) - 1);
+                        trim_inplace(req->profile);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"roles") == 0)
+                {
+                    for (xmlNodePtr role_node = child->children; role_node; role_node = role_node->next)
+                    {
+                        if (role_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(role_node->name, (const xmlChar *)"role") != 0) continue;
+                        if (req->role_count >= MAX_CREATE_USER_ROLES) break;
+
+                        xmlChar *content = xmlNodeGetContent(role_node);
+                        if (content)
+                        {
+                            char *dest = req->roles[req->role_count];
+                            strncpy(dest, (const char *)content, DDL_IDENTIFIER_LEN - 1);
+                            trim_inplace(dest);
+                            if (strlen(dest) > 0)
+                                req->role_count++;
+                        }
+                        xmlFree(content);
+                    }
+                }
+            }
+
+            /* quota given but no explicit tablespace -> default to
+             * default_tablespace, same fallback
+             * parse_create_user_request() applies when the module is
+             * exercised standalone (see OCI_DDL_Create_User_Module.c). */
+            if (strlen(req->quota) > 0 && strlen(req->quota_tablespace) == 0)
+                strncpy(req->quota_tablespace, req->default_tablespace,
+                        sizeof(req->quota_tablespace) - 1);
+
+            return req;
+        }
+        case OP_GRANT:
+        {
+            grant_request_t *req = calloc(1, sizeof(grant_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"grantee") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->grantee, (const char *)content, sizeof(req->grantee) - 1);
+                        trim_inplace(req->grantee);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"object_type") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->object_type, (const char *)content, sizeof(req->object_type) - 1);
+                        trim_inplace(req->object_type);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"object_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->object_name, (const char *)content, sizeof(req->object_name) - 1);
+                        trim_inplace(req->object_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"with_grant_option") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->with_grant_option = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"privileges") == 0)
+                {
+                    for (xmlNodePtr priv_node = child->children; priv_node; priv_node = priv_node->next)
+                    {
+                        if (priv_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(priv_node->name, (const xmlChar *)"privilege") != 0) continue;
+                        if (req->privilege_count >= MAX_GRANT_PRIVILEGES) break;
+
+                        xmlChar *content = xmlNodeGetContent(priv_node);
+                        if (content)
+                        {
+                            char *dest = req->privileges[req->privilege_count];
+                            strncpy(dest, (const char *)content, GRANT_PRIVILEGE_LEN - 1);
+                            trim_inplace(dest);
+                            if (strlen(dest) > 0)
+                                req->privilege_count++;
+                        }
+                        xmlFree(content);
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_CREATE_TABLE:
+        {
+            create_table_request_t *req = calloc(1, sizeof(create_table_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"table_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->table_name, (const char *)content, sizeof(req->table_name) - 1);
+                        trim_inplace(req->table_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"columns") == 0)
+                {
+                    for (xmlNodePtr col_node = child->children; col_node; col_node = col_node->next)
+                    {
+                        if (col_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(col_node->name, (const xmlChar *)"column") != 0) continue;
+                        if (req->column_count >= DDL_MAX_TABLE_COLUMNS) break;
+
+                        column_def_t *col = &req->columns[req->column_count];
+                        memset(col, 0, sizeof(*col));
+                        col->nullable = 1;   /* default: NULL allowed */
+
+                        for (xmlNodePtr field = col_node->children; field; field = field->next)
+                        {
+                            if (field->type != XML_ELEMENT_NODE) continue;
+                            xmlChar *fc = xmlNodeGetContent(field);
+                            if (!fc) continue;
+
+                            if (xmlStrcmp(field->name, (const xmlChar *)"name") == 0)
+                            {
+                                strncpy(col->name, (const char *)fc, sizeof(col->name) - 1);
+                                trim_inplace(col->name);
+                            }
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"data_type") == 0)
+                            {
+                                strncpy(col->data_type, (const char *)fc, sizeof(col->data_type) - 1);
+                                trim_inplace(col->data_type);
+                            }
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"length") == 0)
+                                col->length = atoi((const char *)fc);
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"precision") == 0)
+                                col->precision = atoi((const char *)fc);
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"scale") == 0)
+                                col->scale = atoi((const char *)fc);
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"nullable") == 0)
+                                col->nullable = (atoi((const char *)fc) != 0);
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"default_value") == 0)
+                            {
+                                strncpy(col->default_value, (const char *)fc, sizeof(col->default_value) - 1);
+                                trim_inplace(col->default_value);
+                            }
+
+                            xmlFree(fc);
+                        }
+
+                        if (strlen(col->name) > 0)
+                            req->column_count++;
+                    }
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"primary_key") == 0)
+                {
+                    for (xmlNodePtr pk_node = child->children; pk_node; pk_node = pk_node->next)
+                    {
+                        if (pk_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(pk_node->name, (const xmlChar *)"column") != 0) continue;
+                        if (req->primary_key_count >= MAX_PRIMARY_KEY_COLUMNS) break;
+
+                        xmlChar *content = xmlNodeGetContent(pk_node);
+                        if (content)
+                        {
+                            char *dest = req->primary_key_columns[req->primary_key_count];
+                            strncpy(dest, (const char *)content, TABLE_IDENTIFIER_LEN - 1);
+                            trim_inplace(dest);
+                            if (strlen(dest) > 0)
+                                req->primary_key_count++;
+                        }
+                        xmlFree(content);
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_DROP_TABLE:
+        {
+            drop_table_request_t *req = calloc(1, sizeof(drop_table_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"table_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->table_name, (const char *)content, sizeof(req->table_name) - 1);
+                        trim_inplace(req->table_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"cascade_constraints") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->cascade_constraints = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"purge") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->purge = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+            }
+
+            return req;
+        }
+        case OP_CREATE_VIEW:
+        {
+            create_view_request_t *req = calloc(1, sizeof(create_view_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"view_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->view_name, (const char *)content, sizeof(req->view_name) - 1);
+                        trim_inplace(req->view_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"replace") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->replace = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"force") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->force = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"query") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->query, (const char *)content, sizeof(req->query) - 1);
+                        trim_inplace(req->query);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"columns") == 0)
+                {
+                    for (xmlNodePtr col_node = child->children; col_node; col_node = col_node->next)
+                    {
+                        if (col_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(col_node->name, (const xmlChar *)"column") != 0) continue;
+                        if (req->column_count >= MAX_VIEW_COLUMNS) break;
+
+                        xmlChar *content = xmlNodeGetContent(col_node);
+                        if (content)
+                        {
+                            char *dest = req->columns[req->column_count];
+                            strncpy(dest, (const char *)content, VIEW_IDENTIFIER_LEN - 1);
+                            trim_inplace(dest);
+                            if (strlen(dest) > 0)
+                                req->column_count++;
+                        }
+                        xmlFree(content);
+                    }
+                }
+            }
+
+            return req;
+        }
+        case OP_CREATE_PROCEDURE:
+        {
+            create_procedure_request_t *req = calloc(1, sizeof(create_procedure_request_t));
+            if (!req) return NULL;
+
+            for (xmlNodePtr child = op_node->children; child; child = child->next)
+            {
+                if (child->type != XML_ELEMENT_NODE) continue;
+
+                if (xmlStrcmp(child->name, (const xmlChar *)"procedure_name") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->procedure_name, (const char *)content, sizeof(req->procedure_name) - 1);
+                        trim_inplace(req->procedure_name);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"owner") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->owner, (const char *)content, sizeof(req->owner) - 1);
+                        trim_inplace(req->owner);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"replace") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->replace = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"body") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                    {
+                        strncpy(req->body, (const char *)content, sizeof(req->body) - 1);
+                        trim_inplace(req->body);
+                    }
+                    xmlFree(content);
+                }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"parameters") == 0)
+                {
+                    for (xmlNodePtr param_node = child->children; param_node; param_node = param_node->next)
+                    {
+                        if (param_node->type != XML_ELEMENT_NODE) continue;
+                        if (xmlStrcmp(param_node->name, (const xmlChar *)"parameter") != 0) continue;
+                        if (req->parameter_count >= MAX_PROCEDURE_PARAMETERS) break;
+
+                        ddl_procedure_param_t *param = &req->parameters[req->parameter_count];
+                        memset(param, 0, sizeof(*param));
+                        strncpy(param->mode, "IN", sizeof(param->mode) - 1); /* default */
+
+                        for (xmlNodePtr field = param_node->children; field; field = field->next)
+                        {
+                            if (field->type != XML_ELEMENT_NODE) continue;
+                            xmlChar *fc = xmlNodeGetContent(field);
+                            if (!fc) continue;
+
+                            if (xmlStrcmp(field->name, (const xmlChar *)"name") == 0)
+                            {
+                                strncpy(param->name, (const char *)fc, sizeof(param->name) - 1);
+                                trim_inplace(param->name);
+                            }
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"data_type") == 0)
+                            {
+                                strncpy(param->data_type, (const char *)fc, sizeof(param->data_type) - 1);
+                                trim_inplace(param->data_type);
+                            }
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"mode") == 0)
+                            {
+                                strncpy(param->mode, (const char *)fc, sizeof(param->mode) - 1);
+                                trim_inplace(param->mode);
+                            }
+                            else if (xmlStrcmp(field->name, (const xmlChar *)"default_value") == 0)
+                            {
+                                strncpy(param->default_value, (const char *)fc, sizeof(param->default_value) - 1);
+                                trim_inplace(param->default_value);
+                            }
+
+                            xmlFree(fc);
+                        }
+
+                        if (strlen(param->name) > 0)
+                            req->parameter_count++;
+                    }
+                }
+            }
+
+            return req;
+        }
         default:
             return NULL;
     }
@@ -1177,6 +1719,317 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
             if (cJSON_IsString(permission_code) && permission_code->valuestring)
                 strncpy(req->permission_code, permission_code->valuestring,
                         sizeof(req->permission_code) - 1);
+
+            return req;
+        }
+        case OP_CREATE_USER:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Create_User_Module.h.                         */
+            create_user_request_t *req = calloc(1, sizeof(create_user_request_t));
+            if (!req) return NULL;
+
+            cJSON *username = cJSON_GetObjectItemCaseSensitive(op_json, "username");
+            if (cJSON_IsString(username) && username->valuestring)
+                strncpy(req->username, username->valuestring, sizeof(req->username) - 1);
+
+            cJSON *identified_by = cJSON_GetObjectItemCaseSensitive(op_json, "identified_by");
+            if (cJSON_IsString(identified_by) && identified_by->valuestring)
+                strncpy(req->identified_by, identified_by->valuestring, sizeof(req->identified_by) - 1);
+
+            cJSON *default_ts = cJSON_GetObjectItemCaseSensitive(op_json, "default_tablespace");
+            if (cJSON_IsString(default_ts) && default_ts->valuestring)
+                strncpy(req->default_tablespace, default_ts->valuestring, sizeof(req->default_tablespace) - 1);
+
+            cJSON *temp_ts = cJSON_GetObjectItemCaseSensitive(op_json, "temp_tablespace");
+            if (cJSON_IsString(temp_ts) && temp_ts->valuestring)
+                strncpy(req->temp_tablespace, temp_ts->valuestring, sizeof(req->temp_tablespace) - 1);
+
+            cJSON *quota = cJSON_GetObjectItemCaseSensitive(op_json, "quota");
+            if (cJSON_IsString(quota) && quota->valuestring)
+                strncpy(req->quota, quota->valuestring, sizeof(req->quota) - 1);
+
+            cJSON *quota_ts = cJSON_GetObjectItemCaseSensitive(op_json, "quota_tablespace");
+            if (cJSON_IsString(quota_ts) && quota_ts->valuestring)
+                strncpy(req->quota_tablespace, quota_ts->valuestring, sizeof(req->quota_tablespace) - 1);
+
+            cJSON *profile = cJSON_GetObjectItemCaseSensitive(op_json, "profile");
+            if (cJSON_IsString(profile) && profile->valuestring)
+                strncpy(req->profile, profile->valuestring, sizeof(req->profile) - 1);
+
+            cJSON *roles = cJSON_GetObjectItemCaseSensitive(op_json, "roles");
+            int role_count = cJSON_IsArray(roles) ? cJSON_GetArraySize(roles) : 0;
+            for (int r = 0; r < role_count && req->role_count < MAX_CREATE_USER_ROLES; r++)
+            {
+                cJSON *role_item = cJSON_GetArrayItem(roles, r);
+                if (cJSON_IsString(role_item) && role_item->valuestring &&
+                    strlen(role_item->valuestring) > 0)
+                {
+                    strncpy(req->roles[req->role_count], role_item->valuestring,
+                            DDL_IDENTIFIER_LEN - 1);
+                    req->role_count++;
+                }
+            }
+
+            /* Same quota_tablespace fallback as the XML case. */
+            if (strlen(req->quota) > 0 && strlen(req->quota_tablespace) == 0)
+                strncpy(req->quota_tablespace, req->default_tablespace,
+                        sizeof(req->quota_tablespace) - 1);
+
+            return req;
+        }
+        case OP_GRANT:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Grant_Module.h.                               */
+            grant_request_t *req = calloc(1, sizeof(grant_request_t));
+            if (!req) return NULL;
+
+            cJSON *grantee = cJSON_GetObjectItemCaseSensitive(op_json, "grantee");
+            if (cJSON_IsString(grantee) && grantee->valuestring)
+                strncpy(req->grantee, grantee->valuestring, sizeof(req->grantee) - 1);
+
+            cJSON *object_type = cJSON_GetObjectItemCaseSensitive(op_json, "object_type");
+            if (cJSON_IsString(object_type) && object_type->valuestring)
+                strncpy(req->object_type, object_type->valuestring, sizeof(req->object_type) - 1);
+
+            cJSON *object_name = cJSON_GetObjectItemCaseSensitive(op_json, "object_name");
+            if (cJSON_IsString(object_name) && object_name->valuestring)
+                strncpy(req->object_name, object_name->valuestring, sizeof(req->object_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *wgo = cJSON_GetObjectItemCaseSensitive(op_json, "with_grant_option");
+            if (cJSON_IsNumber(wgo))
+                req->with_grant_option = (wgo->valueint != 0);
+            else if (cJSON_IsBool(wgo))
+                req->with_grant_option = cJSON_IsTrue(wgo) ? 1 : 0;
+
+            cJSON *privileges = cJSON_GetObjectItemCaseSensitive(op_json, "privileges");
+            int priv_count = cJSON_IsArray(privileges) ? cJSON_GetArraySize(privileges) : 0;
+            for (int p = 0; p < priv_count && req->privilege_count < MAX_GRANT_PRIVILEGES; p++)
+            {
+                cJSON *priv_item = cJSON_GetArrayItem(privileges, p);
+                if (cJSON_IsString(priv_item) && priv_item->valuestring &&
+                    strlen(priv_item->valuestring) > 0)
+                {
+                    strncpy(req->privileges[req->privilege_count], priv_item->valuestring,
+                            GRANT_PRIVILEGE_LEN - 1);
+                    req->privilege_count++;
+                }
+            }
+
+            return req;
+        }
+        case OP_CREATE_TABLE:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Create_Table_Module.h.                        */
+            create_table_request_t *req = calloc(1, sizeof(create_table_request_t));
+            if (!req) return NULL;
+
+            cJSON *table_name = cJSON_GetObjectItemCaseSensitive(op_json, "table_name");
+            if (cJSON_IsString(table_name) && table_name->valuestring)
+                strncpy(req->table_name, table_name->valuestring, sizeof(req->table_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *columns = cJSON_GetObjectItemCaseSensitive(op_json, "columns");
+            int col_count = cJSON_IsArray(columns) ? cJSON_GetArraySize(columns) : 0;
+            for (int c = 0; c < col_count && req->column_count < DDL_MAX_TABLE_COLUMNS; c++)
+            {
+                cJSON *col_json = cJSON_GetArrayItem(columns, c);
+                if (!cJSON_IsObject(col_json)) continue;
+
+                column_def_t *col = &req->columns[req->column_count];
+                memset(col, 0, sizeof(*col));
+                col->nullable = 1;
+
+                cJSON *name = cJSON_GetObjectItemCaseSensitive(col_json, "name");
+                if (cJSON_IsString(name) && name->valuestring)
+                    strncpy(col->name, name->valuestring, sizeof(col->name) - 1);
+
+                cJSON *data_type = cJSON_GetObjectItemCaseSensitive(col_json, "data_type");
+                if (cJSON_IsString(data_type) && data_type->valuestring)
+                    strncpy(col->data_type, data_type->valuestring, sizeof(col->data_type) - 1);
+
+                cJSON *length = cJSON_GetObjectItemCaseSensitive(col_json, "length");
+                if (cJSON_IsNumber(length))
+                    col->length = length->valueint;
+
+                cJSON *precision = cJSON_GetObjectItemCaseSensitive(col_json, "precision");
+                if (cJSON_IsNumber(precision))
+                    col->precision = precision->valueint;
+
+                cJSON *scale = cJSON_GetObjectItemCaseSensitive(col_json, "scale");
+                if (cJSON_IsNumber(scale))
+                    col->scale = scale->valueint;
+
+                cJSON *nullable = cJSON_GetObjectItemCaseSensitive(col_json, "nullable");
+                if (cJSON_IsNumber(nullable))
+                    col->nullable = (nullable->valueint != 0);
+                else if (cJSON_IsBool(nullable))
+                    col->nullable = cJSON_IsTrue(nullable) ? 1 : 0;
+
+                cJSON *default_value = cJSON_GetObjectItemCaseSensitive(col_json, "default_value");
+                if (cJSON_IsString(default_value) && default_value->valuestring)
+                    strncpy(col->default_value, default_value->valuestring, sizeof(col->default_value) - 1);
+
+                if (strlen(col->name) > 0)
+                    req->column_count++;
+            }
+
+            cJSON *primary_key = cJSON_GetObjectItemCaseSensitive(op_json, "primary_key");
+            int pk_count = cJSON_IsArray(primary_key) ? cJSON_GetArraySize(primary_key) : 0;
+            for (int p = 0; p < pk_count && req->primary_key_count < MAX_PRIMARY_KEY_COLUMNS; p++)
+            {
+                cJSON *pk_item = cJSON_GetArrayItem(primary_key, p);
+                if (cJSON_IsString(pk_item) && pk_item->valuestring &&
+                    strlen(pk_item->valuestring) > 0)
+                {
+                    strncpy(req->primary_key_columns[req->primary_key_count], pk_item->valuestring,
+                            TABLE_IDENTIFIER_LEN - 1);
+                    req->primary_key_count++;
+                }
+            }
+
+            return req;
+        }
+        case OP_DROP_TABLE:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Drop_Table_Module.h.                          */
+            drop_table_request_t *req = calloc(1, sizeof(drop_table_request_t));
+            if (!req) return NULL;
+
+            cJSON *table_name = cJSON_GetObjectItemCaseSensitive(op_json, "table_name");
+            if (cJSON_IsString(table_name) && table_name->valuestring)
+                strncpy(req->table_name, table_name->valuestring, sizeof(req->table_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *cascade = cJSON_GetObjectItemCaseSensitive(op_json, "cascade_constraints");
+            if (cJSON_IsNumber(cascade))
+                req->cascade_constraints = (cascade->valueint != 0);
+            else if (cJSON_IsBool(cascade))
+                req->cascade_constraints = cJSON_IsTrue(cascade) ? 1 : 0;
+
+            cJSON *purge = cJSON_GetObjectItemCaseSensitive(op_json, "purge");
+            if (cJSON_IsNumber(purge))
+                req->purge = (purge->valueint != 0);
+            else if (cJSON_IsBool(purge))
+                req->purge = cJSON_IsTrue(purge) ? 1 : 0;
+
+            return req;
+        }
+        case OP_CREATE_VIEW:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Create_View_Module.h.                         */
+            create_view_request_t *req = calloc(1, sizeof(create_view_request_t));
+            if (!req) return NULL;
+
+            cJSON *view_name = cJSON_GetObjectItemCaseSensitive(op_json, "view_name");
+            if (cJSON_IsString(view_name) && view_name->valuestring)
+                strncpy(req->view_name, view_name->valuestring, sizeof(req->view_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *replace = cJSON_GetObjectItemCaseSensitive(op_json, "replace");
+            if (cJSON_IsNumber(replace))
+                req->replace = (replace->valueint != 0);
+            else if (cJSON_IsBool(replace))
+                req->replace = cJSON_IsTrue(replace) ? 1 : 0;
+
+            cJSON *force = cJSON_GetObjectItemCaseSensitive(op_json, "force");
+            if (cJSON_IsNumber(force))
+                req->force = (force->valueint != 0);
+            else if (cJSON_IsBool(force))
+                req->force = cJSON_IsTrue(force) ? 1 : 0;
+
+            cJSON *query = cJSON_GetObjectItemCaseSensitive(op_json, "query");
+            if (cJSON_IsString(query) && query->valuestring)
+                strncpy(req->query, query->valuestring, sizeof(req->query) - 1);
+
+            cJSON *columns = cJSON_GetObjectItemCaseSensitive(op_json, "columns");
+            int col_count = cJSON_IsArray(columns) ? cJSON_GetArraySize(columns) : 0;
+            for (int c = 0; c < col_count && req->column_count < MAX_VIEW_COLUMNS; c++)
+            {
+                cJSON *col_item = cJSON_GetArrayItem(columns, c);
+                if (cJSON_IsString(col_item) && col_item->valuestring &&
+                    strlen(col_item->valuestring) > 0)
+                {
+                    strncpy(req->columns[req->column_count], col_item->valuestring,
+                            VIEW_IDENTIFIER_LEN - 1);
+                    req->column_count++;
+                }
+            }
+
+            return req;
+        }
+        case OP_CREATE_PROCEDURE:
+        {
+            /* Same field set as the XML case in build_payload_xml() -
+             * see OCI_DDL_Create_Procedure_Module.h.                    */
+            create_procedure_request_t *req = calloc(1, sizeof(create_procedure_request_t));
+            if (!req) return NULL;
+
+            cJSON *procedure_name = cJSON_GetObjectItemCaseSensitive(op_json, "procedure_name");
+            if (cJSON_IsString(procedure_name) && procedure_name->valuestring)
+                strncpy(req->procedure_name, procedure_name->valuestring, sizeof(req->procedure_name) - 1);
+
+            cJSON *owner = cJSON_GetObjectItemCaseSensitive(op_json, "owner");
+            if (cJSON_IsString(owner) && owner->valuestring)
+                strncpy(req->owner, owner->valuestring, sizeof(req->owner) - 1);
+
+            cJSON *replace = cJSON_GetObjectItemCaseSensitive(op_json, "replace");
+            if (cJSON_IsNumber(replace))
+                req->replace = (replace->valueint != 0);
+            else if (cJSON_IsBool(replace))
+                req->replace = cJSON_IsTrue(replace) ? 1 : 0;
+
+            cJSON *body = cJSON_GetObjectItemCaseSensitive(op_json, "body");
+            if (cJSON_IsString(body) && body->valuestring)
+                strncpy(req->body, body->valuestring, sizeof(req->body) - 1);
+
+            cJSON *parameters = cJSON_GetObjectItemCaseSensitive(op_json, "parameters");
+            int param_count = cJSON_IsArray(parameters) ? cJSON_GetArraySize(parameters) : 0;
+            for (int p = 0; p < param_count && req->parameter_count < MAX_PROCEDURE_PARAMETERS; p++)
+            {
+                cJSON *param_json = cJSON_GetArrayItem(parameters, p);
+                if (!cJSON_IsObject(param_json)) continue;
+
+                ddl_procedure_param_t *param = &req->parameters[req->parameter_count];
+                memset(param, 0, sizeof(*param));
+                strncpy(param->mode, "IN", sizeof(param->mode) - 1); /* default */
+
+                cJSON *name = cJSON_GetObjectItemCaseSensitive(param_json, "name");
+                if (cJSON_IsString(name) && name->valuestring)
+                    strncpy(param->name, name->valuestring, sizeof(param->name) - 1);
+
+                cJSON *data_type = cJSON_GetObjectItemCaseSensitive(param_json, "data_type");
+                if (cJSON_IsString(data_type) && data_type->valuestring)
+                    strncpy(param->data_type, data_type->valuestring, sizeof(param->data_type) - 1);
+
+                cJSON *mode = cJSON_GetObjectItemCaseSensitive(param_json, "mode");
+                if (cJSON_IsString(mode) && mode->valuestring)
+                    strncpy(param->mode, mode->valuestring, sizeof(param->mode) - 1);
+
+                cJSON *default_value = cJSON_GetObjectItemCaseSensitive(param_json, "default_value");
+                if (cJSON_IsString(default_value) && default_value->valuestring)
+                    strncpy(param->default_value, default_value->valuestring, sizeof(param->default_value) - 1);
+
+                if (strlen(param->name) > 0)
+                    req->parameter_count++;
+            }
 
             return req;
         }

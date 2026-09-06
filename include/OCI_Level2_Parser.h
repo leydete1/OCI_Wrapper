@@ -315,6 +315,91 @@ int level2_validate_authenticate(oci_context_t        *ctx,
                                   operation_status_t   *error_detail);
 
 /*
+ * level2_validate_create_user()
+ *
+ * Independent DDL Module proposal (03-Sep), first operation. Thin
+ * adapter: delegates the actual field-by-field checking to
+ * validate_create_user_request() in OCI_DDL_Create_User_Module.h
+ * (identifier rules, quota format, password safety, etc.) and maps
+ * its 0/-1 + error_buf contract onto the LEVEL2_ERR_* /
+ * operation_status_t contract every other validator here uses, same
+ * adapter shape as level2_validate_authenticate() over auth_manager's
+ * own checks.
+ *
+ * Returns LEVEL2_OK on success, LEVEL2_ERR_FIELD_INVALID or
+ * LEVEL2_ERR_INVALID_ARG otherwise.
+ */
+int level2_validate_create_user(oci_context_t        *ctx,
+                                 input_c_operation_t  *op,
+                                 operation_status_t   *error_detail);
+
+/*
+ * level2_validate_grant()
+ *
+ * Independent DDL Module proposal (03-Sep), second operation. Same
+ * thin-adapter shape as level2_validate_create_user() - delegates to
+ * validate_grant_request() in OCI_DDL_Grant_Module.h.
+ *
+ * Returns LEVEL2_OK on success, LEVEL2_ERR_FIELD_INVALID or
+ * LEVEL2_ERR_INVALID_ARG otherwise.
+ */
+int level2_validate_grant(oci_context_t        *ctx,
+                           input_c_operation_t  *op,
+                           operation_status_t   *error_detail);
+
+/*
+ * level2_validate_create_table()
+ *
+ * Independent DDL Module proposal (03-Sep), third operation. Same
+ * thin-adapter shape as level2_validate_create_user()/
+ * level2_validate_grant() - delegates to
+ * validate_create_table_request() in OCI_DDL_Create_Table_Module.h.
+ *
+ * Returns LEVEL2_OK on success, LEVEL2_ERR_FIELD_INVALID or
+ * LEVEL2_ERR_INVALID_ARG otherwise.
+ */
+int level2_validate_create_table(oci_context_t        *ctx,
+                                  input_c_operation_t  *op,
+                                  operation_status_t   *error_detail);
+
+/*
+ * level2_validate_drop_table()
+ *
+ * Independent DDL Module proposal (03-Sep), fourth operation. Same
+ * thin-adapter shape as the other three DDL validators - delegates to
+ * validate_drop_table_request() in OCI_DDL_Drop_Table_Module.h.
+ *
+ * Returns LEVEL2_OK on success, LEVEL2_ERR_FIELD_INVALID or
+ * LEVEL2_ERR_INVALID_ARG otherwise.
+ */
+int level2_validate_drop_table(oci_context_t        *ctx,
+                                input_c_operation_t  *op,
+                                operation_status_t   *error_detail);
+
+/*
+ * level2_validate_create_view()
+ *
+ * Independent DDL Module proposal (03-Sep), fifth operation. Same
+ * thin-adapter shape as the other DDL validators - delegates to
+ * validate_create_view_request() in OCI_DDL_Create_View_Module.h.
+ */
+int level2_validate_create_view(oci_context_t        *ctx,
+                                 input_c_operation_t  *op,
+                                 operation_status_t   *error_detail);
+
+/*
+ * level2_validate_create_procedure()
+ *
+ * Independent DDL Module proposal (03-Sep), sixth and final operation.
+ * Same thin-adapter shape - delegates to
+ * validate_create_procedure_request() in
+ * OCI_DDL_Create_Procedure_Module.h.
+ */
+int level2_validate_create_procedure(oci_context_t        *ctx,
+                                      input_c_operation_t  *op,
+                                      operation_status_t   *error_detail);
+
+/*
  * level2_validate()
  *
  * Runs the appropriate validator against every operation in request,

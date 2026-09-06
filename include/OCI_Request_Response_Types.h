@@ -92,9 +92,35 @@ typedef enum {
     OP_AUTHENTICATE,         /* new - Security Module, Stage 2 (2026-08-27).
                                * LOCAL auth source only for now - see
                                * OCI_Auth_Manager.h.                       */
-    OP_CHECK_PERMISSION      /* new - Security Module, Stage 5 (2026-08-31).
+    OP_CHECK_PERMISSION,     /* new - Security Module, Stage 5 (2026-08-31).
                                * Cache-only permission check - see
                                * OCI_Authz_Manager.h. */
+    OP_CREATE_USER,          /* new - Independent DDL Module proposal
+                               * (03-Sep), first operation. tgen-only for
+                               * now (parse/validate/generate the DDL
+                               * text) - no execute module yet, see
+                               * OCI_DDL_Create_User_Module.h. */
+    OP_GRANT,                /* new - Independent DDL Module proposal
+                               * (03-Sep), second operation. Same
+                               * tgen-only scope as OP_CREATE_USER - see
+                               * OCI_DDL_Grant_Module.h. */
+    OP_CREATE_TABLE,         /* new - Independent DDL Module proposal
+                               * (03-Sep), third operation. Same
+                               * tgen-only scope as OP_CREATE_USER/
+                               * OP_GRANT - see
+                               * OCI_DDL_Create_Table_Module.h. */
+    OP_DROP_TABLE,           /* new - Independent DDL Module proposal
+                               * (03-Sep), fourth operation. Same
+                               * tgen-only scope - see
+                               * OCI_DDL_Drop_Table_Module.h. */
+    OP_CREATE_VIEW,          /* new - Independent DDL Module proposal
+                               * (03-Sep), fifth operation. Same
+                               * tgen-only scope - see
+                               * OCI_DDL_Create_View_Module.h. */
+    OP_CREATE_PROCEDURE      /* new - Independent DDL Module proposal
+                               * (03-Sep), sixth and final operation.
+                               * Same tgen-only scope - see
+                               * OCI_DDL_Create_Procedure_Module.h. */
 } operation_type_t;
 
 /* ------------------------------------------------------------------ */

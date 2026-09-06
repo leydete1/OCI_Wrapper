@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Grant_Template>
+  <operation>GRANT</operation>
+  <grantee>MIGRATOR_USER</grantee>
+  <object_type>TABLE</object_type>
+  <object_name>EMPLOYEES</object_name>
+  <owner>HR</owner>
+  <with_grant_option>0</with_grant_option>
+  <privileges count="2">
+    <privilege>SELECT</privilege>
+    <privilege>INSERT</privilege>
+  </privileges>
+  <generated_ddl>GRANT SELECT, INSERT ON HR.EMPLOYEES TO MIGRATOR_USER;</generated_ddl>
+</Grant_Template>

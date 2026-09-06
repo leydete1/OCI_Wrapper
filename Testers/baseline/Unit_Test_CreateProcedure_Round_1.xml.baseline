@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Create_Procedure_Template>
+  <operation>CREATE_PROCEDURE</operation>
+  <procedure_name>LOG_MIGRATION_EVENT</procedure_name>
+  <owner>HR</owner>
+  <replace>1</replace>
+  <parameters count="2">
+    <parameter>
+      <name>P_MESSAGE</name>
+      <data_type>VARCHAR2</data_type>
+      <mode>IN</mode>
+    </parameter>
+    <parameter>
+      <name>P_LOG_ID</name>
+      <data_type>NUMBER</data_type>
+      <mode>OUT</mode>
+    </parameter>
+  </parameters>
+  <body>INSERT INTO HR.MIGRATION_LOG (LOG_ID, LOG_MESSAGE) VALUES (MIGRATION_LOG_SEQ.NEXTVAL, P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;</body>
+  <generated_ddl>CREATE OR REPLACE PROCEDURE HR.LOG_MIGRATION_EVENT (
+  P_MESSAGE IN VARCHAR2,
+  P_LOG_ID OUT NUMBER
+)
+AS
+BEGIN
+INSERT INTO HR.MIGRATION_LOG (LOG_ID, LOG_MESSAGE) VALUES (MIGRATION_LOG_SEQ.NEXTVAL, P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;
+END LOG_MIGRATION_EVENT;</generated_ddl>
+</Create_Procedure_Template>

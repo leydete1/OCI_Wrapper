@@ -14,6 +14,31 @@
  *   dispatch_update_new()    - new-pipeline UPDATE handler
  *   dispatch_delete_new()    - new-pipeline DELETE handler
  *   dispatch_procedure_new() - new-pipeline EXECUTE_PROCEDURE handler
+ *   dispatch_authenticate_new()      - new-pipeline AUTHENTICATE handler
+ *   dispatch_check_permission_new()  - new-pipeline CHECK_PERMISSION handler
+ *   dispatch_create_user_new()       - new-pipeline CREATE_USER handler
+ *                                      (tgen only - no execute module yet,
+ *                                      Independent DDL Module proposal
+ *                                      03-Sep)
+ *   dispatch_grant_new()             - new-pipeline GRANT handler
+ *                                      (tgen only, same staged scope as
+ *                                      CREATE_USER)
+ *   dispatch_create_table_new()      - new-pipeline CREATE_TABLE handler
+ *                                      (tgen only, same staged scope as
+ *                                      CREATE_USER/GRANT - built for
+ *                                      DROP testing, 05-Sep)
+ *   dispatch_drop_table_new()        - new-pipeline DROP_TABLE handler
+ *                                      (tgen only - preview text, does
+ *                                      NOT execute; especially
+ *                                      deliberate given DROP is
+ *                                      destructive)
+ *   dispatch_create_view_new()       - new-pipeline CREATE_VIEW handler
+ *                                      (tgen only, same staged scope as
+ *                                      the other DDL operations)
+ *   dispatch_create_procedure_new()  - new-pipeline CREATE_PROCEDURE
+ *                                      handler (tgen only - final
+ *                                      operation of the Independent DDL
+ *                                      Module proposal, 03-Sep)
  *   process_xml_file()       - exported entry point, ties it all together
  *
  * Moved verbatim out of Test_XML_Runner.c - no logic changes. Verify
@@ -40,6 +65,41 @@
 #include "OCI_Execute_Procedure_Module.h"
 #include "OCI_Auth_Manager.h"             /* auth_authenticate() - new,
                                             * Security Module Stage 2 */
+#include "OCI_DDL_Create_User_Module.h"   /* create_user_request_t,
+                                              get_create_user_template(),
+                                              build_create_user_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep) */
+#include "OCI_DDL_Grant_Module.h"         /* grant_request_t,
+                                              get_grant_template(),
+                                              build_grant_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), second
+                                              operation */
+#include "OCI_DDL_Create_Table_Module.h"  /* create_table_request_t,
+                                              get_create_table_template(),
+                                              build_create_table_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), third
+                                              operation */
+#include "OCI_DDL_Drop_Table_Module.h"    /* drop_table_request_t,
+                                              get_drop_table_template(),
+                                              build_drop_table_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), fourth
+                                              operation */
+#include "OCI_DDL_Create_View_Module.h"   /* create_view_request_t,
+                                              get_create_view_template(),
+                                              build_create_view_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), fifth
+                                              operation */
+#include "OCI_DDL_Create_Procedure_Module.h" /* create_procedure_request_t,
+                                              get_create_procedure_template(),
+                                              build_create_procedure_ddl_text() -
+                                              new, Independent DDL Module
+                                              proposal (03-Sep), sixth
+                                              operation */
 #include "OCI_Authz_Manager.h"            /* authz_has_permission() - new,
                                             * Security Module Stage 5 */
 #include "logger.h"
@@ -1166,6 +1226,560 @@ static int dispatch_check_permission_new(oci_context_t       *ctx,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Static helper: minimal JSON string escaping (quote/backslash/       */
+/*  newline) for embedding build_create_user_ddl_text()'s multi-line    */
+/*  DDL text into a hand-built JSON body, same "just enough" approach   */
+/*  as xml_escape() takes for XML elsewhere in this project.            */
+/* ------------------------------------------------------------------ */
+static char *json_escape_ddl(const char *src)
+{
+    if (!src) return strdup("");
+
+    size_t len = strlen(src);
+    char  *out = malloc(len * 2 + 1);   /* worst case: every char escaped */
+    if (!out) return NULL;
+
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++)
+    {
+        unsigned char c = (unsigned char)src[i];
+        switch (c)
+        {
+            case '"':  out[o++] = '\\'; out[o++] = '"';  break;
+            case '\\': out[o++] = '\\'; out[o++] = '\\'; break;
+            case '\n': out[o++] = '\\'; out[o++] = 'n';  break;
+            case '\r': break;   /* drop - \n alone is enough */
+            default:   out[o++] = (char)c; break;
+        }
+    }
+    out[o] = '\0';
+    return out;
+}
+
+/* ================================================================== */
+/*  dispatch_create_user_new                                            */
+/*  CREATE_USER via the same format-agnostic pipeline every other       */
+/*  operation uses. Independent DDL Module proposal (03-Sep), first     */
+/*  operation - Level 1/2 already parsed and validated                  */
+/*  create_user_request_t; this is the tgen adapter that calls          */
+/*  get_create_user_template() (OCI_DDL_Create_User_Module.c) and       */
+/*  renders the result.                                                  */
+/*                                                                       */
+/*  IMPORTANT - this does NOT execute against the database. There is    */
+/*  no execute module for CREATE_USER yet (deliberately staged that     */
+/*  way - see OCI_DDL_Create_User_Module.h's own header comment). The   */
+/*  response is the generated/validated DDL text for review, exactly    */
+/*  like GET_TEMPLATE's response is a template for the client to act    */
+/*  on, not a side effect that already happened. resp->status is PASS   */
+/*  once the DDL text has been generated and validation succeeded       */
+/*  (Level 2 already ran level2_validate_create_user() before this      */
+/*  function is ever reached) - PASS here means "here is your DDL",     */
+/*  not "the user now exists in the database".                          */
+/* ================================================================== */
+static int dispatch_create_user_new(oci_context_t       *ctx,
+                                     const char          *filename,
+                                     input_c_request_t   *request,
+                                     input_c_operation_t *op,
+                                     response_object_t   *resp)
+{
+    create_user_request_t *req = (create_user_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_USER/new]: %s - no create_user_request_t "
+                     "payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_USER",
+                              "NO_PAYLOAD", "No create_user_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[2048] = {0};
+        build_create_user_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        body = malloc(4096);
+        if (body && e_ddl)
+        {
+            snprintf(body, 4096,
+                "{\"operation\":\"CREATE_USER\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"username\":\"%s\",\"role_count\":%d,\"generated_ddl\":\"%s\"}",
+                req->username, req->role_count, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_create_user_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_USER/new] audit_id=%s: %s - "
+                     "get_create_user_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_USER",
+                              "NO_RESULT_BODY",
+                              "get_create_user_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [CREATE_USER/new] audit_id=%s: username=%s role_count=%d "
+                 "(template generated, not yet executed - no execute module "
+                 "for CREATE_USER exists)",
+                 request->external_audit_id, req->username, req->role_count);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "CREATE_USER", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
+/* ================================================================== */
+/*  dispatch_grant_new                                                   */
+/*  GRANT via the same format-agnostic pipeline every other operation    */
+/*  uses. Independent DDL Module proposal (03-Sep), second operation -   */
+/*  same tgen-only shape as dispatch_create_user_new(): calls            */
+/*  get_grant_template() (OCI_DDL_Grant_Module.c) and renders the        */
+/*  result. Does NOT execute against the database - no execute module    */
+/*  for GRANT exists yet, same staged boundary as CREATE_USER.           */
+/* ================================================================== */
+static int dispatch_grant_new(oci_context_t       *ctx,
+                               const char          *filename,
+                               input_c_request_t   *request,
+                               input_c_operation_t *op,
+                               response_object_t   *resp)
+{
+    grant_request_t *req = (grant_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [GRANT/new]: %s - no grant_request_t payload",
+                     filename);
+        build_error_envelope(resp, request->external_audit_id, "GRANT",
+                              "NO_PAYLOAD", "No grant_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[2048] = {0};
+        build_grant_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        body = malloc(4096);
+        if (body && e_ddl)
+        {
+            snprintf(body, 4096,
+                "{\"operation\":\"GRANT\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"grantee\":\"%s\",\"object_name\":\"%s\","
+                "\"privilege_count\":%d,\"generated_ddl\":\"%s\"}",
+                req->grantee, req->object_name, req->privilege_count, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_grant_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [GRANT/new] audit_id=%s: %s - "
+                     "get_grant_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "GRANT",
+                              "NO_RESULT_BODY",
+                              "get_grant_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [GRANT/new] audit_id=%s: grantee=%s object=%s.%s "
+                 "privilege_count=%d (template generated, not yet executed - "
+                 "no execute module for GRANT exists)",
+                 request->external_audit_id, req->grantee, req->owner,
+                 req->object_name, req->privilege_count);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "GRANT", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
+/* ================================================================== */
+/*  dispatch_create_table_new                                            */
+/*  CREATE_TABLE via the same format-agnostic pipeline every other       */
+/*  operation uses. Independent DDL Module proposal (03-Sep), third      */
+/*  operation - built specifically so DROP has something real to        */
+/*  target in testing (Terry, 05-Sep). Same tgen-only shape as           */
+/*  dispatch_create_user_new()/dispatch_grant_new(): calls               */
+/*  get_create_table_template() (OCI_DDL_Create_Table_Module.c) and      */
+/*  renders the result. Does NOT execute against the database - no      */
+/*  execute module for CREATE_TABLE exists yet, same staged boundary    */
+/*  as CREATE_USER/GRANT.                                                 */
+/* ================================================================== */
+static int dispatch_create_table_new(oci_context_t       *ctx,
+                                      const char          *filename,
+                                      input_c_request_t   *request,
+                                      input_c_operation_t *op,
+                                      response_object_t   *resp)
+{
+    create_table_request_t *req = (create_table_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_TABLE/new]: %s - no create_table_request_t "
+                     "payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_TABLE",
+                              "NO_PAYLOAD", "No create_table_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[8192] = {0};
+        build_create_table_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        body = malloc(16384);
+        if (body && e_ddl)
+        {
+            snprintf(body, 16384,
+                "{\"operation\":\"CREATE_TABLE\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"table_name\":\"%s\",\"column_count\":%d,\"generated_ddl\":\"%s\"}",
+                req->table_name, req->column_count, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_create_table_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_TABLE/new] audit_id=%s: %s - "
+                     "get_create_table_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_TABLE",
+                              "NO_RESULT_BODY",
+                              "get_create_table_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [CREATE_TABLE/new] audit_id=%s: table_name=%s "
+                 "column_count=%d (template generated, not yet executed - "
+                 "no execute module for CREATE_TABLE exists)",
+                 request->external_audit_id, req->table_name, req->column_count);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "CREATE_TABLE", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
+/* ================================================================== */
+/*  dispatch_drop_table_new                                              */
+/*  DROP_TABLE via the same format-agnostic pipeline every other        */
+/*  operation uses. Independent DDL Module proposal (03-Sep), fourth    */
+/*  operation. Same tgen-only shape as the other three DDL dispatch     */
+/*  functions: calls get_drop_table_template()                          */
+/*  (OCI_DDL_Drop_Table_Module.c) and renders the result. Does NOT      */
+/*  execute against the database - no execute module for DROP_TABLE     */
+/*  exists yet. Worth repeating here specifically: DROP is destructive  */
+/*  and irreversible once executed, so this preview-only boundary is    */
+/*  especially deliberate for this operation - resp->status = PASS      */
+/*  means "here is your DROP statement for review," not "the table is  */
+/*  gone."                                                                */
+/* ================================================================== */
+static int dispatch_drop_table_new(oci_context_t       *ctx,
+                                    const char          *filename,
+                                    input_c_request_t   *request,
+                                    input_c_operation_t *op,
+                                    response_object_t   *resp)
+{
+    drop_table_request_t *req = (drop_table_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [DROP_TABLE/new]: %s - no drop_table_request_t "
+                     "payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "DROP_TABLE",
+                              "NO_PAYLOAD", "No drop_table_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[512] = {0};
+        build_drop_table_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        body = malloc(1024);
+        if (body && e_ddl)
+        {
+            snprintf(body, 1024,
+                "{\"operation\":\"DROP_TABLE\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"table_name\":\"%s\",\"generated_ddl\":\"%s\"}",
+                req->table_name, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_drop_table_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [DROP_TABLE/new] audit_id=%s: %s - "
+                     "get_drop_table_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "DROP_TABLE",
+                              "NO_RESULT_BODY",
+                              "get_drop_table_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [DROP_TABLE/new] audit_id=%s: table_name=%s owner=%s "
+                 "(template generated, not yet executed - no execute module "
+                 "for DROP_TABLE exists)",
+                 request->external_audit_id, req->table_name, req->owner);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "DROP_TABLE", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
+/* ================================================================== */
+/*  dispatch_create_view_new                                             */
+/*  CREATE_VIEW via the same format-agnostic pipeline every other       */
+/*  operation uses. Independent DDL Module proposal (03-Sep), fifth     */
+/*  operation. Same tgen-only shape as the other DDL dispatch           */
+/*  functions - calls get_create_view_template()                       */
+/*  (OCI_DDL_Create_View_Module.c) and renders the result. Does NOT     */
+/*  execute against the database - no execute module for CREATE_VIEW    */
+/*  exists yet.                                                          */
+/* ================================================================== */
+static int dispatch_create_view_new(oci_context_t       *ctx,
+                                     const char          *filename,
+                                     input_c_request_t   *request,
+                                     input_c_operation_t *op,
+                                     response_object_t   *resp)
+{
+    create_view_request_t *req = (create_view_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_VIEW/new]: %s - no create_view_request_t "
+                     "payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_VIEW",
+                              "NO_PAYLOAD", "No create_view_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[8192] = {0};
+        build_create_view_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        body = malloc(16384);
+        if (body && e_ddl)
+        {
+            snprintf(body, 16384,
+                "{\"operation\":\"CREATE_VIEW\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"view_name\":\"%s\",\"generated_ddl\":\"%s\"}",
+                req->view_name, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_create_view_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_VIEW/new] audit_id=%s: %s - "
+                     "get_create_view_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_VIEW",
+                              "NO_RESULT_BODY",
+                              "get_create_view_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [CREATE_VIEW/new] audit_id=%s: view_name=%s "
+                 "(template generated, not yet executed - no execute module "
+                 "for CREATE_VIEW exists)",
+                 request->external_audit_id, req->view_name);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "CREATE_VIEW", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
+/* ================================================================== */
+/*  dispatch_create_procedure_new                                        */
+/*  CREATE_PROCEDURE via the same format-agnostic pipeline every other  */
+/*  operation uses. Independent DDL Module proposal (03-Sep), sixth and */
+/*  final operation. Same tgen-only shape - calls                        */
+/*  get_create_procedure_template()                                      */
+/*  (OCI_DDL_Create_Procedure_Module.c) and renders the result. Does NOT */
+/*  execute against the database - no execute module for                 */
+/*  CREATE_PROCEDURE exists yet.                                          */
+/* ================================================================== */
+static int dispatch_create_procedure_new(oci_context_t       *ctx,
+                                          const char          *filename,
+                                          input_c_request_t   *request,
+                                          input_c_operation_t *op,
+                                          response_object_t   *resp)
+{
+    create_procedure_request_t *req = (create_procedure_request_t *)op->payload;
+    int is_json = (request->source_format == INPUT_FORMAT_JSON);
+
+    if (!req)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_PROCEDURE/new]: %s - no "
+                     "create_procedure_request_t payload", filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_PROCEDURE",
+                              "NO_PAYLOAD", "No create_procedure_request_t payload after Level 1/2",
+                              is_json);
+        return -1;
+    }
+
+    char *body = NULL;
+
+    if (is_json)
+    {
+        char ddl_text[8192 + PROCEDURE_BODY_LEN] = {0};
+        build_create_procedure_ddl_text(req, ddl_text, sizeof(ddl_text));
+        char *e_ddl = json_escape_ddl(ddl_text);
+
+        size_t body_cap = strlen(e_ddl ? e_ddl : "") + 4096;
+        body = malloc(body_cap);
+        if (body && e_ddl)
+        {
+            snprintf(body, body_cap,
+                "{\"operation\":\"CREATE_PROCEDURE\",\"status\":\"TEMPLATE_GENERATED\","
+                "\"procedure_name\":\"%s\",\"parameter_count\":%d,\"generated_ddl\":\"%s\"}",
+                req->procedure_name, req->parameter_count, e_ddl);
+        }
+        free(e_ddl);
+    }
+    else
+    {
+        xml_builder_t *xml = get_create_procedure_template(ctx, req);
+        if (xml && xml->buffer)
+            body = strdup(xml->buffer);
+        if (xml) xml_free(xml);
+    }
+
+    if (!body)
+    {
+        logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
+                     "FAIL [CREATE_PROCEDURE/new] audit_id=%s: %s - "
+                     "get_create_procedure_template produced no body",
+                     request->external_audit_id, filename);
+        build_error_envelope(resp, request->external_audit_id, "CREATE_PROCEDURE",
+                              "NO_RESULT_BODY",
+                              "get_create_procedure_template succeeded but produced no result body",
+                              is_json);
+        return -1;
+    }
+
+    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
+                 "PASS [CREATE_PROCEDURE/new] audit_id=%s: procedure_name=%s "
+                 "parameter_count=%d (template generated, not yet executed - "
+                 "no execute module for CREATE_PROCEDURE exists)",
+                 request->external_audit_id, req->procedure_name,
+                 req->parameter_count);
+
+    resp->status        = RESPONSE_STATUS_PASS;
+    resp->is_json       = is_json;
+    strncpy(resp->audit_id,  request->external_audit_id, sizeof(resp->audit_id) - 1);
+    strncpy(resp->operation, "CREATE_PROCEDURE", sizeof(resp->operation) - 1);
+    resp->response_body = body;
+
+    return 0;
+}
+
 /* ================================================================== */
 /*  process_xml_file                                                    */
 /*  Read file, extract operation, dispatch to correct handler.         */
@@ -1564,6 +2178,30 @@ int process_xml_file(oci_context_t      *ctx,
                 {
                     rc = dispatch_check_permission_new(ctx, filename, &new_request, op, resp);
                 }
+                else if (op->type == OP_CREATE_USER)
+                {
+                    rc = dispatch_create_user_new(ctx, filename, &new_request, op, resp);
+                }
+                else if (op->type == OP_GRANT)
+                {
+                    rc = dispatch_grant_new(ctx, filename, &new_request, op, resp);
+                }
+                else if (op->type == OP_CREATE_TABLE)
+                {
+                    rc = dispatch_create_table_new(ctx, filename, &new_request, op, resp);
+                }
+                else if (op->type == OP_DROP_TABLE)
+                {
+                    rc = dispatch_drop_table_new(ctx, filename, &new_request, op, resp);
+                }
+                else if (op->type == OP_CREATE_VIEW)
+                {
+                    rc = dispatch_create_view_new(ctx, filename, &new_request, op, resp);
+                }
+                else if (op->type == OP_CREATE_PROCEDURE)
+                {
+                    rc = dispatch_create_procedure_new(ctx, filename, &new_request, op, resp);
+                }
                 else
                 {
                     /* Every other operation type still runs through the
@@ -1577,8 +2215,10 @@ int process_xml_file(oci_context_t      *ctx,
                                  "File='%s' operation[%d] type=%d - new "
                                  "pipeline only implements SELECT/INSERT/"
                                  "UPDATE/DELETE/EXECUTE_PROCEDURE/"
-                                 "AUTHENTICATE/CHECK_PERMISSION so far, "
-                                 "skipping",
+                                 "AUTHENTICATE/CHECK_PERMISSION/"
+                                 "CREATE_USER/GRANT/CREATE_TABLE/"
+                                 "DROP_TABLE/CREATE_VIEW/CREATE_PROCEDURE "
+                                 "so far, skipping",
                                  filename, i, (int)op->type);
                     build_error_envelope(resp, new_request.external_audit_id, "-",
                                          "UNSUPPORTED_OPERATION_TYPE",

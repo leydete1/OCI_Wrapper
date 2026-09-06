@@ -30,6 +30,35 @@
 #include "metadata_cache_meta.h"         /* metadata_cache_get_or_fetch()    */
 #include "OCI_Auth_Manager.h"            /* authenticate_request_t - new,
                                            * Security Module Stage 2         */
+#include "OCI_DDL_Create_User_Module.h"  /* create_user_request_t,
+                                             validate_create_user_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep) */
+#include "OCI_DDL_Grant_Module.h"        /* grant_request_t,
+                                             validate_grant_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep), second
+                                             operation */
+#include "OCI_DDL_Create_Table_Module.h" /* create_table_request_t,
+                                             validate_create_table_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep), third
+                                             operation */
+#include "OCI_DDL_Drop_Table_Module.h"   /* drop_table_request_t,
+                                             validate_drop_table_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep), fourth
+                                             operation */
+#include "OCI_DDL_Create_View_Module.h"  /* create_view_request_t,
+                                             validate_create_view_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep), fifth
+                                             operation */
+#include "OCI_DDL_Create_Procedure_Module.h" /* create_procedure_request_t,
+                                             validate_create_procedure_request() -
+                                             new, Independent DDL Module
+                                             proposal (03-Sep), sixth
+                                             operation */
 #include "OCI_Authz_Manager.h"           /* check_permission_request_t -
                                            * new, Security Module Stage 5    */
 
@@ -1282,6 +1311,221 @@ int level2_validate_check_permission(oci_context_t        *ctx,
 }
 
 /* ================================================================== */
+/*  level2_validate_create_user                                          */
+/*  Independent DDL Module proposal (03-Sep), first operation. Thin      */
+/*  adapter over validate_create_user_request() - see this function's    */
+/*  own doc comment in OCI_Level2_Parser.h for why the actual field      */
+/*  rules live in OCI_DDL_Create_User_Module.c rather than here.         */
+/* ================================================================== */
+int level2_validate_create_user(oci_context_t        *ctx,
+                                 input_c_operation_t  *op,
+                                 operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "CREATE_USER payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    create_user_request_t *req = (create_user_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_create_user_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: CREATE_USER validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "CREATE_USER fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_grant                                                 */
+/*  Independent DDL Module proposal (03-Sep), second operation. Thin      */
+/*  adapter over validate_grant_request() - same shape as                */
+/*  level2_validate_create_user() above.                                  */
+/* ================================================================== */
+int level2_validate_grant(oci_context_t        *ctx,
+                           input_c_operation_t  *op,
+                           operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "GRANT payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    grant_request_t *req = (grant_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_grant_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: GRANT validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "GRANT fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_create_table                                         */
+/*  Independent DDL Module proposal (03-Sep), third operation. Thin       */
+/*  adapter over validate_create_table_request() - same shape as          */
+/*  level2_validate_create_user()/level2_validate_grant() above.          */
+/* ================================================================== */
+int level2_validate_create_table(oci_context_t        *ctx,
+                                  input_c_operation_t  *op,
+                                  operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "CREATE_TABLE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    create_table_request_t *req = (create_table_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_create_table_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: CREATE_TABLE validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "CREATE_TABLE fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_drop_table                                            */
+/*  Independent DDL Module proposal (03-Sep), fourth operation. Thin      */
+/*  adapter over validate_drop_table_request() - same shape as the        */
+/*  other three DDL validators above.                                     */
+/* ================================================================== */
+int level2_validate_drop_table(oci_context_t        *ctx,
+                                input_c_operation_t  *op,
+                                operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "DROP_TABLE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    drop_table_request_t *req = (drop_table_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_drop_table_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: DROP_TABLE validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "DROP_TABLE fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_create_view                                          */
+/*  Independent DDL Module proposal (03-Sep), fifth operation. Thin       */
+/*  adapter over validate_create_view_request().                          */
+/* ================================================================== */
+int level2_validate_create_view(oci_context_t        *ctx,
+                                 input_c_operation_t  *op,
+                                 operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "CREATE_VIEW payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    create_view_request_t *req = (create_view_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_create_view_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: CREATE_VIEW validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "CREATE_VIEW fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
+/*  level2_validate_create_procedure                                     */
+/*  Independent DDL Module proposal (03-Sep), sixth and final operation. */
+/*  Thin adapter over validate_create_procedure_request().               */
+/* ================================================================== */
+int level2_validate_create_procedure(oci_context_t        *ctx,
+                                      input_c_operation_t  *op,
+                                      operation_status_t   *error_detail)
+{
+    if (!ctx || !op || !op->payload)
+    {
+        set_error(error_detail, LEVEL2_ERR_INVALID_ARG, "LEVEL2_INVALID_ARG",
+                  "Request aborted. Level 2 validation failed - missing "
+                  "CREATE_PROCEDURE payload.");
+        return LEVEL2_ERR_INVALID_ARG;
+    }
+
+    create_procedure_request_t *req = (create_procedure_request_t *)op->payload;
+    char error_buf[256] = {0};
+
+    if (validate_create_procedure_request(ctx, req, error_buf, sizeof(error_buf)) != 0)
+    {
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0,
+                     "Level 2: CREATE_PROCEDURE validation failed - %s", error_buf);
+        set_error(error_detail, LEVEL2_ERR_FIELD_INVALID, "LEVEL2_FIELD_INVALID",
+                  error_buf[0] ? error_buf :
+                  "Request aborted. Level 2 validation failed - invalid "
+                  "CREATE_PROCEDURE fields.");
+        return LEVEL2_ERR_FIELD_INVALID;
+    }
+
+    set_ok(error_detail);
+    return LEVEL2_OK;
+}
+
+/* ================================================================== */
 /*  level2_validate                                                      */
 /* ================================================================== */
 int level2_validate(oci_context_t *ctx, input_c_request_t *request)
@@ -1349,6 +1593,30 @@ int level2_validate(oci_context_t *ctx, input_c_request_t *request)
 
             case OP_CHECK_PERMISSION:
                 level2_validate_check_permission(ctx, op, &op->validation_status);
+                break;
+
+            case OP_CREATE_USER:
+                level2_validate_create_user(ctx, op, &op->validation_status);
+                break;
+
+            case OP_GRANT:
+                level2_validate_grant(ctx, op, &op->validation_status);
+                break;
+
+            case OP_CREATE_TABLE:
+                level2_validate_create_table(ctx, op, &op->validation_status);
+                break;
+
+            case OP_DROP_TABLE:
+                level2_validate_drop_table(ctx, op, &op->validation_status);
+                break;
+
+            case OP_CREATE_VIEW:
+                level2_validate_create_view(ctx, op, &op->validation_status);
+                break;
+
+            case OP_CREATE_PROCEDURE:
+                level2_validate_create_procedure(ctx, op, &op->validation_status);
                 break;
 
             /* Not yet implemented - fail closed. An operation type with

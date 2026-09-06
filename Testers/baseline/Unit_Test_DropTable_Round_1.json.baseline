@@ -1,0 +1,1 @@
+{"operation":"DROP_TABLE","status":"TEMPLATE_GENERATED","table_name":"MIGRATION_LOG","generated_ddl":"DROP TABLE HR.MIGRATION_LOG CASCADE CONSTRAINTS;"}

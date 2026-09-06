@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Create_Table_Template>
+  <operation>CREATE_TABLE</operation>
+  <table_name>MIGRATION_LOG</table_name>
+  <owner>HR</owner>
+  <columns count="3">
+    <column>
+      <name>LOG_ID</name>
+      <data_type>NUMBER</data_type>
+      <precision>10</precision>
+      <nullable>0</nullable>
+    </column>
+    <column>
+      <name>LOG_MESSAGE</name>
+      <data_type>VARCHAR2</data_type>
+      <length>4000</length>
+      <nullable>1</nullable>
+    </column>
+    <column>
+      <name>CREATED_DATE</name>
+      <data_type>DATE</data_type>
+      <nullable>0</nullable>
+      <default_value>SYSDATE</default_value>
+    </column>
+  </columns>
+  <primary_key count="1">
+    <column>LOG_ID</column>
+  </primary_key>
+  <generated_ddl>CREATE TABLE HR.MIGRATION_LOG (
+  LOG_ID NUMBER(10) NOT NULL,
+  LOG_MESSAGE VARCHAR2(4000),
+  CREATED_DATE DATE DEFAULT SYSDATE NOT NULL,
+  CONSTRAINT MIGRATION_LOG_PK PRIMARY KEY (LOG_ID)
+);</generated_ddl>
+</Create_Table_Template>

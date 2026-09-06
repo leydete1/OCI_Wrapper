@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Create_User_Template>
+  <operation>CREATE_USER</operation>
+  <username>MIGRATOR_USER</username>
+  <default_tablespace>USERS</default_tablespace>
+  <temp_tablespace>TEMP</temp_tablespace>
+  <quota>UNLIMITED</quota>
+  <quota_tablespace>USERS</quota_tablespace>
+  <profile>DEFAULT</profile>
+  <roles count="2">
+    <role>CONNECT</role>
+    <role>RESOURCE</role>
+  </roles>
+  <generated_ddl>CREATE USER MIGRATOR_USER IDENTIFIED BY Round1PlainPwd
+  DEFAULT TABLESPACE USERS
+  TEMPORARY TABLESPACE TEMP
+  QUOTA UNLIMITED ON USERS
+  PROFILE DEFAULT;
+GRANT CONNECT, RESOURCE TO MIGRATOR_USER;</generated_ddl>
+</Create_User_Template>

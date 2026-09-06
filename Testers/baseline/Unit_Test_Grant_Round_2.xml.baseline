@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_grant_round_2</audit_id>
+<operation>-</operation>
+<error_code>LEVEL2_FIELD_INVALID</error_code>
+<error_text>Privilege &apos;ALTER&apos; is not valid on a VIEW (object &apos;EMP_VIEW&apos;) - ALTER/INDEX/REFERENCES are table-only</error_text>
+</execution_envelope>
+</output_xml>
