@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_ddl_sequence_round_1</audit_id>
+<operation>CREATE_PROCEDURE</operation>
+<error_code>DDL_EXECUTION_FAILED</error_code>
+<error_text>OCI Error 24344: ORA-24344: A compilation error occurred while creating an object.
+Help: https://docs.oracle.com/error-help/db/ora-24344/
+</error_text>
+</execution_envelope>
+</output_xml>

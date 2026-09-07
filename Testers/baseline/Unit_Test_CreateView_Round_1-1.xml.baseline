@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_createview_round_1</audit_id>
+<operation>CREATE_VIEW</operation>
+<error_code>DDL_EXECUTION_FAILED</error_code>
+<error_text>OCI Error 3048: ORA-03048: SQL reserved word &apos;;&apos; is not syntactically valid following &apos;...WHERE STATUS = &apos;ACTIVE&apos;&apos;
+Help: https://docs.oracle.com/error-help/db/ora-03048/
+</error_text>
+</execution_envelope>
+</output_xml>

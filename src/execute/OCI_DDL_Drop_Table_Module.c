@@ -116,11 +116,18 @@ int parse_drop_table_request(oci_context_t          *ctx,
     if (extract_xml_tag(input_xml, "purge", buf, sizeof(buf)))
         req->purge = (atoi(buf) != 0);
 
+    /* ---- Optional at parse time, mandatory (must be 1) at execute
+     * time - see header doc comment and dispatch_drop_table_new()
+     * (dispatcher.c) ---- */
+    buf[0] = '\0';
+    if (extract_xml_tag(input_xml, "confirm", buf, sizeof(buf)))
+        req->confirm = (atoi(buf) != 0);
+
     logger_write(ctx->ddl_logger, LOG_INFO, __func__, 0,
                  "parse_drop_table_request OK: table_name='%s' owner='%s' "
-                 "cascade_constraints=%d purge=%d",
+                 "cascade_constraints=%d purge=%d confirm=%d",
                  req->table_name, req->owner, req->cascade_constraints,
-                 req->purge);
+                 req->purge, req->confirm);
 
     return 0;
 }

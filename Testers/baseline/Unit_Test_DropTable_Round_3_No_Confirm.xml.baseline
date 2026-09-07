@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_droptable_round_3</audit_id>
+<operation>DROP_TABLE</operation>
+<error_code>CONFIRM_REQUIRED</error_code>
+<error_text>DROP_TABLE is irreversible - the request must include &lt;confirm&gt;1&lt;/confirm&gt; (or &quot;confirm&quot;: 1 in JSON) to actually execute it. No DDL was run.</error_text>
+</execution_envelope>
+</output_xml>

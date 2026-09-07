@@ -68,6 +68,10 @@ typedef struct {
                                                               * (skip     *
                                                               * recycle   *
                                                               * bin)      */
+    int  confirm;   /* 0/1 - MUST be 1 for the execute stage to actually
+                      * run this DROP (Terry, 07-Sep). Checked by
+                      * dispatch_drop_table_new() (dispatcher.c), NOT
+                      * here - this struct only carries the value. */
 } drop_table_request_t;
 
 /* ------------------------------------------------------------------ */
@@ -93,10 +97,14 @@ typedef enum {
  *       <owner>HR</owner>
  *       <cascade_constraints>0</cascade_constraints>
  *       <purge>0</purge>
+ *       <confirm>1</confirm>
  *   </operation>
  *
- * <table_name> is mandatory. <owner>, <cascade_constraints>, and
- * <purge> are all optional ("" / 0 when absent). Returns 0 on
+ * <table_name> is mandatory. <owner>, <cascade_constraints>,
+ * <purge>, and <confirm> are all optional ("" / 0 when absent) as far
+ * as parsing/validation are concerned - <confirm> only becomes
+ * mandatory (must be 1) at the execute stage, checked by
+ * dispatch_drop_table_new() (dispatcher.c), not here. Returns 0 on
  * success, -1 on parse error (logged via ctx->ddl_logger). Semantic
  * validity is NOT checked here - see validate_drop_table_request().
  */

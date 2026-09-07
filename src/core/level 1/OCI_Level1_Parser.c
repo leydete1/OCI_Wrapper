@@ -1233,6 +1233,13 @@ static void *build_payload_xml(xmlNodePtr op_node, operation_type_t type)
                         req->purge = (atoi((const char *)content) != 0);
                     xmlFree(content);
                 }
+                else if (xmlStrcmp(child->name, (const xmlChar *)"confirm") == 0)
+                {
+                    xmlChar *content = xmlNodeGetContent(child);
+                    if (content)
+                        req->confirm = (atoi((const char *)content) != 0);
+                    xmlFree(content);
+                }
             }
 
             return req;
@@ -1925,6 +1932,12 @@ static void *build_payload_json(cJSON *op_json, operation_type_t type)
                 req->purge = (purge->valueint != 0);
             else if (cJSON_IsBool(purge))
                 req->purge = cJSON_IsTrue(purge) ? 1 : 0;
+
+            cJSON *confirm = cJSON_GetObjectItemCaseSensitive(op_json, "confirm");
+            if (cJSON_IsNumber(confirm))
+                req->confirm = (confirm->valueint != 0);
+            else if (cJSON_IsBool(confirm))
+                req->confirm = cJSON_IsTrue(confirm) ? 1 : 0;
 
             return req;
         }
