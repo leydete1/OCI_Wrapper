@@ -145,8 +145,28 @@ int main(void)
     {
         printf("OK\n");
 
+        /* connect() dispatches internally on ctx->ini->use_connection_pool
+         * (see driver_oracle.c) - when pooled, it calls OCI_Connect_pool(),
+         * which populates ctx->pool_handle only and deliberately leaves
+         * envhp/errhp/srvhp/svchp NULL on the master ctx (those only get
+         * set on a worker ctx via get_session() - see Driver_Pool_Test.c,
+         * which already checks that path). This check used to assume
+         * connect() always meant direct-mode handles; that stopped being
+         * universally true the moment pooled dispatch was added here, not
+         * a regression in connect() itself - config.ini's own
+         * use_connection_pool value decides which shape to expect. */
         printf("Round B handle check          ... ");
-        if (ctx_b.envhp && ctx_b.errhp && ctx_b.srvhp && ctx_b.svchp)
+        if (config_b.use_connection_pool)
+        {
+            if (ctx_b.pool_handle)
+                printf("OK (pool_handle populated, pooled mode)\n");
+            else
+            {
+                printf("FAILED - connect() returned 0 but pool_handle is NULL\n");
+                failed = 1;
+            }
+        }
+        else if (ctx_b.envhp && ctx_b.errhp && ctx_b.srvhp && ctx_b.svchp)
             printf("OK (envhp/errhp/srvhp/svchp populated)\n");
         else
         {
