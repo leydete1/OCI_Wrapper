@@ -55,6 +55,10 @@
 #include "OCI_Connection.h"
 #include "OCI_Execute_Query_Batch_Module.h"
 #include <string_utils.h>               /* trim_sql_inplace()                         */
+#include "OCI_Clob_Utils.h"              /* build_clob_filename(), build_clob_url() -
+                                            see OCI_Clob_Utils.h for why there's no
+                                            write_clob_to_file() alongside these -
+                                            write_blob_to_file() below is reused as-is */
 #include "OCI_Blob_Utils.h"              /* lookup_blob_index(), write_blob_to_file(),
                                             build_filename_with_timestamp() - relocated
                                             from the now-removed OCI_Execute_Query_Module */
@@ -339,67 +343,61 @@ static int handle_clob_column_batch(oci_context_t *ctx,
 
     if (clob_bytes_acc) *clob_bytes_acc += (uint64_t)lob_len;
 
-    /* ---- Build output filename and path ---- */
-    const char *ext = (ctx->ini->clob_default_extension[0] != '\0')
-                      ? ctx->ini->clob_default_extension
-                      : ".txt";
-
+    /* ---- Build output filename ----
+     * v2 driver-extraction work (2026-09-13): this used to be built
+     * inline here; extracted verbatim (same format string, same
+     * default) into build_clob_filename() (OCI_Clob_Utils.c) so it's
+     * callable from anywhere - core or a future driver - the same way
+     * BLOB's own filename logic already is via OCI_Blob_Utils.c.      */
     char clob_filename[512];
+    build_clob_filename(bc->col_names[col_idx], abs_rownum, CLOB_index,
+                         clob_filename, sizeof(clob_filename), ctx);
+
     char clob_filepath[768];
-
-    snprintf(clob_filename, sizeof(clob_filename),
-             "%s_row%u_clob%d%s",
-             bc->col_names[col_idx],
-             abs_rownum,
-             CLOB_index,
-             ext);
-
-    snprintf(clob_filepath, sizeof(clob_filepath),
-             "%s/%s",
-             ctx->ini->CLOB_output_dir,
-             clob_filename);
+    snprintf(clob_filepath, sizeof(clob_filepath), "%s/%s",
+             ctx->ini->CLOB_output_dir, clob_filename);
 
     logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
                  "Writing CLOB to file: %s", clob_filepath);
 
-    /* ---- Write to disk ---- */
-    FILE *fp = fopen(clob_filepath, "w");
-    if (!fp)
+    /* ---- Write to disk - reusing write_blob_to_file() (OCI_Blob_Utils.h)
+     * rather than a separate write_clob_to_file(): it's already fully
+     * byte-agnostic (fopen/fwrite/fclose on blob_data/blob_size, nothing
+     * BLOB-specific in it), so it serves CLOB bytes unchanged - see
+     * OCI_Clob_Utils.h for the full reasoning. ---- */
+    lob_item_t clob_item;
+    memset(&clob_item, 0, sizeof(clob_item));
+    clob_item.file_name = clob_filename;
+    clob_item.blob_data = (unsigned char *)clob_buf;
+    clob_item.blob_size = lob_len;
+
+    if (write_blob_to_file(&clob_item, ctx->ini->CLOB_output_dir, ctx) != 0)
     {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "Failed to open CLOB output file: %s - "
-                     "emitting inline content", clob_filepath);
-        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_buf); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
+        /* write_blob_to_file() already logged the fopen failure itself -
+         * this logs only the CLOB-specific consequence (same fallback
+         * behavior the original inline code had: emit the raw content
+         * inline rather than a file reference). */
+        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                     "write_blob_to_file failed for CLOB %s - emitting "
+                     "inline content instead of a file reference",
+                     clob_filepath);
         resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_buf);   /* ADD */
         free(clob_buf);
         (*CLOB_index_ptr)++;
         return 0;
     }
 
-    size_t written = fwrite(clob_buf, 1, lob_len, fp);
-    fclose(fp);
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "CLOB written to disk: %s bytes=%u", clob_filepath, lob_len);
     free(clob_buf);
 
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "CLOB written to disk: %s bytes=%zu",
-                 clob_filepath, written);
-
-    /* ---- Build URL for XML field ---- */
+    /* ---- Build URL for XML field - extracted verbatim into
+     * build_clob_url() (OCI_Clob_Utils.c), same ini keys, same
+     * precedence, same fallback as before. ---- */
     char clob_url[768];
-    if (ctx->ini->xml_share_CLOB_URL_path && ctx->ini->CLOB_URL_path[0])
-    {
-        snprintf(clob_url, sizeof(clob_url),
-                 "%s/%s",
-                 ctx->ini->CLOB_URL_path,
-                 clob_filename);
-    }
-    else
-    {
-        snprintf(clob_url, sizeof(clob_url), "%s", clob_filepath);
-    }
+    build_clob_url(clob_filename, clob_filepath, clob_url, sizeof(clob_url), ctx);
 
     /* Emit field: value is the URL/path to the written file */
-    /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", clob_url); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
     resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_url);   /* ADD */
 
     (*CLOB_index_ptr)++;
