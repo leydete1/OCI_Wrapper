@@ -10,7 +10,7 @@ cd ~/eclipse-workspace
 #of the timestamp before each backup. Edit LABEL below to change the
 #descriptive part of the filename (e.g. what milestone this backup marks).
 DATESTAMP=$(date +%Y_%m_%d_%H%M)
-LABEL="oracle_database_abstraction_db_clob_intergration_complete_part1"
+LABEL="oracle_database_abstraction_select_intergration"
 
 #Refresh packages list
 dpkg --get-selections > /home/leyden100/eclipse-workspace/OCI_Wrapper/include/eclipse-workspaceinstalled-packages.txt

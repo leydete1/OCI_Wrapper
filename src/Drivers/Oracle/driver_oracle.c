@@ -48,8 +48,17 @@
  *
  * execute_select was left NULL in the previous pass. Now implemented
  * below as select_open()/select_fetch_batch()/select_close(), scoped to
- * scalar columns only - see the SELECT IMPLEMENTATION block below for
- * the reasoning and exactly what was reused vs written new.
+ * scalar columns only in that pass - see the SELECT IMPLEMENTATION
+ * block below for the reasoning and exactly what was reused vs written
+ * new.
+ *
+ * v2 - BLOB/CLOB (2026-09-14). select_open() no longer rejects LOB
+ * columns with DB_SELECT_UNSUPPORTED_LOB - see LOB IMPLEMENTATION block
+ * below. db_driver.h itself did NOT need to change for this: the
+ * interface (variable batch size reported back from select_open(),
+ * resultset_t as the sole return channel) was already correctly scoped
+ * to support this without modification - db_select_cursor_t stays
+ * opaque to core either way.
  */
 
 #include <stdlib.h>
@@ -65,7 +74,30 @@
                                             uses, reused rather than
                                             reimplemented (see below)    */
 #include "OCI_Resultset_Builder.h"       /* resultset_create/get_row/
-                                            set_field/free              */
+                                            set_field/set_blob_field/free */
+#include "OCI_Blob_Utils.h"              /* lookup_blob_index(),
+                                            write_blob_to_file(),
+                                            build_filename_with_timestamp() -
+                                            zero OCI dependency, already
+                                            proven by production code    */
+#include "OCI_Clob_Utils.h"              /* build_clob_filename(),
+                                            build_clob_url() - same
+                                            extraction, same reasoning   */
+
+/* get_mime_type() is declared in XML_Helper.h - deliberately NOT
+ * included here. XML_Helper.h itself includes
+ * OCI_Execute_Query_Batch_Module.h, which would make this driver depend
+ * on the very module it exists to extract logic out of - a real
+ * dependency-direction smell, not just an unused-include nit.
+ * get_mime_type() itself has zero OCI or XML dependency (it is a pure
+ * filename-extension lookup - see XML_Helper.c), so it is forward-
+ * declared directly here instead, against the real function that
+ * XML_Helper.c already defines and that production code already links.
+ * get_mime_type() would be a good candidate to relocate into
+ * OCI_Blob_Utils.c/.h alongside the other BLOB-writing helpers it
+ * always gets called with - out of scope to move it as part of this
+ * pass, since that touches XML_Helper.c/.h and its own other callers. */
+const char *get_mime_type(const char *filename);
 
 static int oracle_connect(oci_context_t *ctx)
 {
@@ -139,21 +171,25 @@ static int oracle_health_check(oci_context_t *ctx)
 /*      matching against db_column_meta_t.field_type sees the same      */
 /*      strings it already does today.                                  */
 /*                                                                      */
-/*  CLOB/BLOB rejection: get_multi_metadata() has no way to bail out    */
-/*  before defining a CLOB/BLOB column - it discovers each column's     */
-/*  type via OCIParamGet as it goes. So select_open() lets it run to    */
-/*  completion, then inspects the resulting data_types[] and rejects    */
-/*  with DB_SELECT_UNSUPPORTED_LOB if any column turned out to be       */
-/*  CLOB/BLOB - see db_driver.h. Whatever get_multi_metadata() already   */
-/*  allocated in that case is freed by the same cursor teardown path    */
-/*  any other failure uses; nothing OCI-side is left dangling.          */
-/*                                                                      */
-/*  The CLOB array-fetch quirk (OCI cannot array-fetch a CLOB column -  */
-/*  see execute_query_batch()'s own "DO NOT REMOVE" comment) can never  */
-/*  actually trigger in this pass, since CLOB is already rejected       */
-/*  above - the check is kept anyway so this stays correct once v2      */
-/*  adds CLOB support on top of this same cursor, rather than quietly   */
-/*  relying on the v1 rejection to make it moot.                        */
+/*  CLOB/BLOB (v2, 2026-09-14): get_multi_metadata() has no way to know   */
+/*  in advance that a column will be BLOB/CLOB - it discovers each        */
+/*  column's type via OCIParamGet as it goes, and its BLOB/CLOB branches  */
+/*  already allocate everything a fetch needs (see OCI_Table_Metadata_    */
+/*  Module.c: a per-row OCILobLocator array for each BLOB column, a       */
+/*  single shared locator for CLOB). select_open() no longer rejects      */
+/*  these columns - oracle_fetch_blob_field()/oracle_fetch_clob_field()   */
+/*  below (called from select_fetch_batch()) read straight from what      */
+/*  get_multi_metadata() already set up, the same way handle_blob_        */
+/*  column_batch()/handle_clob_column_batch() do in execute_query_batch() */
+/*  today - not reimplemented, just called from a different fetch loop.   */
+/*                                                                        */
+/*  The CLOB array-fetch quirk (OCI cannot array-fetch a CLOB column -    */
+/*  see execute_query_batch()'s own "DO NOT REMOVE" comment) is real and  */
+/*  live here now: select_open() downgrades cur->batch_size to 1 whenever */
+/*  a CLOB column is present, and reports that actual (possibly smaller)  */
+/*  batch size back through *out_batch_size - callers must read that,     */
+/*  not assume req->fetch_array_size held (see db_select_request_t's own  */
+/*  doc comment in db_driver.h).                                          */
 /* ================================================================== */
 
 /* Local OCI error macro - same shape as execute_query_batch()'s own
@@ -175,7 +211,23 @@ struct db_select_cursor_t {
     oci_context_t  *ctx;           /* borrowed, not owned                */
     OCIStmt        *stmt;
     ub4             col_count;
-    ub4             batch_size;    /* actual fetch_count in use          */
+    ub4             batch_size;    /* ACTUAL fetch_count used at
+                                       OCIStmtFetch2 time - may be
+                                       smaller than alloc_batch_size (see
+                                       below) if a CLOB column forced it
+                                       down to 1 after allocation.        */
+    ub4             alloc_batch_size; /* batch size get_multi_metadata()
+                                       actually sized every array to
+                                       (req->fetch_array_size, before any
+                                       CLOB downgrade). Cleanup MUST loop
+                                       to this, not batch_size - freeing
+                                       only up to a since-downgraded
+                                       batch_size would leak the unused
+                                       BLOB locator slots on a query that
+                                       has both a BLOB and a CLOB column
+                                       together (found during v2 review,
+                                       2026-09-14, before it ever shipped
+                                       as a real leak).                   */
 
     OCIDefine      **def;
     char           **buffers;
@@ -185,11 +237,19 @@ struct db_select_cursor_t {
     ub4             *data_sizes;
     char           (*col_names)[256];
 
-    /* Required by multi_meta_request_t's contract even though this
-     * cursor is scalar-only and neither of these is ever populated -
-     * see block comment above. */
-    OCILobLocator ***col_blob_locs;
-    OCILobLocator   *clob_loc;
+    OCILobLocator ***col_blob_locs;   /* [col][row], row < alloc_batch_size */
+    OCILobLocator   *clob_loc;        /* single shared locator - OCI can't
+                                          array-fetch CLOB, see below      */
+
+    /* v2 - persist across every select_fetch_batch() call on this
+     * cursor, exactly like execute_query_batch()'s own abs_rownum/
+     * BLOB_index/CLOB_index locals persist across its internal batch
+     * loop (Stage 5) today - these are NOT reset per batch. Needed so
+     * BLOB/CLOB output filenames stay unique and monotonically
+     * numbered across the whole query, not just within one batch. */
+    unsigned int    abs_rownum;
+    int             blob_index;
+    int             clob_index;
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -225,7 +285,7 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
         {
             if (cur->col_blob_locs[i])
             {
-                for (ub4 r = 0; r < cur->batch_size; r++)
+                for (ub4 r = 0; r < cur->alloc_batch_size; r++)
                     if (cur->col_blob_locs[i][r])
                         OCIDescriptorFree(cur->col_blob_locs[i][r], OCI_DTYPE_LOB);
                 free(cur->col_blob_locs[i]);
@@ -286,6 +346,12 @@ static int oracle_select_open(oci_context_t              *ctx,
 
     cur->ctx        = ctx;
     cur->batch_size = (ub4)((req->fetch_array_size > 0) ? req->fetch_array_size : 1);
+    cur->alloc_batch_size = cur->batch_size;   /* size every array below is
+                                                   actually sized to - see
+                                                   struct comment. Only
+                                                   cur->batch_size (not
+                                                   this) may be downgraded
+                                                   below.                  */
 
     ORACLE_CHECK_OCI(ctx,
         OCIStmtPrepare2(ctx->svchp, &cur->stmt, ctx->errhp,
@@ -357,24 +423,20 @@ static int oracle_select_open(oci_context_t              *ctx,
         return -1;
     }
 
-    /* Scalars only in this pass - see block comment above. */
-    for (ub4 i = 0; i < cur->col_count; i++)
-    {
-        if (cur->data_types[i] == SQLT_CLOB || cur->data_types[i] == SQLT_BLOB)
-        {
-            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                         "select_open: column '%s' is %s - not supported "
-                         "by this cursor yet, caller should fall back to "
-                         "execute_query_batch()",
-                         cur->col_names[i],
-                         cur->data_types[i] == SQLT_CLOB ? "CLOB" : "BLOB");
-            oracle_select_cursor_free(cur);
-            return DB_SELECT_UNSUPPORTED_LOB;
-        }
-    }
+    /* v2: LOB columns are now supported - see LOB IMPLEMENTATION block
+     * above and oracle_fetch_blob_field()/oracle_fetch_clob_field()
+     * below. This pass no longer rejects them with
+     * DB_SELECT_UNSUPPORTED_LOB (that constant stays defined in
+     * db_driver.h in case a genuinely unsupported type shows up later -
+     * it's just not returned from here for CLOB/BLOB any more). */
 
-    /* Not reachable while CLOB is rejected above - kept for when v2
-     * adds CLOB support on top of this cursor (see block comment). */
+    /* CLOB array-fetch restriction - OCI QUIRK - DO NOT REMOVE (same
+     * quirk execute_query_batch() documents at its own call site).
+     * Downgrades the ACTUAL fetch count only - cur->alloc_batch_size
+     * (set above, before this) stays at the original request size, so
+     * cleanup still frees every locator slot get_multi_metadata()
+     * actually allocated, not just however many this cursor ends up
+     * fetching at a time. */
     for (ub4 i = 0; i < cur->col_count; i++)
     {
         if (cur->data_types[i] == SQLT_CLOB)
@@ -390,10 +452,7 @@ static int oracle_select_open(oci_context_t              *ctx,
      * execute_query_batch() always follows its own describe step with
      * a SEPARATE, real OCIStmtExecute(...OCI_DEFAULT) (its Stage 3)
      * before any OCIStmtFetch2 call - this was missing here entirely,
-     * so select_fetch_batch()'s first fetch had nothing to fetch from.
-     * Deliberately done here, after the LOB rejection check above, not
-     * before it - no point spending a real execute round-trip on a
-     * request this cursor is about to reject anyway. */
+     * so select_fetch_batch()'s first fetch had nothing to fetch from. */
     ORACLE_CHECK_OCI(ctx,
         OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
                        0, 0, NULL, NULL, OCI_DEFAULT));
@@ -414,6 +473,313 @@ static int oracle_select_open(oci_context_t              *ctx,
     *out_batch_size   = (int)cur->batch_size;
     *out_cursor       = cur;
 
+    return 0;
+}
+
+/* Mirrors handle_blob_column_batch()'s exact logic (NULL check, length
+ * check, chunked OCILobRead, filename/mime-type resolution via the
+ * existing OCI_Blob_Utils.h functions, write_blob_to_file(),
+ * resultset_set_blob_field()) - not reimplemented, just called from a
+ * different fetch loop, reading straight from what get_multi_metadata()
+ * already set up in cur->col_blob_locs[col_idx][row].
+ *
+ * One deliberate improvement over the original: applies the same
+ * explicit-OCILobRead-return-code check that handle_clob_column_batch()
+ * got in its own 2026-08-06 bug fix (CHECK_OCI-style macros only log,
+ * they don't stop control flow - a failed read could otherwise leave
+ * 'amount' unchanged, so "if (amount == 0)" alone would silently miss
+ * it and treat corrupted output as success). handle_blob_column_batch()
+ * itself was found to still lack this fix during this port - worth
+ * applying there too as a separate, core-side follow-up.
+ *
+ * Ownership note: unlike the original's persistent, whole-query
+ * BLOB_list[] array (indexed by BLOB_index_ptr, presumably kept alive
+ * for the whole request), resultset_set_blob_field() was checked first
+ * and confirmed to strncpy() every string into resultset_field_t's own
+ * fixed buffers - nothing here needs to outlive this one call, so a
+ * stack-local lob_item_t with an immediate free() below is sufficient
+ * and simpler, without changing any observable behavior. */
+static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
+                                    ub4 row, ub4 col_idx, resultset_row_t *rs_row)
+{
+    int blob_index = cur->blob_index;
+
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "Entering col=%u row=%u abs_rownum=%u blob_index=%d",
+                 col_idx, row, cur->abs_rownum, blob_index);
+
+    lob_item_t item;
+    memset(&item, 0, sizeof(item));
+
+    item.is_null = (cur->indicators[col_idx][row] == -1);
+    if (item.is_null)
+    {
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "BLOB", "");
+        cur->blob_index++;
+        return 0;
+    }
+
+    ORACLE_CHECK_OCI(ctx,
+        OCIDescriptorAlloc(ctx->envhp, (void **)&item.lob_loc, OCI_DTYPE_LOB, 0, NULL));
+    if (!item.lob_loc) return -1;
+
+    ORACLE_CHECK_OCI(ctx,
+        OCILobLocatorAssign(ctx->svchp, ctx->errhp,
+                            cur->col_blob_locs[col_idx][row], &item.lob_loc));
+
+    ORACLE_CHECK_OCI(ctx,
+        OCILobGetLength(ctx->svchp, ctx->errhp, item.lob_loc, &item.blob_size));
+
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "BLOB col=%u row=%u size=%u index=%d",
+                 col_idx, row, item.blob_size, blob_index);
+
+    if (item.blob_size == 0)
+    {
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "BLOB", "");
+        OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+        cur->blob_index++;
+        return 0;
+    }
+
+    ub4 total_size = item.blob_size;
+    ub4 offset     = 1;
+
+    item.blob_data = malloc(total_size);
+    if (!item.blob_data)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "malloc failed for BLOB data size=%u", total_size);
+        OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+        return -1;
+    }
+
+    ub4 bytes_remaining = total_size;
+    unsigned char *write_ptr = item.blob_data;
+
+    while (bytes_remaining > 0)
+    {
+        ub4 chunk = (ub4)ctx->ini->chunk_read_size;
+        if (chunk > bytes_remaining) chunk = bytes_remaining;
+        ub4 amount = chunk;
+
+        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp, item.lob_loc,
+                                        &amount, offset, write_ptr, chunk,
+                                        NULL, NULL, 0, SQLCS_IMPLICIT);
+        ORACLE_CHECK_OCI(ctx, lob_read_rc);
+
+        if (lob_read_rc != OCI_SUCCESS && lob_read_rc != OCI_SUCCESS_WITH_INFO)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "OCILobRead failed (rc=%d) at offset=%u - aborting "
+                         "this BLOB read rather than silently treating the "
+                         "failure as success", (int)lob_read_rc, offset);
+            free(item.blob_data);
+            OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+            return -1;
+        }
+
+        if (amount == 0)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "OCILobRead returned 0 bytes unexpectedly");
+            free(item.blob_data);
+            OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+            return -1;
+        }
+
+        write_ptr       += amount;
+        offset          += amount;
+        bytes_remaining -= amount;
+    }
+
+    /* ---- Filename, MIME type - same lookup precedence as
+     * handle_blob_column_batch() ---- */
+    const char *search_col = ctx->ini->BLOB_default_file_name_col;
+    switch (blob_index)
+    {
+        case 1: search_col = ctx->ini->BLOB_default_file_name_col_1; break;
+        case 2: search_col = ctx->ini->BLOB_default_file_name_col_2; break;
+        case 3: search_col = ctx->ini->BLOB_default_file_name_col_3; break;
+        case 4: search_col = ctx->ini->BLOB_default_file_name_col_4; break;
+        case 5: search_col = ctx->ini->BLOB_default_file_name_col_5; break;
+    }
+
+    int name_col_idx = lookup_blob_index(cur->col_names, (int)cur->col_count,
+                                         search_col, ctx);
+
+    char final_name[512];
+    if (name_col_idx >= 0 &&
+        cur->indicators[name_col_idx][row] != -1 &&
+        cur->buffers[name_col_idx] != NULL)
+    {
+        const char *name_val = cur->buffers[name_col_idx] +
+                                ((size_t)row * cur->buf_sizes[name_col_idx]);
+
+        if (ctx->ini->BLOB_append_file_timestamp == 1)
+            build_filename_with_timestamp(name_val, final_name,
+                                          sizeof(final_name), blob_index, ctx);
+        else
+            snprintf(final_name, sizeof(final_name), "%s", name_val);
+    }
+    else
+    {
+        snprintf(final_name, sizeof(final_name), "%s_%d",
+                 ctx->ini->BLOB_default_file_name, blob_index);
+    }
+
+    item.column_name = cur->col_names[col_idx];
+    item.file_name   = strdup(final_name);
+    item.mime_type   = strdup(get_mime_type(item.file_name));
+
+    /* output_file_url/output_file_destination point straight into
+     * ctx->ini's own config strings when sharing is disabled - do NOT
+     * free those; only the strdup("N/A") branch is heap-owned here.   */
+    int url_is_heap = 0, dest_is_heap = 0;
+
+    if (ctx->ini->xml_share_BLOB_URL_path)
+        item.output_file_url = ctx->ini->BLOB_URL_path;
+    else { item.output_file_url = strdup("N/A"); url_is_heap = 1; }
+
+    if (ctx->ini->xml_share_BLOB_host_path)
+        item.output_file_destination = ctx->ini->BLOB_output_dir;
+    else { item.output_file_destination = strdup("N/A"); dest_is_heap = 1; }
+
+    write_blob_to_file(&item, ctx->ini->BLOB_output_dir, ctx);
+
+    resultset_set_blob_field(rs_row, (int)col_idx, item.column_name,
+                              item.file_name, item.output_file_destination,
+                              item.output_file_url, item.blob_size,
+                              item.mime_type);
+
+    free(item.file_name);
+    free(item.mime_type);
+    free(item.blob_data);
+    if (url_is_heap)  free(item.output_file_url);
+    if (dest_is_heap) free(item.output_file_destination);
+    OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+
+    cur->blob_index++;
+    return 0;
+}
+
+/* Mirrors handle_clob_column_batch()'s exact logic, including its
+ * 2026-08-06 explicit-return-code fix for OCILobRead (see block comment
+ * above oracle_fetch_blob_field() for why that matters). CLOB always
+ * uses row index [0] here, matching the original ("bc->indicators
+ * [col_idx][0]") - safe because cur->batch_size is always 1 whenever a
+ * CLOB column is present (see the CLOB array-fetch quirk in
+ * oracle_select_open()), so 'row' passed in from
+ * oracle_select_fetch_batch()'s loop is always 0 in that case anyway. */
+static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
+                                    ub4 col_idx, resultset_row_t *rs_row)
+{
+    int clob_index = cur->clob_index;
+
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "Entering col=%u name=%s abs_rownum=%u clob_index=%d",
+                 col_idx, cur->col_names[col_idx], cur->abs_rownum, clob_index);
+
+    if (cur->indicators[col_idx][0] == -1)
+    {
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", "");
+        cur->clob_index++;
+        return 0;
+    }
+
+    ub4 lob_len = 0;
+    ORACLE_CHECK_OCI(ctx,
+        OCILobGetLength(ctx->svchp, ctx->errhp, cur->clob_loc, &lob_len));
+
+    if (lob_len == 0)
+    {
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", "");
+        cur->clob_index++;
+        return 0;
+    }
+
+    char *clob_buf = calloc(1, lob_len + 1);
+    if (!clob_buf)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "calloc failed for CLOB buffer size=%u", lob_len + 1);
+        return -1;
+    }
+
+    ub4   offset          = 1;
+    ub4   bytes_remaining = lob_len;
+    char *write_ptr       = clob_buf;
+
+    while (bytes_remaining > 0)
+    {
+        ub4 chunk = (ub4)ctx->ini->chunk_read_size;
+        if (chunk > bytes_remaining) chunk = bytes_remaining;
+        ub4 amount = chunk;
+
+        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp, cur->clob_loc,
+                                        &amount, offset, write_ptr, chunk,
+                                        NULL, NULL, 0, SQLCS_IMPLICIT);
+        ORACLE_CHECK_OCI(ctx, lob_read_rc);
+
+        if (lob_read_rc != OCI_SUCCESS && lob_read_rc != OCI_SUCCESS_WITH_INFO)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "OCILobRead failed (rc=%d) at offset=%u - aborting "
+                         "this CLOB read rather than silently treating the "
+                         "failure as success", (int)lob_read_rc, offset);
+            free(clob_buf);
+            return -1;
+        }
+
+        if (amount == 0)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "OCILobRead returned 0 bytes unexpectedly");
+            free(clob_buf);
+            return -1;
+        }
+
+        write_ptr       += amount;
+        offset          += amount;
+        bytes_remaining -= amount;
+    }
+
+    clob_buf[lob_len] = '\0';
+
+    char clob_filename[512];
+    build_clob_filename(cur->col_names[col_idx], cur->abs_rownum, clob_index,
+                         clob_filename, sizeof(clob_filename), ctx);
+
+    char clob_filepath[768];
+    snprintf(clob_filepath, sizeof(clob_filepath), "%s/%s",
+             ctx->ini->CLOB_output_dir, clob_filename);
+
+    lob_item_t clob_item;
+    memset(&clob_item, 0, sizeof(clob_item));
+    clob_item.file_name = clob_filename;
+    clob_item.blob_data = (unsigned char *)clob_buf;
+    clob_item.blob_size = lob_len;
+
+    if (write_blob_to_file(&clob_item, ctx->ini->CLOB_output_dir, ctx) != 0)
+    {
+        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                     "write_blob_to_file failed for CLOB %s - emitting "
+                     "inline content instead of a file reference",
+                     clob_filepath);
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", clob_buf);
+        free(clob_buf);
+        cur->clob_index++;
+        return 0;
+    }
+
+    free(clob_buf);
+
+    char clob_url[768];
+    build_clob_url(clob_filename, clob_filepath, clob_url, sizeof(clob_url), ctx);
+
+    resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", clob_url);
+
+    cur->clob_index++;
     return 0;
 }
 
@@ -457,17 +823,38 @@ static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
         return -1;
     }
 
-    /* Batch-local row numbering (1..rows_fetched) - same convention the
-     * async path already uses for its own per-batch resultset_t (see
-     * db_driver.h, SELECT IS A CURSOR). Global row position across
-     * batches, if a caller needs it, is theirs to track - the driver
-     * has no concept of "the whole query" once select_open() returns. */
+    /* Batch-local row numbering (1..rows_fetched) for resultset_get_row -
+     * same convention the async path already uses for its own per-batch
+     * resultset_t (see db_driver.h, SELECT IS A CURSOR). cur->abs_rownum
+     * below is a SEPARATE, cursor-lifetime counter (see struct comment)
+     * used only for BLOB/CLOB filename numbering - the two numbering
+     * schemes are intentionally different and must not be confused. */
     for (ub4 r = 0; r < rows_fetched; r++)
     {
         resultset_row_t *rs_row = resultset_get_row(rs, (int)(r + 1));
 
         for (ub4 c = 0; c < cursor->col_count; c++)
         {
+            if (cursor->data_types[c] == SQLT_BLOB)
+            {
+                if (oracle_fetch_blob_field(ctx, cursor, r, c, rs_row) != 0)
+                {
+                    resultset_free(rs);
+                    return -1;
+                }
+                continue;
+            }
+
+            if (cursor->data_types[c] == SQLT_CLOB)
+            {
+                if (oracle_fetch_clob_field(ctx, cursor, c, rs_row) != 0)
+                {
+                    resultset_free(rs);
+                    return -1;
+                }
+                continue;
+            }
+
             const char *type_str = oracle_type_to_string(cursor->data_types[c]);
             const char *value = cursor->buffers[c] +
                                  ((size_t)r * cursor->buf_sizes[c]);
@@ -478,6 +865,8 @@ static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
             resultset_set_field(rs_row, (int)c, cursor->col_names[c],
                                  type_str, value);
         }
+
+        cursor->abs_rownum++;
     }
 
     *out_rs           = rs;
