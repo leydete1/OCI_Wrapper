@@ -272,7 +272,7 @@ int main(void)
             resultset_t *rs = NULL;
             int rows_fetched = 0;
 
-            if (driver->select_fetch_batch(cursor2, &rs, &rows_fetched) != 0)
+            if (driver->select_fetch_batch(cursor2, &rs, &rows_fetched, NULL) != 0)
             {
                 printf("  FAILED - select_fetch_batch\n");
                 failed = 1;

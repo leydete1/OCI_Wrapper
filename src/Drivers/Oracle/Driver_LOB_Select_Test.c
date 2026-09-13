@@ -242,19 +242,29 @@ static int direct_lob_length(oci_context_t *ctx, const char *table,
 typedef void (*row_cb_t)(resultset_row_t *row, const char *id_value, void *user_data);
 
 static int drain_cursor(const db_driver_t *driver, db_select_cursor_t *cursor,
-                         row_cb_t per_row_cb, void *user_data, int *failed)
+                         row_cb_t per_row_cb, void *user_data, int *failed,
+                         db_fetch_batch_stats_t *cumulative)
 {
     int total_rows = 0;
     for (;;)
     {
         resultset_t *rs = NULL;
         int rows_fetched = 0;
+        db_fetch_batch_stats_t stats = {0};
 
-        if (driver->select_fetch_batch(cursor, &rs, &rows_fetched) != 0)
+        if (driver->select_fetch_batch(cursor, &rs, &rows_fetched, &stats) != 0)
         {
             printf("  FAILED - select_fetch_batch\n");
             *failed = 1;
             return total_rows;
+        }
+
+        if (cumulative)
+        {
+            cumulative->blob_count += stats.blob_count;
+            cumulative->clob_count += stats.clob_count;
+            cumulative->blob_bytes += stats.blob_bytes;
+            cumulative->clob_bytes += stats.clob_bytes;
         }
 
         if (rows_fetched == 0)
@@ -412,7 +422,8 @@ int main(void)
         if (batch_size2 != 2) { printf("  FAILED - expected batch_size 2, got %d\n", batch_size2); failed = 1; }
 
         struct blob_check_state st = { &worker_ctx, 0, 0 };
-        int rows2 = drain_cursor(driver, cur2, blob_row_cb, &st, &failed);
+        db_fetch_batch_stats_t stats2 = {0};
+        int rows2 = drain_cursor(driver, cur2, blob_row_cb, &st, &failed, &stats2);
         driver->select_close(cur2);
         free(cols2);
 
@@ -421,6 +432,22 @@ int main(void)
         printf("Test 2 total rows                   ... ");
         if (rows2 == lob_test_count) printf("OK (%d, %d checked)\n", rows2, st.checked);
         else { printf("FAILED - got %d expected %d\n", rows2, lob_test_count); failed = 1; }
+
+        /* stats2 exercises the interface extension added specifically for
+         * real integration (see db_driver.h/driver_oracle.c, 2026-09-14) -
+         * one PHOTO column per row, all non-null, so blob_count should
+         * equal the row count exactly and blob_bytes should equal the
+         * sum of every row's PHOTO size already cross-checked above. */
+        printf("Test 2 out_stats                    ... ");
+        if (stats2.blob_count == rows2 && stats2.blob_bytes > 0)
+            printf("OK (blob_count=%d blob_bytes=%llu)\n",
+                   stats2.blob_count, (unsigned long long)stats2.blob_bytes);
+        else
+        {
+            printf("FAILED - blob_count=%d (expected %d) blob_bytes=%llu\n",
+                   stats2.blob_count, rows2, (unsigned long long)stats2.blob_bytes);
+            failed = 1;
+        }
     }
 
     /* ---- Test 3 ---- */
@@ -450,7 +477,8 @@ int main(void)
         if (batch_size4 != 1) { printf("  FAILED - expected batch_size 1, got %d\n", batch_size4); failed = 1; }
 
         struct clob_check_state st = { &worker_ctx, 0, 0, 0 };
-        int rows4 = drain_cursor(driver, cur4, clob_row_cb, &st, &failed);
+        db_fetch_batch_stats_t stats4 = {0};
+        int rows4 = drain_cursor(driver, cur4, clob_row_cb, &st, &failed, &stats4);
         driver->select_close(cur4);
         free(cols4);
 
@@ -461,6 +489,24 @@ int main(void)
             printf("OK (%d, %d checked, %d stat-skipped)\n", rows4, st.checked, st.stat_skipped);
         else
         { printf("FAILED - got %d expected %d\n", rows4, clob_test_count); failed = 1; }
+
+        /* clob_count should equal every row processed (increments even
+         * for a genuinely-NULL CLOB - matches BLOB_index/CLOB_index's
+         * existing semantics in execute_query_batch()'s own code, not a
+         * new rule invented here); clob_bytes is a loose sanity check
+         * only (>0), not an exact match - id=5's CLOB may legitimately
+         * be NULL, contributing 0 bytes, and this test can't assume a
+         * specific total without re-querying it independently. */
+        printf("Test 4 out_stats                    ... ");
+        if (stats4.clob_count == rows4 && stats4.clob_bytes > 0)
+            printf("OK (clob_count=%d clob_bytes=%llu)\n",
+                   stats4.clob_count, (unsigned long long)stats4.clob_bytes);
+        else
+        {
+            printf("FAILED - clob_count=%d (expected %d) clob_bytes=%llu\n",
+                   stats4.clob_count, rows4, (unsigned long long)stats4.clob_bytes);
+            failed = 1;
+        }
     }
 
     /* ---- Test 5: mixed BLOB+CLOB, same query - alloc_batch_size regression check ---- */
@@ -482,7 +528,7 @@ int main(void)
         printf("OK (%d columns, batch_size=%d, expected 1)\n", col_count5, batch_size5);
         if (batch_size5 != 1) { printf("  FAILED - expected batch_size 1, got %d\n", batch_size5); failed = 1; }
 
-        int rows5 = drain_cursor(driver, cur5, NULL, NULL, &failed);
+        int rows5 = drain_cursor(driver, cur5, NULL, NULL, &failed, NULL);
         driver->select_close(cur5);
         free(cols5);
 

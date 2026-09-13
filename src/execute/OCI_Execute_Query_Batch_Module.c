@@ -64,6 +64,17 @@
                                             from the now-removed OCI_Execute_Query_Module */
 #include "OCI_Table_Metadata_Module.h"   /* get_multi_metadata() get_select_metadata() */
 #include "sql_dependency_extractor.h"    /* extract_sql_dependencies()                 */
+#include "db_driver.h"                   /* db_driver_get() - sync-path integration
+                                            (Phase 2a, 2026-09-14). async path below is
+                                            deliberately still on the raw OCI machinery
+                                            this file already had - see the branch on
+                                            is_async inside execute_query_batch() for
+                                            the full reasoning, not a placeholder.
+                                            Deliberately NOT including driver_oracle.h -
+                                            core calls only the vendor-neutral
+                                            db_driver_get(), never reaches for a named
+                                            vendor directly. That dispatch decision
+                                            belongs entirely to db_driver.c.           */
 #include "logger.h"
 #include "resultset_cache.h"
 #include "OCI_Transaction_Manager.h"
@@ -1387,6 +1398,43 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     }
 
     /* ================================================================
+     * v2 driver integration (Phase 2a, 2026-09-14) - SYNC PATH ONLY.
+     *
+     * async (cfg->async_batch_callback set) deliberately keeps using the
+     * exact, unmodified Stage 2/3/5 machinery below (raw OCIStmtPrepare2/
+     * describe/get_select_metadata/OCIStmtFetch2/build_row_xml_batch) -
+     * not a placeholder, a real decision: that path has three separate
+     * documented production bug fixes in the last month alone
+     * (2026-08-22/23/24, webhook delivery + JSON envelope + batch-
+     * finality detection), and re-plumbing it onto driver->select_*()
+     * calls is real, separate work deserving its own dedicated pass and
+     * its own before/after testing - not something to risk landing
+     * alongside the sync path's first real integration. See this
+     * session's cut-point discussion for the full reasoning.
+     *
+     * The honest cost of this branch, until Phase 2b closes it: Stage 2's
+     * describe/metadata machinery and Stage 5's fetch loop now exist in
+     * two parallel forms in this one function - async's original,
+     * word-for-word unchanged, and sync's new driver-based one below.
+     * handle_blob_column_batch()/handle_clob_column_batch()/
+     * build_row_xml_batch()/allocate_batch_buffers()/free_batch_ctx()
+     * are therefore NOT yet dead code and NOT removed in this pass -
+     * async's branch still calls them. They become safe to delete only
+     * once Phase 2b brings async onto this same driver path too.
+     *
+     * abs_rownum is declared here, once, shared by both branches -
+     * previously declared further down, inside what was Stage 5's
+     * shared header; now that Stage 5 itself is duplicated per-branch,
+     * this needs to live somewhere both branches can reach and Stage 6
+     * (unchanged, after this whole block) can still read from. */
+    unsigned int abs_rownum = 0;
+
+    struct timespec ts_start, ts_end;
+    uint64_t exec_start_us;
+
+    if (is_async)
+    {
+    /* ================================================================
      *  Stage 2 - Prepare, Describe, Allocate, Define
      * ================================================================ */
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
@@ -1753,7 +1801,6 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 3: Execute statement (real run)");
 
-    struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
@@ -1762,7 +1809,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
         OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
                        0, 0, NULL, NULL, OCI_DEFAULT));
 
-    uint64_t exec_start_us = metrics_now_us();
+    exec_start_us = metrics_now_us();
 
     /* ================================================================
      *  Stage 4 - Build XML document header
@@ -1800,7 +1847,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 5: Batch fetch loop fetch_count=%u", bc.fetch_count);
 
-    unsigned int abs_rownum = 0;
+    /* abs_rownum declared once, shared with the sync branch below - see
+     * the v2 driver integration comment above. */
     sword        fetch_status;
 
     /* execute_async batch delivery (2026-08-22). cfg->async_batch_callback
@@ -2110,6 +2158,192 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Fetch loop complete. Total rows=%u BLOBS=%d CLOBS=%d",
                  abs_rownum, BLOB_index, CLOB_index);
+
+    } /* end if (is_async) - see the v2 driver integration comment above */
+    else
+    {
+        /* ============================================================
+         * v2 driver integration (Phase 2a, 2026-09-14) - SYNC PATH.
+         *
+         * Replaces this branch's own former Stage 2 (prepare/describe/
+         * Phase B/get_select_metadata)/Stage 3 (real execute)/Stage 5
+         * (OCIStmtFetch2 loop + build_row_xml_batch dispatch) with
+         * driver->select_open()/select_fetch_batch()/select_close().
+         * Stage 4's resultset_create() and the XML document header, and
+         * Stage 6 onward (response building/cache/metrics), are
+         * unchanged - just now fed by rows the driver already put into
+         * resultset_t/resultset_blob_detail_t form, copied into this
+         * function's own top-level rs below.
+         *
+         * fetch_sql (not cfg->SQL) is deliberate - Stage 1's own
+         * truncation-safety wrapper (ROWNUM-bounded SQL when
+         * record_count exceeded query_max_record_count) must still
+         * apply here exactly as it did for the async branch above.
+         *
+         * get_table_metadata()'s cache-warming/cross-reference logging
+         * (previously reached via get_select_metadata(), now bypassed
+         * since select_open() calls plain get_multi_metadata()
+         * internally) is deliberately NOT replicated here - checked
+         * first: it doesn't feed metadata_cache.c (that cache is
+         * populated entirely independently by Insert/Update/Delete/
+         * Level2_Parser), and dispatcher.c's own get_table_metadata()
+         * call is an unrelated, hardcoded diagnostic hook, not a
+         * consumer of anything this path would have warmed. The only
+         * real loss is a per-SELECT ALL_TABLES diagnostic log line and
+         * Oracle's own internal dictionary-cache warming for that
+         * table - decided and confirmed safe to drop, not an oversight.
+         * ============================================================ */
+        const db_driver_t *driver = db_driver_get(ctx);
+        if (!driver || !driver->select_open || !driver->select_fetch_batch ||
+            !driver->select_close)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "db_driver_get() returned an incomplete driver");
+            rc = -1;
+            goto Cleanup;
+        }
+
+        db_select_request_t req;
+        memset(&req, 0, sizeof(req));
+        req.sql                  = fetch_sql;
+        req.max_rows             = record_count;
+        req.max_memory_bytes     = cfg->max_memory_bytes;
+        req.fetch_array_size     = (int)bc.fetch_count;
+        req.query_timeout        = cfg->query_timeout;
+        req.include_column_names = cfg->include_column_names;
+
+        db_select_cursor_t *cursor  = NULL;
+        db_column_meta_t   *columns = NULL;
+        int col_count_driver  = 0;
+        int batch_size_driver = 0;
+
+        /* Timing point matches async's own semantics exactly (see Stage 3
+         * above): starts right before the real work happens, not before
+         * describe/metadata - select_open() below does prepare+describe+
+         * real-execute together, so this is the closest sync equivalent
+         * to async's "clock_gettime() right before OCIStmtExecute". */
+        clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+        int open_rc = driver->select_open(ctx, &req, &cursor, &columns,
+                                           &col_count_driver, &batch_size_driver);
+        if (open_rc != 0)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "driver select_open failed rc=%d for sql=%s",
+                         open_rc, fetch_sql);
+            rc = -1;
+            goto Cleanup;
+        }
+
+        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                     "driver select_open OK: columns=%d batch_size=%d",
+                     col_count_driver, batch_size_driver);
+
+        exec_start_us = metrics_now_us();
+
+        rs = resultset_create(record_count, col_count_driver);
+        if (!rs)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "resultset_create failed - record_count=%d "
+                         "fields_per_row=%d", record_count, col_count_driver);
+            driver->select_close(cursor);
+            free(columns);
+            rc = -1;
+            goto Cleanup;
+        }
+
+        xml = xml_create(16384);
+        xml_start_document(xml);
+        xml_start_execution(xml);
+        xml_append(xml, "<sql_query>%s</sql_query>\n", cfg->SQL);
+        xml_append(xml, "<truncated>%s</truncated>\n", truncated ? "true" : "false");
+        xml_end_execution(xml);
+
+        for (;;)
+        {
+            resultset_t *batch_rs = NULL;
+            int          rows_fetched = 0;
+            db_fetch_batch_stats_t stats = {0};
+
+            if (driver->select_fetch_batch(cursor, &batch_rs, &rows_fetched, &stats) != 0)
+            {
+                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                             "driver select_fetch_batch failed");
+                driver->select_close(cursor);
+                free(columns);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            /* Accumulate into the SAME running totals the async branch
+             * above already uses (BLOB_index/CLOB_index/lob_bytes/
+             * clob_bytes) - these feed <blobs_extracted>/<clobs_extracted>
+             * and metrics.lob_bytes/clob_bytes further down (Stage 6/7,
+             * unchanged) - see db_driver.h's own doc comment on
+             * out_stats for why this is necessary, not cosmetic. */
+            BLOB_index += stats.blob_count;
+            CLOB_index += stats.clob_count;
+            lob_bytes  += stats.blob_bytes;
+            clob_bytes += stats.clob_bytes;
+
+            if (rows_fetched == 0)
+                break;
+
+            for (int r = 0; r < rows_fetched; r++)
+            {
+                abs_rownum++;
+                resultset_row_t *src_row = &batch_rs->records[r];
+                resultset_row_t *dst_row = resultset_get_row(rs, (int)abs_rownum);
+
+                if (!dst_row)
+                {
+                    /* Should not happen - fetch_sql above is already
+                     * bounded to record_count when truncated (same
+                     * safety guarantee the async branch relies on) -
+                     * defensive check anyway, matching this codebase's
+                     * own existing style rather than assuming. */
+                    logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                                 "resultset_get_row failed for abs_rownum=%u "
+                                 "(record_count=%d)", abs_rownum, record_count);
+                    resultset_free(batch_rs);
+                    driver->select_close(cursor);
+                    free(columns);
+                    rc = -1;
+                    goto Cleanup;
+                }
+
+                for (int f = 0; f < src_row->field_count; f++)
+                {
+                    resultset_field_t *sf = &src_row->fields[f];
+
+                    if (sf->is_blob)
+                    {
+                        resultset_set_blob_field(dst_row, f, sf->field_name,
+                                                  sf->blob_detail.file_name,
+                                                  sf->blob_detail.file_path,
+                                                  sf->blob_detail.file_url,
+                                                  sf->blob_detail.file_size,
+                                                  sf->blob_detail.mime_type);
+                    }
+                    else
+                    {
+                        resultset_set_field(dst_row, f, sf->field_name,
+                                             sf->field_type, sf->value);
+                    }
+                }
+            }
+
+            resultset_free(batch_rs);
+        }
+
+        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                     "Fetch loop complete (driver). Total rows=%u BLOBS=%d CLOBS=%d",
+                     abs_rownum, BLOB_index, CLOB_index);
+
+        driver->select_close(cursor);
+        free(columns);
+    }
 
 
     metrics.execution_us  = metrics_now_us() - exec_start_us;

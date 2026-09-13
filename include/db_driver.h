@@ -123,6 +123,7 @@
 #ifndef DB_DRIVER_H
 #define DB_DRIVER_H
 
+#include <stdint.h>                  /* uint64_t - db_fetch_batch_stats_t */
 #include "OCI_Connection.h"        /* oci_context_t */
 #include "OCI_Resultset_Types.h"   /* resultset_t */
 
@@ -195,6 +196,21 @@ typedef struct {
 typedef struct db_select_cursor_t db_select_cursor_t;
 
 /*
+ * db_fetch_batch_stats_t
+ *
+ * Added during real integration (2026-09-14) - see select_fetch_batch()'s
+ * doc comment below for why this is necessary, not optional metadata.
+ * blob_bytes/clob_bytes are THIS BATCH's totals only, matching
+ * blob_count/clob_count - caller accumulates across batches itself.
+ */
+typedef struct {
+    int      blob_count;
+    int      clob_count;
+    uint64_t blob_bytes;
+    uint64_t clob_bytes;
+} db_fetch_batch_stats_t;
+
+/*
  * db_driver_t
  *
  * One instance per running process (see notes doc, section 1 - this is
@@ -250,10 +266,10 @@ typedef struct db_select_cursor_t db_select_cursor_t;
  *   *out_batch_size reports the ACTUAL batch size this cursor will use -
  *   which may be smaller than req->fetch_array_size (Oracle forces 1
  *   when any CLOB column is present - see SELECT IS A CURSOR above).
- *   Returns 0 on success. Returns DB_SELECT_UNSUPPORTED_LOB (see below)
- *   if DESCRIBE finds a CLOB or BLOB column - this pass's driver does
- *   not support them yet (see SCALARS ONLY above); caller should fall
- *   back to the existing execute_query_batch() for that request.
+ *   Returns 0 on success. As of v2 (2026-09-14) CLOB/BLOB columns are
+ *   supported through this cursor - DB_SELECT_UNSUPPORTED_LOB (see
+ *   below) is kept defined for any genuinely-unsupported type that
+ *   comes up later, but is no longer returned for CLOB/BLOB specifically.
  *   Returns a negative value on any other failure, logged via
  *   ctx->select_logger, same as today.
  *
@@ -270,6 +286,20 @@ typedef struct db_select_cursor_t db_select_cursor_t;
  *   async paths, respectively) is entirely a core decision the driver
  *   never sees. Returns 0 on success (including the 0-rows/exhausted
  *   case), non-zero on failure, logged via ctx->select_logger.
+ *
+ *   out_stats (added during real integration, 2026-09-14) - optional,
+ *   pass NULL if the caller doesn't need it. Reports how many BLOB/CLOB
+ *   fields this batch processed and how many bytes were read for each -
+ *   found to be genuinely necessary, not cosmetic: execute_query_batch()'s
+ *   existing response carries <blobs_extracted>/<clobs_extracted> tags
+ *   and feeds metrics.lob_bytes/metrics.clob_bytes from these same
+ *   running totals today (accumulated across every batch, exactly the
+ *   same shape the existing async path already uses for its own
+ *   per-batch batch_blob_index/batch_clob_index/batch_clob_bytes) - a
+ *   cursor that fetched real LOB data but never reported it back would
+ *   silently make those tags/metrics wrong for any query actually using
+ *   this path. Caller sums out_stats across every batch into its own
+ *   running totals, same as it already does for the async path.
  *
  * select_close()
  *   Releases the cursor and everything select_open() allocated for it
@@ -301,9 +331,10 @@ typedef struct db_driver_t {
                          int                         *out_column_count,
                          int                         *out_batch_size);
 
-    int  (*select_fetch_batch)(db_select_cursor_t *cursor,
-                                resultset_t        **out_rs,
-                                int                  *out_rows_fetched);
+    int  (*select_fetch_batch)(db_select_cursor_t      *cursor,
+                                resultset_t             **out_rs,
+                                int                       *out_rows_fetched,
+                                db_fetch_batch_stats_t   *out_stats);
 
     void (*select_close)(db_select_cursor_t *cursor);
 } db_driver_t;
