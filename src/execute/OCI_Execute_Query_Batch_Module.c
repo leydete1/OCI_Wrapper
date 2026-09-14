@@ -127,725 +127,32 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 /*  Forward declarations                                               */
 /* ------------------------------------------------------------------ */
-static int  allocate_batch_buffers(oci_context_t *ctx, batch_ctx_t *bc);
-
-static int handle_clob_column_batch(oci_context_t *ctx,
-        batch_ctx_t   *bc,
-        ub4            col_idx,
-        unsigned int   abs_rownum,
-        int           *CLOB_index_ptr,
-        int            max_clobs,
-        uint64_t      *clob_bytes_acc,
-        xml_builder_t *xml,
-        resultset_row_t *rs_row,
-        int              field_index);
-
-static int handle_blob_column_batch(oci_context_t *ctx,
-                                         batch_ctx_t   *bc,
-                                         ub4            row_in_batch,
-                                         ub4            col_idx,
-                                         unsigned int   abs_rownum,
-                                         lob_item_t    *BLOB_list,
-                                         int           *BLOB_index_ptr,
-                                         int            max_lobs,
-                                         xml_builder_t *xml,
-                                         resultset_row_t *rs_row,
-                                         int              field_index);
-
-
-static int  build_row_xml_batch(oci_context_t *ctx,
-										batch_ctx_t   *bc,
-										ub4            row_in_batch,
-										unsigned int   abs_rownum,
-										lob_item_t    *BLOB_list,
-										int           *BLOB_index_ptr,
-										int            max_lobs,
-										int           *CLOB_index_ptr,
-										int            max_clobs,
-										uint64_t      *clob_bytes_acc,
-										xml_builder_t *xml,
-										resultset_t   *rs);
-static void free_batch_ctx          (oci_context_t *ctx, batch_ctx_t *bc);
+/* handle_clob_column_batch()/handle_blob_column_batch()/
+ * build_row_xml_batch()/allocate_batch_buffers()/free_batch_ctx() were
+ * removed here (Phase 2b, 2026-09-15) - no remaining caller anywhere in
+ * this file once both sync and async fetch loops moved onto
+ * driver->select_open()/select_fetch_batch()/select_close(). See the
+ * v2 driver integration comment inside execute_query_batch() for the
+ * full reasoning. batch_ctx_t itself is kept - bc.fetch_count is still
+ * read (feeds db_select_request_t.fetch_array_size) even though every
+ * other field on it is now unused.                                    */
 
 
 /* ================================================================== */
-/*  1.  allocate_batch_buffers                                         */
-/*      Heap-allocate all per-column arrays sized for fetch_count rows */
 /* ================================================================== */
-static int allocate_batch_buffers(oci_context_t *ctx, batch_ctx_t *bc)
-{
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Entering: col_count=%u fetch_count=%u",
-                 bc->col_count, bc->fetch_count);
+/*  allocate_batch_buffers() / handle_clob_column_batch() /
+ *  handle_blob_column_batch() / build_row_xml_batch() /
+ *  free_batch_ctx() were removed here (Phase 2b, 2026-09-15).
+ *
+ *  No remaining caller anywhere in this file: both the sync and async
+ *  branches of execute_query_batch() now fetch through
+ *  driver->select_open()/select_fetch_batch()/select_close() (see the
+ *  v2 driver integration comment inside execute_query_batch() itself),
+ *  which do their own self-contained BLOB/CLOB handling
+ *  (driver_oracle.c's oracle_fetch_blob_field()/oracle_fetch_clob_field())
+ *  and never touch a core-owned batch_ctx_t or BLOB_list array.
+ * ================================================================== */
 
-    bc->def           = calloc(bc->col_count, sizeof(OCIDefine *));
-    bc->buffers       = calloc(bc->col_count, sizeof(char *));
-    bc->buf_sizes     = calloc(bc->col_count, sizeof(ub4));
-    bc->indicators    = calloc(bc->col_count, sizeof(sb2 *));
-    bc->data_types    = calloc(bc->col_count, sizeof(ub2));
-    bc->data_sizes    = calloc(bc->col_count, sizeof(ub4));
-    bc->col_names     = calloc(bc->col_count, sizeof(*bc->col_names));
-    bc->col_blob_locs = calloc(bc->col_count, sizeof(OCILobLocator **));
-
-    if (!bc->def        || !bc->buffers     || !bc->buf_sizes   ||
-        !bc->indicators || !bc->data_types  || !bc->data_sizes  ||
-        !bc->col_names  || !bc->col_blob_locs)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "Top-level calloc failed");
-        return -1;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Top-level arrays allocated OK");
-    return 0;
-}
-
-/*
- * NOTE: define_columns_batch() has been removed from this file.
- * Its logic now lives in get_multi_metadata() inside
- * OCI_Table_Metadata_Module.c.  The call site below passes all
- * bc array pointers via multi_meta_request_t.  The fetch loop,
- * free_batch_ctx(), and all other code in this file are unchanged.
- */
-
-
-/* ================================================================== */
-/*  2.  handle_clob_column_batch                                       */
-/*      Read one CLOB cell (already in bc->clob_loc), write to disk,  */
-/*      emit XML field with file URL - mirrors BLOB handler pattern.   */
-/*      NULL and empty CLOB both emit empty XML field safely.          */
-/* ================================================================== */
-static int handle_clob_column_batch(oci_context_t *ctx,
-                                         batch_ctx_t   *bc,
-                                         ub4            col_idx,
-                                         unsigned int   abs_rownum,
-                                         int           *CLOB_index_ptr,
-                                         int            max_clobs,
-                                         uint64_t      *clob_bytes_acc,
-                                         xml_builder_t *xml,
-                                         resultset_row_t *rs_row,
-                                         int              field_index)
-{
-    int CLOB_index = *CLOB_index_ptr;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Entering col=%u name=%s abs_rownum=%u CLOB_index=%d",
-                 col_idx, bc->col_names[col_idx], abs_rownum, CLOB_index);
-
-    if (CLOB_index >= max_clobs)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "CLOB overflow: index=%d max=%d", CLOB_index, max_clobs);
-        return -1;
-    }
-
-    /* ---- NULL check BEFORE OCILobGetLength ---- */
-    if (bc->indicators[col_idx][0] == -1)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "CLOB col=%u is NULL, emitting empty field", col_idx);
-        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
-        (*CLOB_index_ptr)++;
-        return 0;
-    }
-
-    /* ---- Get CLOB length ---- */
-    ub4 lob_len = 0;
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling OCILobGetLength col=%u", col_idx);
-    CHECK_OCI(ctx->errhp,
-        OCILobGetLength(ctx->svchp, ctx->errhp,
-                        bc->clob_loc, &lob_len));
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "CLOB col=%u lob_len=%u CLOB_index=%d",
-                 col_idx, lob_len, CLOB_index);
-
-    /* ---- Empty CLOB check ---- */
-    if (lob_len == 0)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "CLOB col=%u is empty, emitting empty field", col_idx);
-        /* xml_add_field(xml, bc->col_names[col_idx], "CLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", "");   /* ADD */
-        (*CLOB_index_ptr)++;
-        return 0;
-    }
-
-    /* ---- Allocate read buffer ---- */
-    char *clob_buf = calloc(1, lob_len + 1);
-    if (!clob_buf)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "calloc failed for CLOB buffer size=%u", lob_len + 1);
-        return -1;
-    }
-
-    /* ---- Chunked read ---- */
-    ub4   offset          = 1;
-    ub4   bytes_remaining = lob_len;
-    char *write_ptr       = clob_buf;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Starting chunked CLOB read total=%u chunk_size=%u",
-                 lob_len, ctx->ini->chunk_read_size);
-
-    while (bytes_remaining > 0)
-    {
-        ub4 chunk  = (ub4)ctx->ini->chunk_read_size;
-        if (chunk > bytes_remaining) chunk = bytes_remaining;
-        ub4 amount = chunk;
-
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "OCILobRead offset=%u chunk=%u remaining=%u",
-                     offset, chunk, bytes_remaining);
-
-        /* Bug fix (2026-08-06): previously passed the OCILobRead(...)
-         * call directly into CHECK_OCI, which only LOGS a failure - it
-         * never breaks control flow. Since 'amount' is pre-set to
-         * 'chunk' above and OCI typically leaves an output parameter
-         * unchanged on failure, a failed read wasn't reliably caught by
-         * the "if (amount == 0)" check below (amount would still equal
-         * the requested chunk size, not 0) - the loop would silently
-         * treat a failed read as a successful one, advance past it
-         * with zero-filled (uninitialised-content) buffer space, and
-         * eventually exhaust bytes_remaining normally: no infinite
-         * loop, but a genuinely corrupted CLOB result with no error
-         * ever surfaced to the caller. Capturing the real return code
-         * and checking it explicitly, rather than relying on
-         * CHECK_OCI's logging-only behaviour, fixes that.             */
-        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp,
-                       bc->clob_loc,
-                       &amount, offset,
-                       write_ptr, chunk,
-                       NULL, NULL, 0, SQLCS_IMPLICIT);
-        CHECK_OCI(ctx->errhp, lob_read_rc);
-
-        if (lob_read_rc != OCI_SUCCESS && lob_read_rc != OCI_SUCCESS_WITH_INFO)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "OCILobRead failed (rc=%d) at offset=%u - "
-                         "aborting this CLOB read rather than silently "
-                         "treating the failure as success",
-                         (int)lob_read_rc, offset);
-            free(clob_buf);
-            return -1;
-        }
-
-        if (amount == 0)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "OCILobRead returned 0 bytes unexpectedly");
-            free(clob_buf);
-            return -1;
-        }
-
-        write_ptr       += amount;
-        offset          += amount;
-        bytes_remaining -= amount;
-    }
-
-    clob_buf[lob_len] = '\0';
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "CLOB read complete col=%u total=%u", col_idx, lob_len);
-
-    if (clob_bytes_acc) *clob_bytes_acc += (uint64_t)lob_len;
-
-    /* ---- Build output filename ----
-     * v2 driver-extraction work (2026-09-13): this used to be built
-     * inline here; extracted verbatim (same format string, same
-     * default) into build_clob_filename() (OCI_Clob_Utils.c) so it's
-     * callable from anywhere - core or a future driver - the same way
-     * BLOB's own filename logic already is via OCI_Blob_Utils.c.      */
-    char clob_filename[512];
-    build_clob_filename(bc->col_names[col_idx], abs_rownum, CLOB_index,
-                         clob_filename, sizeof(clob_filename), ctx);
-
-    char clob_filepath[768];
-    snprintf(clob_filepath, sizeof(clob_filepath), "%s/%s",
-             ctx->ini->CLOB_output_dir, clob_filename);
-
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Writing CLOB to file: %s", clob_filepath);
-
-    /* ---- Write to disk - reusing write_blob_to_file() (OCI_Blob_Utils.h)
-     * rather than a separate write_clob_to_file(): it's already fully
-     * byte-agnostic (fopen/fwrite/fclose on blob_data/blob_size, nothing
-     * BLOB-specific in it), so it serves CLOB bytes unchanged - see
-     * OCI_Clob_Utils.h for the full reasoning. ---- */
-    lob_item_t clob_item;
-    memset(&clob_item, 0, sizeof(clob_item));
-    clob_item.file_name = clob_filename;
-    clob_item.blob_data = (unsigned char *)clob_buf;
-    clob_item.blob_size = lob_len;
-
-    if (write_blob_to_file(&clob_item, ctx->ini->CLOB_output_dir, ctx) != 0)
-    {
-        /* write_blob_to_file() already logged the fopen failure itself -
-         * this logs only the CLOB-specific consequence (same fallback
-         * behavior the original inline code had: emit the raw content
-         * inline rather than a file reference). */
-        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
-                     "write_blob_to_file failed for CLOB %s - emitting "
-                     "inline content instead of a file reference",
-                     clob_filepath);
-        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_buf);   /* ADD */
-        free(clob_buf);
-        (*CLOB_index_ptr)++;
-        return 0;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "CLOB written to disk: %s bytes=%u", clob_filepath, lob_len);
-    free(clob_buf);
-
-    /* ---- Build URL for XML field - extracted verbatim into
-     * build_clob_url() (OCI_Clob_Utils.c), same ini keys, same
-     * precedence, same fallback as before. ---- */
-    char clob_url[768];
-    build_clob_url(clob_filename, clob_filepath, clob_url, sizeof(clob_url), ctx);
-
-    /* Emit field: value is the URL/path to the written file */
-    resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "CLOB", clob_url);   /* ADD */
-
-    (*CLOB_index_ptr)++;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "handle_clob_column_batch complete CLOB_index=%d",
-                 *CLOB_index_ptr);
-    return 0;
-}
-
-
-/* ================================================================== */
-/*  3.  handle_blob_column_batch                                       */
-/*      Read BLOB at col_blob_locs[col_idx][row_in_batch],            */
-/*      write to disk, emit XML.                                       */
-/*      NULL/empty guard BEFORE OCILobGetLength - prevents segfault   */
-/*      on NULL locator and emits consistent empty XML field.          */
-/* ================================================================== */
-static int handle_blob_column_batch(oci_context_t *ctx,
-                                     batch_ctx_t   *bc,
-                                     ub4            row_in_batch,
-                                     ub4            col_idx,
-                                     unsigned int   abs_rownum,
-                                     lob_item_t    *BLOB_list,
-                                     int           *BLOB_index_ptr,
-                                     int            max_lobs,
-                                     xml_builder_t *xml,
-                                     resultset_row_t *rs_row,
-                                     int              field_index)
-{
-    int BLOB_index = *BLOB_index_ptr;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Entering col=%u row_in_batch=%u abs_rownum=%u BLOB_index=%d",
-                 col_idx, row_in_batch, abs_rownum, BLOB_index);
-
-    if (BLOB_index >= max_lobs)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "BLOB overflow: index=%d max=%d", BLOB_index, max_lobs);
-        return -1;
-    }
-
-    lob_item_t *item = &BLOB_list[BLOB_index];
-
-    /* ---- NULL check BEFORE any OCI LOB calls ---- */
-    item->is_null = (bc->indicators[col_idx][row_in_batch] == -1);
-
-    if (item->is_null)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "BLOB col=%u row=%u is NULL, emitting empty field",
-                     col_idx, row_in_batch);
-        /* xml_add_field(xml, bc->col_names[col_idx], "BLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");
-     (*BLOB_index_ptr)++;
-        return 0;
-    }
-
-    /* ---- Allocate locator and assign from column array ---- */
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling OCIDescriptorAlloc for item->lob_loc");
-    CHECK_OCI(ctx->errhp,
-        OCIDescriptorAlloc(ctx->envhp,
-                           (void **)&item->lob_loc,
-                           OCI_DTYPE_LOB, 0, NULL));
-
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling OCILobLocatorAssign col=%u row=%u",
-                 col_idx, row_in_batch);
-    CHECK_OCI(ctx->errhp,
-        OCILobLocatorAssign(ctx->svchp, ctx->errhp,
-                            bc->col_blob_locs[col_idx][row_in_batch],
-                            &item->lob_loc));
-
-    /* ---- Get BLOB size (safe - not NULL) ---- */
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling OCILobGetLength");
-    CHECK_OCI(ctx->errhp,
-        OCILobGetLength(ctx->svchp, ctx->errhp,
-                        item->lob_loc, &item->blob_size));
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "BLOB col=%u row=%u size=%u index=%d",
-                 col_idx, row_in_batch, item->blob_size, BLOB_index);
-
-    /* ---- Empty BLOB check ---- */
-    if (item->blob_size == 0)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "BLOB col=%u row=%u is empty, emitting empty field",
-                     col_idx, row_in_batch);
-        /* xml_add_field(xml, bc->col_names[col_idx], "BLOB", ""); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-        resultset_set_field(rs_row, field_index, bc->col_names[col_idx], "BLOB", "");   /* ADD */
-        (*BLOB_index_ptr)++;
-        return 0;
-    }
-
-    /* ---- Read BLOB data in chunks ---- */
-    ub4  total_size = item->blob_size;
-    ub4  offset     = 1;
-
-    item->blob_data = malloc(total_size);
-    if (!item->blob_data)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "malloc failed for BLOB data size=%u", total_size);
-        return -1;
-    }
-
-    ub4  bytes_remaining = total_size;
-    ub1 *write_ptr       = item->blob_data;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Starting chunked BLOB read total=%u chunk_size=%u",
-                 total_size, ctx->ini->chunk_read_size);
-
-    while (bytes_remaining > 0)
-    {
-        ub4 chunk  = (ub4)ctx->ini->chunk_read_size;
-        if (chunk > bytes_remaining) chunk = bytes_remaining;
-        ub4 amount = chunk;
-
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "OCILobRead offset=%u chunk=%u remaining=%u",
-                     offset, chunk, bytes_remaining);
-
-        CHECK_OCI(ctx->errhp,
-            OCILobRead(ctx->svchp, ctx->errhp,
-                       item->lob_loc,
-                       &amount, offset,
-                       write_ptr, chunk,
-                       NULL, NULL, 0, SQLCS_IMPLICIT));
-
-        if (amount == 0)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "OCILobRead returned 0 bytes unexpectedly");
-            return -1;
-        }
-
-        write_ptr       += amount;
-        offset          += amount;
-        bytes_remaining -= amount;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "BLOB read complete total=%u", total_size);
-
-    /* ---- Filename, MIME type and metadata ---- */
-    const char *search_col = ctx->ini->BLOB_default_file_name_col;
-
-    switch (BLOB_index)
-    {
-        case 1: search_col = ctx->ini->BLOB_default_file_name_col_1; break;
-        case 2: search_col = ctx->ini->BLOB_default_file_name_col_2; break;
-        case 3: search_col = ctx->ini->BLOB_default_file_name_col_3; break;
-        case 4: search_col = ctx->ini->BLOB_default_file_name_col_4; break;
-        case 5: search_col = ctx->ini->BLOB_default_file_name_col_5; break;
-    }
-
-    int name_col_idx = lookup_blob_index(bc->col_names,
-                                         (int)bc->col_count,
-                                         search_col, ctx);
-
-    char final_name[512];
-
-    if (name_col_idx >= 0 &&
-        bc->indicators[name_col_idx][row_in_batch] != -1 &&
-        bc->buffers[name_col_idx] != NULL)
-    {
-        const char *name_val =
-            bc->buffers[name_col_idx] +
-            ((size_t)row_in_batch * bc->buf_sizes[name_col_idx]);
-
-        if (ctx->ini->BLOB_append_file_timestamp == 1)
-        {
-            logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                         "Calling build_filename_with_timestamp");
-            build_filename_with_timestamp(name_val,
-                                          final_name,
-                                          sizeof(final_name),
-                                          BLOB_index, ctx);
-        }
-        else
-        {
-            snprintf(final_name, sizeof(final_name), "%s", name_val);
-        }
-    }
-    else
-    {
-        snprintf(final_name, sizeof(final_name),
-                 "%s_%d",
-                 ctx->ini->BLOB_default_file_name,
-                 BLOB_index);
-    }
-
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "final_name=%s", final_name);
-
-    item->column_name  = bc->col_names[col_idx];
-    item->file_name    = strdup(final_name);
-    item->mime_type    = strdup(get_mime_type(item->file_name));
-    item->column_index = BLOB_index;
-
-    item->output_file_url =
-        ctx->ini->xml_share_BLOB_URL_path ?
-        ctx->ini->BLOB_URL_path : strdup("N/A");
-
-    item->output_file_destination =
-        ctx->ini->xml_share_BLOB_host_path ?
-        ctx->ini->BLOB_output_dir : strdup("N/A");
-
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling write_blob_to_file");
-    write_blob_to_file(item, ctx->ini->BLOB_output_dir, ctx);
-
-    /* xml_add_blob_field_1(xml, item, ctx); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-    resultset_set_blob_field(rs_row, field_index, item->column_name,
-                              item->file_name,
-                              item->output_file_destination,
-                              item->output_file_url,
-                              item->blob_size,
-                              item->mime_type);
-
-    (*BLOB_index_ptr)++;
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "handle_blob_column_batch complete BLOB_index=%d",
-                 *BLOB_index_ptr);
-    return 0;
-}
-
-
-/* ================================================================== */
-/*  4.  build_row_xml_batch                                            */
-/*      Iterate all columns for one logical row within a batch.        */
-/*      Dispatches to BLOB, CLOB or scalar handler per column type.    */
-/* ================================================================== */
-static int build_row_xml_batch(oci_context_t *ctx,
-								batch_ctx_t   *bc,
-								ub4            row_in_batch,
-								unsigned int   abs_rownum,
-								lob_item_t    *BLOB_list,
-								int           *BLOB_index_ptr,
-								int            max_lobs,
-								int           *CLOB_index_ptr,
-								int            max_clobs,
-								uint64_t      *clob_bytes_acc,
-								xml_builder_t *xml,
-								resultset_t   *rs)
-{
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Entering row_in_batch=%u abs_rownum=%u",
-                 row_in_batch, abs_rownum);
-
-    /* xml_add_row_start(xml, abs_rownum); */ /* Unused: row wrapper now built by response_write_xml(ctx, rs) via new parsing layer */
-    resultset_row_t *rs_row = resultset_get_row(rs, abs_rownum);
-
-
-
-    for (ub4 i = 0; i < bc->col_count; i++)
-    {
-        const char *type_str = "STRING";
-
-        switch (bc->data_types[i])
-        {
-            case SQLT_NUM:       type_str = "NUMBER";    break;
-            case SQLT_DAT:       type_str = "DATE";      break;
-            case SQLT_CHR:
-            case SQLT_AFC:
-            case SQLT_STR:       type_str = "STRING";    break;
-            case SQLT_TIMESTAMP: type_str = "TIMESTAMP"; break;
-            case SQLT_BLOB:      type_str = "BLOB";      break;
-            case SQLT_CLOB:      type_str = "CLOB";      break;
-            default:             type_str = "UNKNOWN";   break;
-        }
-
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "col=%u name=%s type=%s",
-                     i, bc->col_names[i], type_str);
-
-        if (bc->data_types[i] == SQLT_BLOB)
-        {
-
-            /*New code 18-JUL */
-            int rc = handle_blob_column_batch(ctx, bc,
-                                                row_in_batch, i,
-                                                abs_rownum,
-                                                BLOB_list, BLOB_index_ptr,
-                                                max_lobs, xml,
-                                                rs_row, (int)i);          /* ADD */
-
-            if (rc != 0)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "handle_blob_column_batch failed col=%u", i);
-                return rc;
-            }
-
-
-        }
-        else if (bc->data_types[i] == SQLT_CLOB)
-        {
-            /*New code 18-JUL */
-            int rc = handle_clob_column_batch(ctx, bc,
-                                               i,
-                                               abs_rownum,
-                                               CLOB_index_ptr,
-                                               max_clobs,
-                                               clob_bytes_acc,
-                                               xml,
-                                               rs_row,
-											   (int)i);          /* ADD */
-          if (rc != 0)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "handle_clob_column_batch failed col=%u", i);
-                return rc;
-            }
-        }
-        else
-        {
-            /* Scalar: stride into flat buffer for this row's value */
-            const char *value =
-                bc->buffers[i] +
-                ((size_t)row_in_batch * bc->buf_sizes[i]);
-
-            if (bc->indicators[i][row_in_batch] == -1)
-                value = "";
-
-            /* xml_add_field(xml, bc->col_names[i], type_str, value); */ /* Unused: XML now built from response_write_xml(ctx, rs) via new parsing layer */
-
-            resultset_set_field(rs_row, (int)i, bc->col_names[i], type_str, value);   /* ADD THIS LINE */
-
-        }
-    }
-
-    /* xml_add_row_end(xml); */ /* Unused: row wrapper now built by response_write_xml(ctx, rs) via new parsing layer */
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "build_row_xml_batch complete abs_rownum=%u", abs_rownum);
-    return 0;
-}
-
-
-/* ================================================================== */
-/*  5.  free_batch_ctx                                                 */
-/*      Release all memory and LOB locators in a batch_ctx_t          */
-/* ================================================================== */
-static void free_batch_ctx(oci_context_t *ctx, batch_ctx_t *bc)
-{
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Entering free_batch_ctx");
-
-    if (!bc) return;
-
-    if (bc->col_blob_locs)
-    {
-        for (ub4 i = 0; i < bc->col_count; i++)
-        {
-            if (bc->col_blob_locs[i])
-            {
-                for (ub4 r = 0; r < bc->fetch_count; r++)
-                {
-                    if (bc->col_blob_locs[i][r])
-                    {
-                        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                                     "OCIDescriptorFree col_blob_locs[%u][%u]",
-                                     i, r);
-                        OCIDescriptorFree(bc->col_blob_locs[i][r],
-                                          OCI_DTYPE_LOB);
-                    }
-                }
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "free(col_blob_locs[%u])", i);
-                free(bc->col_blob_locs[i]);
-                bc->col_blob_locs[i] = NULL;
-            }
-        }
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "free(col_blob_locs)");
-        free(bc->col_blob_locs);
-        bc->col_blob_locs = NULL;
-    }
-
-    if (bc->buffers)
-    {
-        for (ub4 i = 0; i < bc->col_count; i++)
-        {
-            if (bc->buffers[i])
-            {
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "free(buffers[%u])", i);
-                free(bc->buffers[i]);
-                bc->buffers[i] = NULL;
-            }
-        }
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "free(buffers)");
-        free(bc->buffers);
-        bc->buffers = NULL;
-    }
-
-    if (bc->indicators)
-    {
-        for (ub4 i = 0; i < bc->col_count; i++)
-        {
-            if (bc->indicators[i])
-            {
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "free(indicators[%u])", i);
-                free(bc->indicators[i]);
-                bc->indicators[i] = NULL;
-            }
-        }
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "free(indicators)");
-        free(bc->indicators);
-        bc->indicators = NULL;
-    }
-
-    if (bc->clob_loc)
-    {
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "OCIDescriptorFree clob_loc");
-        OCIDescriptorFree(bc->clob_loc, OCI_DTYPE_LOB);
-        bc->clob_loc = NULL;
-    }
-
-    if (bc->def)        { free(bc->def);        bc->def        = NULL; }
-    if (bc->buf_sizes)  { free(bc->buf_sizes);  bc->buf_sizes  = NULL; }
-    if (bc->data_types) { free(bc->data_types); bc->data_types = NULL; }
-    if (bc->data_sizes) { free(bc->data_sizes); bc->data_sizes = NULL; }
-    if (bc->col_names)  { free(bc->col_names);  bc->col_names  = NULL; }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "free_batch_ctx complete");
-}
 
 
 /* ------------------------------------------------------------------ */
@@ -1350,16 +657,17 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
         truncated = 1;
     }
 
-    /* ---- Allocate BLOB and CLOB tracking lists ---- */
-    int max_lobs  = record_count * ctx->ini->max_BLOBS_per_record;
-    int max_clobs = record_count * ctx->ini->max_CLOBS_per_record;
+    /* BLOB/CLOB tracking - max_lobs/max_clobs and the whole-query
+     * BLOB_list array they used to size are gone (Phase 2b,
+     * 2026-09-15): both sync and async now go through driver_oracle.c's
+     * own self-contained per-field BLOB/CLOB handling (see
+     * oracle_fetch_blob_field()/oracle_fetch_clob_field()), which never
+     * touches a core-owned tracking array at all - nothing left here to
+     * size in advance. */
     int BLOB_index = 0;
     int CLOB_index = 0;
     uint64_t lob_bytes  = 0;   /* total BLOB bytes read               */
     uint64_t clob_bytes = 0;   /* total CLOB bytes read               */
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "max_lobs=%d max_clobs=%d", max_lobs, max_clobs);
 
     /* Closure item 4 (2026-08-09) - when truncated, the statement
      * actually fetched below must itself be bounded to record_count
@@ -1385,911 +693,157 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                      "Truncated fetch SQL: %s", fetch_sql);
     }
 
-    if (max_lobs > 0)
-    {
-        BLOB_list = calloc(max_lobs, sizeof(lob_item_t));
-        if (!BLOB_list)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "calloc failed for BLOB_list");
-            rc = -1;
-            goto Cleanup;
-        }
-    }
-
     /* ================================================================
-     * v2 driver integration (Phase 2a, 2026-09-14) - SYNC PATH ONLY.
+     * v2 driver integration - Phase 2b (2026-09-15).
      *
-     * async (cfg->async_batch_callback set) deliberately keeps using the
-     * exact, unmodified Stage 2/3/5 machinery below (raw OCIStmtPrepare2/
-     * describe/get_select_metadata/OCIStmtFetch2/build_row_xml_batch) -
-     * not a placeholder, a real decision: that path has three separate
-     * documented production bug fixes in the last month alone
-     * (2026-08-22/23/24, webhook delivery + JSON envelope + batch-
-     * finality detection), and re-plumbing it onto driver->select_*()
-     * calls is real, separate work deserving its own dedicated pass and
-     * its own before/after testing - not something to risk landing
-     * alongside the sync path's first real integration. See this
-     * session's cut-point discussion for the full reasoning.
-     *
-     * The honest cost of this branch, until Phase 2b closes it: Stage 2's
-     * describe/metadata machinery and Stage 5's fetch loop now exist in
-     * two parallel forms in this one function - async's original,
-     * word-for-word unchanged, and sync's new driver-based one below.
+     * sync and async now share ONE describe+fetch setup via
+     * driver->select_open()/select_fetch_batch()/select_close() -
+     * is_async only decides what happens with each batch's rows
+     * (accumulate into the whole-query rs vs render+deliver+discard
+     * immediately), not the setup itself. This replaces Phase 2a's
+     * "two parallel implementations" scaffolding entirely.
      * handle_blob_column_batch()/handle_clob_column_batch()/
      * build_row_xml_batch()/allocate_batch_buffers()/free_batch_ctx()
-     * are therefore NOT yet dead code and NOT removed in this pass -
-     * async's branch still calls them. They become safe to delete only
-     * once Phase 2b brings async onto this same driver path too.
+     * have no remaining caller anywhere in this file and have been
+     * removed outright, not just bypassed.
      *
-     * abs_rownum is declared here, once, shared by both branches -
-     * previously declared further down, inside what was Stage 5's
-     * shared header; now that Stage 5 itself is duplicated per-branch,
-     * this needs to live somewhere both branches can reach and Stage 6
-     * (unchanged, after this whole block) can still read from. */
+     * is_final_batch (async only) uses the driver-agnostic condition
+     * from the 2026-08-23 bug fix directly (abs_rownum >= record_count) -
+     * it never depended on raw OCI fetch status once that fix landed,
+     * so there is nothing to adapt for the driver here.
+     *
+     * Bug fix applied during this port (2026-09-15, found by inspection,
+     * not by a failing test): the async per-batch fold below now also
+     * accumulates stats.blob_bytes into lob_bytes. The original async
+     * code only ever folded clob_bytes - metrics.lob_bytes was silently
+     * never populated for async requests. Sync already folded both
+     * (Phase 2a) - this brings async to the same correctness rather
+     * than preserving a latent gap.
+     * ================================================================ */
     unsigned int abs_rownum = 0;
+
+    const db_driver_t *driver = db_driver_get(ctx);
+    if (!driver || !driver->select_open || !driver->select_fetch_batch ||
+        !driver->select_close)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "db_driver_get() returned an incomplete driver");
+        rc = -1;
+        goto Cleanup;
+    }
+
+    db_select_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql                  = fetch_sql;
+    req.max_rows             = record_count;
+    req.max_memory_bytes     = cfg->max_memory_bytes;
+    req.fetch_array_size     = (int)bc.fetch_count;
+    req.query_timeout        = cfg->query_timeout;
+    req.include_column_names = cfg->include_column_names;
+
+    db_select_cursor_t *cursor  = NULL;
+    db_column_meta_t   *columns = NULL;
+    int col_count_driver  = 0;
+    int batch_size_driver = 0;
 
     struct timespec ts_start, ts_end;
     uint64_t exec_start_us;
 
-    if (is_async)
-    {
-    /* ================================================================
-     *  Stage 2 - Prepare, Describe, Allocate, Define
-     * ================================================================ */
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Stage 2: Prepare and describe statement");
-
-    CHECK_OCI(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)fetch_sql, (ub4)strlen(fetch_sql),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT));
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Calling OCIStmtExecute OCI_DESCRIBE_ONLY");
-    CHECK_OCI(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
-                       0, 0, NULL, NULL, OCI_DESCRIBE_ONLY));
-
-    CHECK_OCI(ctx->errhp,
-        OCIAttrGet(stmt, OCI_HTYPE_STMT,
-                   &bc.col_count, 0,
-                   OCI_ATTR_PARAM_COUNT, ctx->errhp));
-
-    if (bc.col_count == 0)
-    {
-        logger_write(ctx->select_logger, LOG_WARN, __func__, 0, "No columns returned");
-        rc = -1;
-        goto Cleanup;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "col_count=%u", bc.col_count);
-
-    logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                 "Calling OCIDescriptorAlloc for clob_loc");
-    CHECK_OCI(ctx->errhp,
-        OCIDescriptorAlloc(ctx->envhp,
-                           (void **)&bc.clob_loc,
-                           OCI_DTYPE_LOB, 0, NULL));
-
-    if (allocate_batch_buffers(ctx, &bc) != 0) { rc = -1; goto Cleanup; }
-
-    /* ================================================================
-     *  Phase B - Expand wildcard and unqualified field entries
-     *
-     *  When deps.needs_expansion == 1 the parser found SELECT *,
-     *  TABLE.*, or unqualified column names and could not fully
-     *  populate deps.fields[].  Now that OCI_DESCRIBE_ONLY has run
-     *  we have the exact column names and count from Oracle in
-     *  bc.col_count.  We read them via OCIParamGet here and rebuild
-     *  deps.fields[] with fully populated OCI_FIELD_REF entries so
-     *  get_select_metadata() can cross-reference correctly.
-     *
-     *  Three cases handled:
-     *    SQL_FIELD_WILDCARD_ALL (*):
-     *      Replace the single * entry with one entry per OCI column.
-     *      table_ref is set to the alias/name of the sole FROM object.
-     *      Only valid for single-table queries (parser enforces this).
-     *
-     *    SQL_FIELD_WILDCARD_TBL (TABLE.*):
-     *      Each TABLE.* entry is replaced with OCI columns in order.
-     *      For a single table this is all columns.
-     *      For mixed queries (t.col1, u.*) the wildcard slots are
-     *      expanded and normal fields are kept in position order.
-     *      Since OCI returns columns in SELECT list order this is
-     *      straightforward: re-read all OCI names and match.
-     *
-     *    SQL_FIELD_UNQUALIFIED:
-     *      table_ref was already inferred by the parser.
-     *      Just update field_name from the OCI descriptor to ensure
-     *      exact Oracle casing and no alias confusion.
-     *
-     *  After expansion deps.needs_expansion is cleared.
-     *  If no expansion is needed this entire block is skipped.
-     * ================================================================ */
-    if (deps.needs_expansion)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Phase B: expanding wildcard/unqualified fields "
-                     "from OCI descriptor (col_count=%u)", bc.col_count);
-
-        /* Read all OCI column names from the describe result */
-        char oci_col_names[SQL_DEP_MAX_FIELDS][256];
-        memset(oci_col_names, 0, sizeof(oci_col_names));
-
-        for (ub4 ci = 0; ci < bc.col_count && ci < SQL_DEP_MAX_FIELDS; ci++)
-        {
-            OCIParam *param  = NULL;
-            text     *tname  = NULL;
-            ub4       tlen   = 0;
-
-            if (OCIParamGet(stmt, OCI_HTYPE_STMT, ctx->errhp,
-                            (void **)&param, ci + 1) == OCI_SUCCESS)
-            {
-                if (OCIAttrGet(param, OCI_DTYPE_PARAM,
-                               &tname, &tlen,
-                               OCI_ATTR_NAME,
-                               ctx->errhp) == OCI_SUCCESS && tname)
-                {
-                    if (tlen > 255) tlen = 255;
-                    memcpy(oci_col_names[ci], tname, tlen);
-                    oci_col_names[ci][tlen] = '\0';
-                }
-            }
-            logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                         "Phase B: OCI col[%u] = '%s'",
-                         ci, oci_col_names[ci]);
-        }
-
-        /* Determine the single_table_ref for SELECT * expansion */
-        const char *single_ref =
-            (deps.object_count == 1)
-            ? (deps.objects[0].alias[0]
-               ? deps.objects[0].alias
-               : deps.objects[0].object_name)
-            : NULL;
-
-        /* Rebuild deps.fields[] from OCI column names */
-        OCI_FIELD_REF new_fields[SQL_DEP_MAX_FIELDS];
-        int           new_count = 0;
-        memset(new_fields, 0, sizeof(new_fields));
-
-        /*
-         * Strategy: walk the original deps.fields[] entries.
-         * Normal and unqualified entries map 1:1 to OCI columns
-         * (in the order they appear in the SELECT list).
-         * Wildcard entries expand to one entry per remaining OCI column.
-         * We use an OCI column cursor (oci_idx) that advances through
-         * bc.col_count in lock-step with the expanded output.
-         *
-         * For TABLE.* wildcards: the number of OCI columns the wildcard
-         * should consume equals bc.col_count minus the total number of
-         * non-wildcard fields in deps.fields[].  This prevents the
-         * wildcard from greedily consuming aliased columns that appear
-         * explicitly in the SELECT list after the wildcard, e.g.:
-         *
-         *   SELECT OCI_LOB_TEST.*, PHOTO AS Second_Blob FROM OCI_LOB_TEST
-         *
-         * Here OCI_LOB_TEST.* expands to 4 columns (ID, DESCRIPTION,
-         * FILE_NAME, PHOTO), then Second_Blob is a normal field that
-         * must be handled separately.  Without the count guard the
-         * wildcard loop consumed all 5 OCI columns including SECOND_BLOB,
-         * then get_select_metadata() failed trying to look up
-         * OCI_LOB_TEST.SECOND_BLOB in ALL_TAB_COLUMNS.
-         */
-        /* Pre-compute: how many non-wildcard fields are in deps.fields[] */
-        int non_wildcard_count = 0;
-        for (int f = 0; f < deps.field_count; f++)
-        {
-            if (deps.fields[f].expansion_type != SQL_FIELD_WILDCARD_ALL &&
-                deps.fields[f].expansion_type != SQL_FIELD_WILDCARD_TBL)
-                non_wildcard_count++;
-        }
-        /* Wildcard columns to expand = total OCI columns - explicit fields */
-        int wildcard_oci_budget = (int)bc.col_count - non_wildcard_count;
-        if (wildcard_oci_budget < 0) wildcard_oci_budget = 0;
-
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "Phase B: col_count=%u non_wildcard=%d wildcard_budget=%d",
-                     bc.col_count, non_wildcard_count, wildcard_oci_budget);
-
-        int oci_idx          = 0;
-        int wildcard_emitted = 0;  /* how many wildcard OCI cols consumed */
-
-        for (int f = 0; f < deps.field_count && oci_idx < (int)bc.col_count; f++)
-        {
-            OCI_FIELD_REF *src = &deps.fields[f];
-
-            if (src->expansion_type == SQL_FIELD_WILDCARD_ALL)
-            {
-                /* Expand * into wildcard_budget OCI columns.
-                 * Never consume columns that belong to explicit fields. */
-                while (oci_idx < (int)bc.col_count &&
-                       new_count < SQL_DEP_MAX_FIELDS &&
-                       wildcard_emitted < wildcard_oci_budget)
-                {
-                    OCI_FIELD_REF *dst = &new_fields[new_count];
-                    memset(dst, 0, sizeof(*dst));
-                    strncpy(dst->table_ref,  single_ref ? single_ref : "",
-                            sizeof(dst->table_ref)  - 1);
-                    strncpy(dst->field_name, oci_col_names[oci_idx],
-                            sizeof(dst->field_name) - 1);
-                    dst->field_pos      = new_count + 1;
-                    dst->expansion_type = SQL_FIELD_NORMAL;
-                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                                 "Phase B: * -> [%d] %s.%s",
-                                 dst->field_pos,
-                                 dst->table_ref, dst->field_name);
-                    new_count++;
-                    oci_idx++;
-                    wildcard_emitted++;
-                }
-            }
-            else if (src->expansion_type == SQL_FIELD_WILDCARD_TBL)
-            {
-                /* Expand TABLE.* — consume exactly wildcard_budget OCI
-                 * columns, leaving the remainder for explicit fields.
-                 * For queries like:
-                 *   SELECT OCI_LOB_TEST.*, PHOTO AS Second_Blob ...
-                 * the wildcard consumes 4 columns (the real table cols)
-                 * and SECOND_BLOB is handled as a normal field below.  */
-                while (oci_idx < (int)bc.col_count &&
-                       new_count < SQL_DEP_MAX_FIELDS &&
-                       wildcard_emitted < wildcard_oci_budget)
-                {
-                    OCI_FIELD_REF *dst = &new_fields[new_count];
-                    memset(dst, 0, sizeof(*dst));
-                    strncpy(dst->table_ref,  src->table_ref,
-                            sizeof(dst->table_ref)  - 1);
-                    strncpy(dst->field_name, oci_col_names[oci_idx],
-                            sizeof(dst->field_name) - 1);
-                    dst->field_pos      = new_count + 1;
-                    dst->expansion_type = SQL_FIELD_NORMAL;
-                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                                 "Phase B: %s.* -> [%d] %s.%s",
-                                 src->table_ref,
-                                 dst->field_pos,
-                                 dst->table_ref, dst->field_name);
-                    new_count++;
-                    oci_idx++;
-                    wildcard_emitted++;
-                }
-            }
-            else
-            {
-                /* Normal or unqualified field - explicit in the SELECT list.
-                 *
-                 * If the field has an alias (e.g. PHOTO AS Second_Blob)
-                 * the OCI descriptor returns the ALIAS as the column name
-                 * (SECOND_BLOB).  For metadata lookup we need the real
-                 * underlying column name (PHOTO from src->field_name) not
-                 * the alias.  We store the alias separately so the result
-                 * XML can use it as the element name.
-                 *
-                 * src->field_name was populated by the SQL parser from the
-                 * actual column expression (PHOTO), so we keep it and only
-                 * update the alias from the OCI descriptor.              */
-                OCI_FIELD_REF *dst = &new_fields[new_count];
-                *dst = *src;
-
-                /* Store OCI name as alias if it differs from field_name
-                 * (i.e. an AS alias was used in the SQL).               */
-                if (strcasecmp(oci_col_names[oci_idx],
-                               src->field_name) != 0)
-                {
-                    strncpy(dst->field_alias, oci_col_names[oci_idx],
-                            sizeof(dst->field_alias) - 1);
-                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                                 "Phase B: [%d] %s.%s AS %s (alias detected)",
-                                 new_count + 1,
-                                 dst->table_ref,
-                                 dst->field_name,
-                                 dst->field_alias);
-                }
-                else
-                {
-                    /* No alias - update field_name from OCI for exact casing */
-                    strncpy(dst->field_name, oci_col_names[oci_idx],
-                            sizeof(dst->field_name) - 1);
-                    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                                 "Phase B: [%d] %s.%s confirmed from OCI",
-                                 new_count + 1,
-                                 dst->table_ref, dst->field_name);
-                }
-
-                dst->field_pos      = new_count + 1;
-                dst->expansion_type = SQL_FIELD_NORMAL;
-                new_count++;
-                oci_idx++;
-            }
-        }
-
-        /* Replace deps.fields[] with the expanded set */
-        memcpy(deps.fields, new_fields,
-               (size_t)new_count * sizeof(OCI_FIELD_REF));
-        deps.field_count     = new_count;
-        deps.needs_expansion = 0;
-
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Phase B complete: field_count=%d", deps.field_count);
-    }
-
-
-
-
-
-    /* ----------------------------------------------------------------
-     * TL:6-June - Call get_select_metadata() in place of get_multi_metadata().
-     * get_select_metadata() enriches the metadata step with:
-     *   a) get_table_metadata() per FROM-clause object (warms cache,
-     *      logs ALL_TABLES statistics to Metadata_logger)
-     *   b) Cross-reference of SELECT-clause fields to source tables
-     *      (diagnostic logging in Metadata_logger in column order)
-     *   c) Delegation to get_multi_metadata() for the actual OCI
-     *      OCIParamGet / OCIDefineByPos / OCIDefineArrayOfStruct work.
-     * The fetch loop and free_batch_ctx() below are completely unchanged.
-     * get_multi_metadata() remains in place for callers that do not
-     * have dependency information available.
-     * ---------------------------------------------------------------- */
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Calling get_select_metadata");
-
-    multi_meta_request_t mmr;
-    memset(&mmr, 0, sizeof(mmr));
-    mmr.ctx           = ctx;
-    mmr.stmt          = stmt;
-    mmr.col_count     = bc.col_count;
-    mmr.fetch_count   = bc.fetch_count;
-    mmr.def           = bc.def;
-    mmr.buffers       = bc.buffers;
-    mmr.buf_sizes     = bc.buf_sizes;
-    mmr.indicators    = bc.indicators;
-    mmr.data_types    = bc.data_types;
-    mmr.data_sizes    = bc.data_sizes;
-    mmr.col_names     = bc.col_names;
-    mmr.col_blob_locs = bc.col_blob_locs;
-    mmr.clob_loc      = bc.clob_loc;
-    mmr.deps          = &deps;          /* populated by Stage 0 above   */
-
-    if (get_select_metadata(&mmr) != 0)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "get_select_metadata failed");
-        rc = -1;
-        goto Cleanup;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "get_select_metadata OK");
-
-    /*
-     * CLOB ARRAY FETCH RESTRICTION - OCI QUIRK - DO NOT REMOVE THIS BLOCK
-     * ---------------------------------------------------------------------
-     * OCI does not support array fetch (OCIStmtFetch2 with nrows > 1) when
-     * a CLOB column is present in the select list. The single clob_loc
-     * locator registered in OCIDefineByPos cannot be strided like scalar
-     * or BLOB columns via OCIDefineArrayOfStruct. Attempting to fetch
-     * multiple rows at once with a CLOB defined causes a silent process
-     * crash with no OCI error logged - making it extremely hard to diagnose.
-     *
-     * Detection: scan column types after describe. If any CLOB is found,
-     * force fetch_count to 1 for the entire fetch loop. All other logic
-     * (batch context, buffers, XML output) remains unchanged - only the
-     * number of rows requested per OCIStmtFetch2 call is reduced to 1.
-     *
-     * This restriction applies to CLOB only. BLOB array fetch works
-     * correctly because each BLOB locator slot is individually allocated
-     * and strided via OCIDefineArrayOfStruct with sizeof(OCILobLocator*).
-     */
-    for (ub4 i = 0; i < bc.col_count; i++)
-    {
-        if (bc.data_types[i] == SQLT_CLOB)
-        {
-            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                         "CLOB column detected at col=%u - "
-                         "forcing fetch_count=1 (OCI array fetch restriction)",
-                         i);
-            bc.fetch_count = 1;
-            break;
-        }
-    }
-
-    /* ================================================================
-     *  Stage 3 - Execute (real run, cursor open)
-     * ================================================================ */
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Stage 3: Execute statement (real run)");
-
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Calling OCIStmtExecute OCI_DEFAULT (iters=0)");
-    CHECK_OCI(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
-                       0, 0, NULL, NULL, OCI_DEFAULT));
+    int open_rc = driver->select_open(ctx, &req, &cursor, &columns,
+                                       &col_count_driver, &batch_size_driver);
+    if (open_rc != 0)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "driver select_open failed rc=%d for sql=%s",
+                     open_rc, fetch_sql);
+        rc = -1;
+        goto Cleanup;
+    }
 
     exec_start_us = metrics_now_us();
 
-    /* ================================================================
-     *  Stage 4 - Build XML document header
-     * ================================================================ */
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Stage 4: Build XML document");
+                 "driver select_open OK: columns=%d batch_size=%d",
+                 col_count_driver, batch_size_driver);
 
-    /*18-JUL*/
-    rs = resultset_create(record_count, (int)bc.col_count);
-     if (!rs)
-     {
-         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                      "resultset_create failed - record_count=%d fields_per_row=%u",
-                      record_count, bc.col_count);
-         rc = -1;
-         goto Cleanup;
-     }
+    /* Bug fix (2026-09-15, root-caused via a second ASan crash report -
+     * SEGV in ensure_capacity, from Stage 6's xml_start_execution(xml)
+     * further down). rs/xml creation was WRONGLY gated behind
+     * "if (!is_async)" here in Phase 2a/2b - that was a genuine design
+     * mistake, not a defensive nicety. The original, already-proven
+     * design (see the 2026-08-23 comment preserved a few hundred lines
+     * down, at the response_writer_cache_store() call) always created
+     * both unconditionally - an async request leaves rs "deliberately
+     * empty" (real row data goes to per-batch batch_rs instead), not
+     * NULL. Stage 6 onward was written assuming that invariant and was
+     * never wrong itself - this creation block was. Row POPULATION
+     * (copying batch_rs into rs) is correctly still gated on
+     * "if (!is_async)" further down in the fetch loop - only creation
+     * needed to stop being conditional. */
+    rs = resultset_create(record_count, col_count_driver);
+    if (!rs)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "resultset_create failed - record_count=%d "
+                     "fields_per_row=%d", record_count, col_count_driver);
+        driver->select_close(cursor);
+        free(columns);
+        rc = -1;
+        goto Cleanup;
+    }
 
     xml = xml_create(16384);
+    if (!xml)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "xml_create failed");
+        driver->select_close(cursor);
+        free(columns);
+        rc = -1;
+        goto Cleanup;
+    }
     xml_start_document(xml);
     xml_start_execution(xml);
     xml_append(xml, "<sql_query>%s</sql_query>\n", cfg->SQL);
-    /* Closure item 4 (2026-08-09) - explicit flag, not just a log
-     * warning, so a caller doing reconciliation or a completeness
-     * check has a real way to know they received a partial result
-     * rather than silently trusting a row count that's actually
-     * short of the true total.                                        */
     xml_append(xml, "<truncated>%s</truncated>\n", truncated ? "true" : "false");
     xml_end_execution(xml);
-    /* xml_start_resultset(xml); */ /* Unused: resultset body now built by response_write_xml(ctx, rs) via new parsing layer, after the fetch loop populates rs */
 
-    /* ================================================================
-     *  Stage 5 - Batch fetch loop
-     * ================================================================ */
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Stage 5: Batch fetch loop fetch_count=%u", bc.fetch_count);
-
-    /* abs_rownum declared once, shared with the sync branch below - see
-     * the v2 driver integration comment above. */
-    sword        fetch_status;
-
-    /* execute_async batch delivery (2026-08-22). cfg->async_batch_callback
-     * set means: don't accumulate rows into the whole-query rs at all
-     * (nobody renders it - this request never returns a normal combined
-     * response), instead render+deliver each fetch's worth of rows as
-     * its own self-contained document, then discard it, before fetching
-     * the next batch.
-     *
-     * Row numbering design decision, worth knowing about: resultset_t is
-     * fixed-size and index-bounds-checked against the record_count it
-     * was created with (resultset_get_row() rejects anything outside
-     * that range - confirmed in OCI_Resultset_Builder.c). A batch-sized
-     * resultset_t therefore CANNOT be indexed by the true, ever-growing
-     * abs_rownum past the first batch - every batch below is built with
-     * LOCAL, batch-relative row numbers (1, 2, 3... resetting each
-     * batch), not continuing global numbering. Each batch's envelope
-     * still carries enough to reconstruct global position if a receiver
-     * needs it (batch_number, and abs_rownum's running total is in the
-     * final batch's cumulative num_rows) - but individual <row number>
-     * values restart at 1 in every batch. Flagging this clearly since
-     * it's a real design choice, not an incidental detail - worth
-     * confirming this is what you want rather than continuous global
-     * row numbers.
-     *
-     * blobs_extracted/clobs_extracted on each batch's own envelope are
-     * genuinely THIS BATCH's counts (batch_blob_index/batch_clob_index,
-     * reset every iteration) - the ORIGINAL ask ("the stats envelope
-     * should only contain stats for current batch"). BLOB_index/
-     * CLOB_index keep accumulating the TRUE cumulative totals in
-     * parallel (added to after every batch), used only in the final
-     * batch's summary and in metrics - unchanged from the synchronous
-     * path's own existing accounting.
-     *
-     * is_async itself is no longer declared here - moved up before the
-     * cache lookup (see the fix there for why) and still in scope. */
     int is_json_async = (cfg->ReturnFormat &&
                           strcasecmp(cfg->ReturnFormat, "JSON") == 0);
     int batch_number = 0;
 
     for (;;)
     {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Calling OCIStmtFetch2 fetch_count=%u", bc.fetch_count);
-
-        fetch_status = OCIStmtFetch2(stmt, ctx->errhp,
-                                     bc.fetch_count,
-                                     OCI_FETCH_NEXT, 0,
-                                     OCI_DEFAULT);
-
-        if (fetch_status != OCI_SUCCESS         &&
-            fetch_status != OCI_SUCCESS_WITH_INFO &&
-            fetch_status != OCI_NO_DATA)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "OCIStmtFetch2 unexpected status=%d", fetch_status);
-            CHECK_OCI(ctx->errhp, fetch_status);
-            rc = -1;
-            goto Cleanup;
-        }
-
-        ub4 rows_fetched = 0;
-        OCIAttrGet(stmt, OCI_HTYPE_STMT,
-                   &rows_fetched, 0,
-                   OCI_ATTR_ROWS_FETCHED, ctx->errhp);
-
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "rows_fetched=%u fetch_status=%d",
-                     rows_fetched, fetch_status);
-
-        if (rows_fetched == 0)
-            break;
-
         resultset_t *batch_rs = NULL;
-        int          batch_blob_index = 0;
-        int          batch_clob_index = 0;
-        uint64_t     batch_clob_bytes = 0;
+        int          rows_fetched = 0;
+        db_fetch_batch_stats_t stats = {0};
 
-        if (is_async)
-        {
-            batch_rs = resultset_create((int)rows_fetched, (int)bc.col_count);
-            if (!batch_rs)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "resultset_create failed for async batch - "
-                             "rows_fetched=%u col_count=%u",
-                             rows_fetched, bc.col_count);
-                rc = -1;
-                goto Cleanup;
-            }
-        }
-
-        for (ub4 r = 0; r < rows_fetched; r++)
-        {
-            abs_rownum++;
-            unsigned int row_num_for_rs = is_async ? (r + 1) : abs_rownum;
-
-            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                         "Processing r=%u abs_rownum=%u row_num_for_rs=%u",
-                         r, abs_rownum, row_num_for_rs);
-
-            int row_rc = build_row_xml_batch(ctx, &bc,
-                                              r, row_num_for_rs,
-                                              BLOB_list,
-                                              is_async ? &batch_blob_index : &BLOB_index,
-                                              max_lobs,
-                                              is_async ? &batch_clob_index : &CLOB_index,
-                                              max_clobs,
-                                              is_async ? &batch_clob_bytes : &clob_bytes,
-                                              xml,
-                                              is_async ? batch_rs : rs);
-            if (row_rc != 0)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "build_row_xml_batch failed r=%u", r);
-                if (batch_rs) resultset_free(batch_rs);
-                rc = -1;
-                goto Cleanup;
-            }
-        }
-
-        int is_final_batch = (fetch_status == OCI_NO_DATA) ||
-                              (abs_rownum >= (unsigned int)record_count);
-
-        /* Bug fix (2026-08-23), found via real testing - two consecutive
-         * live runs both showed every batch, including the true last
-         * one, marked (not final). Root cause: fetch_status ==
-         * OCI_NO_DATA is NOT reliably set on the same OCIStmtFetch2
-         * call that returns the last real row - Oracle typically only
-         * signals it on the NEXT call, which returns rows_fetched == 0
-         * and hits this loop's early "if (rows_fetched == 0) break;"
-         * before is_final_batch is ever evaluated for that (empty)
-         * iteration. record_count is already the correct, truncation-
-         * adjusted effective row limit (set above, before this loop
-         * even starts) - comparing the running abs_rownum against it
-         * is deterministic and doesn't depend on OCI's own exact
-         * NO_DATA-signalling timing. */
-
-        if (is_async)
-        {
-            batch_number++;
-            BLOB_index += batch_blob_index;   /* fold into the true
-                                                  cumulative totals -
-                                                  same accounting the
-                                                  sync path already does,
-                                                  just deferred per-batch */
-            CLOB_index += batch_clob_index;
-            clob_bytes += batch_clob_bytes;
-
-            char *resultset_body = is_json_async
-                ? response_write_json(ctx, batch_rs)
-                : response_write_xml(ctx, batch_rs);
-
-            if (!resultset_body)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "async batch %d: response_write_%s returned "
-                             "NULL - batch not delivered",
-                             batch_number, is_json_async ? "json" : "xml");
-            }
-            else if (is_json_async)
-            {
-                /* Bug fix (2026-08-24), found via real output on
-                 * webhook.site - this branch never existed before. The
-                 * resultset BODY was correctly rendered as JSON
-                 * (response_write_json() above), but the ENVELOPE
-                 * wrapping it (batch_number/final/blobs_extracted/etc)
-                 * was ALWAYS built with hardcoded XML tags via
-                 * xml_append(), regardless of is_json_async - which was
-                 * only ever consulted for picking the resultset
-                 * renderer and for the callback's own is_json flag, not
-                 * for the envelope shape itself. The result was a
-                 * malformed, mixed document: a real XML shell
-                 * ("<output_xml><execution_envelope>...") with a real
-                 * JSON blob spliced raw inside it. This branch builds a
-                 * genuine JSON envelope instead - one JSON object,
-                 * envelope fields and the resultset's own "resultset"
-                 * key together at the same top level, exactly mirroring
-                 * what the XML branch below already does correctly for
-                 * XML. */
-                clock_gettime(CLOCK_MONOTONIC, &ts_end);
-                double elapsed_so_far =
-                    (ts_end.tv_sec  - ts_start.tv_sec) +
-                    (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
-
-                /* resultset_body is a complete JSON object of exactly
-                 * one key - {"resultset":[...]} (response_write_json()'s
-                 * own documented shape). Strip its outer braces so its
-                 * inner content ("resultset":[...]) can be merged into
-                 * THIS object at the same top level, rather than nested
-                 * as a sub-object under its own extra layer. */
-                size_t body_len = strlen(resultset_body);
-                const char *inner_start = resultset_body;
-                size_t      inner_len   = body_len;
-                if (body_len >= 2 && resultset_body[0] == '{' &&
-                    resultset_body[body_len - 1] == '}')
-                {
-                    inner_start = resultset_body + 1;
-                    inner_len   = body_len - 2;
-                }
-
-                size_t buf_size = inner_len + 512;
-                char  *json_buf = malloc(buf_size);
-                if (json_buf)
-                {
-                    int written = snprintf(json_buf, buf_size,
-                        "{\"batch_number\":%d,\"final\":%s,"
-                        "\"blobs_extracted\":%d,\"clobs_extracted\":%d,",
-                        batch_number, is_final_batch ? "true" : "false",
-                        batch_blob_index, batch_clob_index);
-
-                    if (is_final_batch && written > 0 && (size_t)written < buf_size)
-                    {
-                        written += snprintf(json_buf + written, buf_size - written,
-                            "\"num_rows\":%u,\"execution_time_total\":%.6f,"
-                            "\"truncated\":%s,",
-                            abs_rownum, elapsed_so_far,
-                            truncated ? "true" : "false");
-                    }
-
-                    if (written > 0 && (size_t)written < buf_size)
-                    {
-                        snprintf(json_buf + written, buf_size - written,
-                                 "%.*s}", (int)inner_len, inner_start);
-                    }
-
-                    /* Best-effort, per this module's own design contract
-                     * (see execute_config_t's own doc comment) - return
-                     * value intentionally not checked here. */
-                    cfg->async_batch_callback(cfg->async_batch_user_data,
-                                               json_buf,
-                                               is_json_async,
-                                               is_final_batch,
-                                               batch_number);
-                    free(json_buf);
-                }
-                free(resultset_body);
-            }
-            else
-            {
-                xml_builder_t *batch_xml = xml_create(strlen(resultset_body) + 1024);
-                if (batch_xml)
-                {
-                    /* Bug fix (2026-08-23), found via real output on
-                     * webhook.site - xml_start_document() already
-                     * writes "<output_xml>" itself (and xml_finalize()
-                     * already writes the closing tag) - the two manual
-                     * xml_append_raw() calls that used to sit here
-                     * duplicated both, producing "<output_xml>
-                     * <output_xml>..." Removed; xml_start_document()/
-                     * xml_finalize() alone are the correct, complete
-                     * pair, matching the exact same pattern the normal
-                     * synchronous response already uses elsewhere in
-                     * this file. */
-                    xml_start_document(batch_xml);
-                    xml_start_execution(batch_xml);
-                    xml_append(batch_xml, "<batch_number>%d</batch_number>\n", batch_number);
-                    xml_append(batch_xml, "<final>%s</final>\n",
-                               is_final_batch ? "true" : "false");
-                    xml_append(batch_xml, "<blobs_extracted>%d</blobs_extracted>\n",
-                               batch_blob_index);
-                    xml_append(batch_xml, "<clobs_extracted>%d</clobs_extracted>\n",
-                               batch_clob_index);
-
-                    if (is_final_batch)
-                    {
-                        clock_gettime(CLOCK_MONOTONIC, &ts_end);
-                        double elapsed_so_far =
-                            (ts_end.tv_sec  - ts_start.tv_sec) +
-                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
-                        xml_append(batch_xml, "<num_rows>%u</num_rows>\n", abs_rownum);
-                        xml_append(batch_xml,
-                                   "<execution_time_total>%.6f</execution_time_total>\n",
-                                   elapsed_so_far);
-                        xml_append(batch_xml, "<truncated>%s</truncated>\n",
-                                   truncated ? "true" : "false");
-                    }
-
-                    xml_end_execution(batch_xml);
-                    xml_append_raw(batch_xml, resultset_body);
-                    xml_finalize(batch_xml);
-
-                    /* Best-effort, per this module's own design contract
-                     * (see execute_config_t's own doc comment) - return
-                     * value intentionally not checked here. A failed
-                     * delivery is the callback's own concern to log; it
-                     * must never stop this fetch loop or fail the
-                     * request.                                          */
-                    cfg->async_batch_callback(cfg->async_batch_user_data,
-                                               batch_xml->buffer,
-                                               is_json_async,
-                                               is_final_batch,
-                                               batch_number);
-
-                    xml_free(batch_xml);
-                }
-                free(resultset_body);
-            }
-
-            resultset_free(batch_rs);
-        }
-
-        if (fetch_status == OCI_NO_DATA)
-            break;
-    }
-
-    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "Fetch loop complete. Total rows=%u BLOBS=%d CLOBS=%d",
-                 abs_rownum, BLOB_index, CLOB_index);
-
-    } /* end if (is_async) - see the v2 driver integration comment above */
-    else
-    {
-        /* ============================================================
-         * v2 driver integration (Phase 2a, 2026-09-14) - SYNC PATH.
-         *
-         * Replaces this branch's own former Stage 2 (prepare/describe/
-         * Phase B/get_select_metadata)/Stage 3 (real execute)/Stage 5
-         * (OCIStmtFetch2 loop + build_row_xml_batch dispatch) with
-         * driver->select_open()/select_fetch_batch()/select_close().
-         * Stage 4's resultset_create() and the XML document header, and
-         * Stage 6 onward (response building/cache/metrics), are
-         * unchanged - just now fed by rows the driver already put into
-         * resultset_t/resultset_blob_detail_t form, copied into this
-         * function's own top-level rs below.
-         *
-         * fetch_sql (not cfg->SQL) is deliberate - Stage 1's own
-         * truncation-safety wrapper (ROWNUM-bounded SQL when
-         * record_count exceeded query_max_record_count) must still
-         * apply here exactly as it did for the async branch above.
-         *
-         * get_table_metadata()'s cache-warming/cross-reference logging
-         * (previously reached via get_select_metadata(), now bypassed
-         * since select_open() calls plain get_multi_metadata()
-         * internally) is deliberately NOT replicated here - checked
-         * first: it doesn't feed metadata_cache.c (that cache is
-         * populated entirely independently by Insert/Update/Delete/
-         * Level2_Parser), and dispatcher.c's own get_table_metadata()
-         * call is an unrelated, hardcoded diagnostic hook, not a
-         * consumer of anything this path would have warmed. The only
-         * real loss is a per-SELECT ALL_TABLES diagnostic log line and
-         * Oracle's own internal dictionary-cache warming for that
-         * table - decided and confirmed safe to drop, not an oversight.
-         * ============================================================ */
-        const db_driver_t *driver = db_driver_get(ctx);
-        if (!driver || !driver->select_open || !driver->select_fetch_batch ||
-            !driver->select_close)
+        if (driver->select_fetch_batch(cursor, &batch_rs, &rows_fetched, &stats) != 0)
         {
             logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "db_driver_get() returned an incomplete driver");
-            rc = -1;
-            goto Cleanup;
-        }
-
-        db_select_request_t req;
-        memset(&req, 0, sizeof(req));
-        req.sql                  = fetch_sql;
-        req.max_rows             = record_count;
-        req.max_memory_bytes     = cfg->max_memory_bytes;
-        req.fetch_array_size     = (int)bc.fetch_count;
-        req.query_timeout        = cfg->query_timeout;
-        req.include_column_names = cfg->include_column_names;
-
-        db_select_cursor_t *cursor  = NULL;
-        db_column_meta_t   *columns = NULL;
-        int col_count_driver  = 0;
-        int batch_size_driver = 0;
-
-        /* Timing point matches async's own semantics exactly (see Stage 3
-         * above): starts right before the real work happens, not before
-         * describe/metadata - select_open() below does prepare+describe+
-         * real-execute together, so this is the closest sync equivalent
-         * to async's "clock_gettime() right before OCIStmtExecute". */
-        clock_gettime(CLOCK_MONOTONIC, &ts_start);
-
-        int open_rc = driver->select_open(ctx, &req, &cursor, &columns,
-                                           &col_count_driver, &batch_size_driver);
-        if (open_rc != 0)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "driver select_open failed rc=%d for sql=%s",
-                         open_rc, fetch_sql);
-            rc = -1;
-            goto Cleanup;
-        }
-
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "driver select_open OK: columns=%d batch_size=%d",
-                     col_count_driver, batch_size_driver);
-
-        exec_start_us = metrics_now_us();
-
-        rs = resultset_create(record_count, col_count_driver);
-        if (!rs)
-        {
-            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                         "resultset_create failed - record_count=%d "
-                         "fields_per_row=%d", record_count, col_count_driver);
+                         "driver select_fetch_batch failed");
             driver->select_close(cursor);
             free(columns);
             rc = -1;
             goto Cleanup;
         }
 
-        xml = xml_create(16384);
-        xml_start_document(xml);
-        xml_start_execution(xml);
-        xml_append(xml, "<sql_query>%s</sql_query>\n", cfg->SQL);
-        xml_append(xml, "<truncated>%s</truncated>\n", truncated ? "true" : "false");
-        xml_end_execution(xml);
+        /* Unconditional fold, sync and async alike - see db_driver.h's
+         * doc comment on out_stats for why this is necessary, not
+         * cosmetic (feeds <blobs_extracted>/<clobs_extracted> and
+         * metrics.lob_bytes/clob_bytes either way). */
+        BLOB_index += stats.blob_count;
+        CLOB_index += stats.clob_count;
+        lob_bytes  += stats.blob_bytes;
+        clob_bytes += stats.clob_bytes;
 
-        for (;;)
+        if (rows_fetched == 0)
+            break;
+
+        if (!is_async)
         {
-            resultset_t *batch_rs = NULL;
-            int          rows_fetched = 0;
-            db_fetch_batch_stats_t stats = {0};
-
-            if (driver->select_fetch_batch(cursor, &batch_rs, &rows_fetched, &stats) != 0)
-            {
-                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                             "driver select_fetch_batch failed");
-                driver->select_close(cursor);
-                free(columns);
-                rc = -1;
-                goto Cleanup;
-            }
-
-            /* Accumulate into the SAME running totals the async branch
-             * above already uses (BLOB_index/CLOB_index/lob_bytes/
-             * clob_bytes) - these feed <blobs_extracted>/<clobs_extracted>
-             * and metrics.lob_bytes/clob_bytes further down (Stage 6/7,
-             * unchanged) - see db_driver.h's own doc comment on
-             * out_stats for why this is necessary, not cosmetic. */
-            BLOB_index += stats.blob_count;
-            CLOB_index += stats.clob_count;
-            lob_bytes  += stats.blob_bytes;
-            clob_bytes += stats.clob_bytes;
-
-            if (rows_fetched == 0)
-                break;
-
             for (int r = 0; r < rows_fetched; r++)
             {
                 abs_rownum++;
@@ -2299,10 +853,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
                 if (!dst_row)
                 {
                     /* Should not happen - fetch_sql above is already
-                     * bounded to record_count when truncated (same
-                     * safety guarantee the async branch relies on) -
-                     * defensive check anyway, matching this codebase's
-                     * own existing style rather than assuming. */
+                     * bounded to record_count when truncated - defensive
+                     * check anyway, matching this codebase's own style. */
                     logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                                  "resultset_get_row failed for abs_rownum=%u "
                                  "(record_count=%d)", abs_rownum, record_count);
@@ -2336,15 +888,146 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
             resultset_free(batch_rs);
         }
+        else
+        {
+            /* async: batch_rs is already exactly what response_write_xml/
+             * response_write_json need - batch-relative row numbers
+             * (1..rows_fetched), fully populated by the driver, same
+             * shape the original inline fetch loop built by hand via
+             * build_row_xml_batch(). Render, deliver, discard - never
+             * accumulated into a whole-query rs (nobody renders one for
+             * an async request - see the original design comment this
+             * replaced, preserved in spirit below). */
+            abs_rownum += (unsigned int)rows_fetched;
+            batch_number++;
 
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Fetch loop complete (driver). Total rows=%u BLOBS=%d CLOBS=%d",
-                     abs_rownum, BLOB_index, CLOB_index);
+            int is_final_batch = (abs_rownum >= (unsigned int)record_count);
 
-        driver->select_close(cursor);
-        free(columns);
+            char *resultset_body = is_json_async
+                ? response_write_json(ctx, batch_rs)
+                : response_write_xml(ctx, batch_rs);
+
+            if (!resultset_body)
+            {
+                logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                             "async batch %d: response_write_%s returned "
+                             "NULL - batch not delivered",
+                             batch_number, is_json_async ? "json" : "xml");
+            }
+            else if (is_json_async)
+            {
+                /* Genuine JSON envelope - envelope fields and the
+                 * resultset's own "resultset" key together at the same
+                 * top level (2026-08-24 bug fix, preserved as-is). */
+                clock_gettime(CLOCK_MONOTONIC, &ts_end);
+                double elapsed_so_far =
+                    (ts_end.tv_sec  - ts_start.tv_sec) +
+                    (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+
+                size_t body_len = strlen(resultset_body);
+                const char *inner_start = resultset_body;
+                size_t      inner_len   = body_len;
+                if (body_len >= 2 && resultset_body[0] == '{' &&
+                    resultset_body[body_len - 1] == '}')
+                {
+                    inner_start = resultset_body + 1;
+                    inner_len   = body_len - 2;
+                }
+
+                size_t buf_size = inner_len + 512;
+                char  *json_buf = malloc(buf_size);
+                if (json_buf)
+                {
+                    int written = snprintf(json_buf, buf_size,
+                        "{\"batch_number\":%d,\"final\":%s,"
+                        "\"blobs_extracted\":%d,\"clobs_extracted\":%d,",
+                        batch_number, is_final_batch ? "true" : "false",
+                        stats.blob_count, stats.clob_count);
+
+                    if (is_final_batch && written > 0 && (size_t)written < buf_size)
+                    {
+                        written += snprintf(json_buf + written, buf_size - written,
+                            "\"num_rows\":%u,\"execution_time_total\":%.6f,"
+                            "\"truncated\":%s,",
+                            abs_rownum, elapsed_so_far,
+                            truncated ? "true" : "false");
+                    }
+
+                    if (written > 0 && (size_t)written < buf_size)
+                    {
+                        snprintf(json_buf + written, buf_size - written,
+                                 "%.*s}", (int)inner_len, inner_start);
+                    }
+
+                    /* Best-effort, per this module's own design contract -
+                     * return value intentionally not checked here. */
+                    cfg->async_batch_callback(cfg->async_batch_user_data,
+                                               json_buf,
+                                               is_json_async,
+                                               is_final_batch,
+                                               batch_number);
+                    free(json_buf);
+                }
+                free(resultset_body);
+            }
+            else
+            {
+                xml_builder_t *batch_xml = xml_create(strlen(resultset_body) + 1024);
+                if (batch_xml)
+                {
+                    xml_start_document(batch_xml);
+                    xml_start_execution(batch_xml);
+                    xml_append(batch_xml, "<batch_number>%d</batch_number>\n", batch_number);
+                    xml_append(batch_xml, "<final>%s</final>\n",
+                               is_final_batch ? "true" : "false");
+                    xml_append(batch_xml, "<blobs_extracted>%d</blobs_extracted>\n",
+                               stats.blob_count);
+                    xml_append(batch_xml, "<clobs_extracted>%d</clobs_extracted>\n",
+                               stats.clob_count);
+
+                    if (is_final_batch)
+                    {
+                        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+                        double elapsed_so_far =
+                            (ts_end.tv_sec  - ts_start.tv_sec) +
+                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+                        xml_append(batch_xml, "<num_rows>%u</num_rows>\n", abs_rownum);
+                        xml_append(batch_xml,
+                                   "<execution_time_total>%.6f</execution_time_total>\n",
+                                   elapsed_so_far);
+                        xml_append(batch_xml, "<truncated>%s</truncated>\n",
+                                   truncated ? "true" : "false");
+                    }
+
+                    xml_end_execution(batch_xml);
+                    xml_append_raw(batch_xml, resultset_body);
+                    xml_finalize(batch_xml);
+
+                    /* Best-effort, per this module's own design contract -
+                     * a failed delivery is the callback's own concern to
+                     * log; it must never stop this fetch loop or fail
+                     * the request. */
+                    cfg->async_batch_callback(cfg->async_batch_user_data,
+                                               batch_xml->buffer,
+                                               is_json_async,
+                                               is_final_batch,
+                                               batch_number);
+
+                    xml_free(batch_xml);
+                }
+                free(resultset_body);
+            }
+
+            resultset_free(batch_rs);
+        }
     }
 
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "Fetch loop complete. Total rows=%u BLOBS=%d CLOBS=%d",
+                 abs_rownum, BLOB_index, CLOB_index);
+
+    driver->select_close(cursor);
+    free(columns);
 
     metrics.execution_us  = metrics_now_us() - exec_start_us;
     metrics.rows_affected = (uint64_t)abs_rownum;
@@ -2655,9 +1338,25 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
          metrics.output_xml_bytes = (xml && xml->buffer)
                                     ? (uint64_t)strlen(xml->buffer) : 0;
 
-         /* Accumulate BLOB bytes from BLOB_list                       */
-         for (int _bi = 0; _bi < BLOB_index; _bi++)
-             lob_bytes += (uint64_t)BLOB_list[_bi].blob_size;
+         /* Bug fix (2026-09-15, found via a second ASan crash report -
+          * SEGV reading BLOB_list[_bi] here). This loop pre-dates
+          * Phase 2b and was already redundant by the time this pass
+          * landed: lob_bytes is already correctly accumulated in the
+          * shared fetch loop above (lob_bytes += stats.blob_bytes,
+          * folded per batch, same as clob_bytes already was in
+          * Phase 2a). BLOB_list itself is permanently NULL now (its
+          * only populator, handle_blob_column_batch(), was removed in
+          * Phase 2b) - but BLOB_index is NOT always 0 any more (it's
+          * genuinely incremented via out_stats), so this unguarded
+          * loop dereferenced a NULL array the moment any real query
+          * touched a BLOB column. Every OTHER BLOB_list[...] access in
+          * this file (Cleanup's own free loop) is already correctly
+          * guarded behind "if (BLOB_list)" - this was the one spot
+          * that wasn't, because it never needed to be until BLOB_list
+          * stopped being populated. Removed outright rather than
+          * guarded, since the value it computed is already computed
+          * correctly elsewhere - guarding it would just make it a
+          * silent no-op that still looks like it's doing something. */
          metrics.lob_bytes  = lob_bytes;
          metrics.clob_bytes = clob_bytes;
          /* transaction_id already set at init time                    */
@@ -2761,7 +1460,11 @@ Cleanup:
         BLOB_list = NULL;
     }
 
-    free_batch_ctx(ctx, &bc);
+    /* free_batch_ctx(ctx, &bc) removed (Phase 2b, 2026-09-15) - the
+     * function itself is gone, and bc's only field anything still
+     * populates is bc.fetch_count (a plain int, nothing to free).
+     * Every other bc field stays permanently NULL now, same as
+     * stmt/stmt_count/BLOB_list below - nothing left to release here. */
 
     if (xml)
     {
