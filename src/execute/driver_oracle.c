@@ -250,6 +250,22 @@ struct db_select_cursor_t {
     unsigned int    abs_rownum;
     int             blob_index;
     int             clob_index;
+
+    /* Bug fix (2026-09-15, found via a real ORA-01002 storm under full
+     * load - 31+ occurrences in one run, root-caused by tracing an
+     * unfiltered log sequence rather than guessed at). A short fetch
+     * (fewer rows returned than requested) makes Oracle signal
+     * OCI_NO_DATA on THAT SAME call, not on a subsequent one - this
+     * cursor was already exhausted the moment that happened, but
+     * nothing recorded it, so the next select_fetch_batch() call
+     * issued a real OCIStmtFetch2 on an already-exhausted cursor,
+     * which is exactly what ORA-01002 means. Every batch that
+     * previously happened to be an EXACT match to the requested size
+     * (every earlier test's truncated-to-5-rows queries) never hit
+     * this, since Oracle only learns "no more" on the NEXT call in
+     * that case - only a genuinely short fetch exposes it, which nothing
+     * before this load test's real query mix ever exercised. */
+    int             exhausted;   /* 0/1 - set once OCI_NO_DATA is seen */
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -805,6 +821,15 @@ static int oracle_select_fetch_batch(db_select_cursor_t      *cursor,
     *out_rows_fetched = 0;
     if (out_stats) memset(out_stats, 0, sizeof(*out_stats));
 
+    /* Short-circuit: a previous call already saw OCI_NO_DATA, meaning
+     * Oracle already told us this cursor is exhausted. Issuing a real
+     * OCIStmtFetch2 again here is exactly what produces ORA-01002 -
+     * see the struct comment on cursor->exhausted for the full
+     * reasoning. Safe, cheap no-op matching the caller's existing
+     * "rows_fetched == 0 means stop" contract. */
+    if (cursor->exhausted)
+        return 0;
+
     oci_context_t *ctx = cursor->ctx;
 
     sword fetch_status = OCIStmtFetch2(cursor->stmt, ctx->errhp,
@@ -818,6 +843,16 @@ static int oracle_select_fetch_batch(db_select_cursor_t      *cursor,
         ORACLE_CHECK_OCI(ctx, fetch_status);
         return -1;
     }
+
+    /* OCI_NO_DATA can arrive WITH a non-zero row count - a short fetch
+     * (fewer rows available than requested) signals exhaustion on this
+     * same call, not a subsequent one. Record it now regardless of how
+     * many rows came back this time, so the NEXT call (if the caller's
+     * loop makes one, which it always does - it doesn't know yet
+     * whether this was the last real batch) hits the short-circuit
+     * above instead of issuing a real fetch on an already-done cursor. */
+    if (fetch_status == OCI_NO_DATA)
+        cursor->exhausted = 1;
 
     ub4 rows_fetched = 0;
     OCIAttrGet(cursor->stmt, OCI_HTYPE_STMT,

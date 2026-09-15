@@ -81,6 +81,23 @@ static void *http_worker_thread_main(void *arg_v)
     http_worker_pool_t   *pool = arg->pool;
     int                    queue_index = arg->queue_index;
 
+    /* Fix (2026-09-15, found investigating a real ORA-01002 recurrence
+     * under full concurrent load) - worker.c's own thread-start function
+     * calls logger_set_worker_id() first thing (see its own comment,
+     * 2026-08-07 fix); http_worker_pool.c - what every HTTP-consumer
+     * deployment actually runs - never did. Every log line from every
+     * HTTP worker thread, and everything it calls into (dispatcher.c,
+     * every CRUD execute module, driver_oracle.c), has always shown
+     * [T0] regardless of which real worker actually ran it - the exact
+     * same mislabeling the 2026-08-07 fix's own comment warns caused a
+     * false lead during the original ORA-03114 investigation, just
+     * never closed off on this specific code path. Set first, before
+     * anything else on this thread logs, same placement and reasoning
+     * as worker.c. queue_index is already this thread's own natural
+     * identifier - used a few lines down for this same thread's own
+     * startup log line, nothing new introduced by using it here too. */
+    logger_set_worker_id(queue_index);
+
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));   /* see http_consumer.c's
         own Stage 2 note on why this is mandatory before OCI_Pool_get_session() -

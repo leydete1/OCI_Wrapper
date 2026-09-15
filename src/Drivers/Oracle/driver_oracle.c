@@ -250,6 +250,22 @@ struct db_select_cursor_t {
     unsigned int    abs_rownum;
     int             blob_index;
     int             clob_index;
+
+    /* Bug fix (2026-09-15, found via a real ORA-01002 storm under full
+     * load - 31+ occurrences in one run, root-caused by tracing an
+     * unfiltered log sequence rather than guessed at). A short fetch
+     * (fewer rows returned than requested) makes Oracle signal
+     * OCI_NO_DATA on THAT SAME call, not on a subsequent one - this
+     * cursor was already exhausted the moment that happened, but
+     * nothing recorded it, so the next select_fetch_batch() call
+     * issued a real OCIStmtFetch2 on an already-exhausted cursor,
+     * which is exactly what ORA-01002 means. Every batch that
+     * previously happened to be an EXACT match to the requested size
+     * (every earlier test's truncated-to-5-rows queries) never hit
+     * this, since Oracle only learns "no more" on the NEXT call in
+     * that case - only a genuinely short fetch exposes it, which nothing
+     * before this load test's real query mix ever exercised. */
+    int             exhausted;   /* 0/1 - set once OCI_NO_DATA is seen */
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -500,9 +516,11 @@ static int oracle_select_open(oci_context_t              *ctx,
  * stack-local lob_item_t with an immediate free() below is sufficient
  * and simpler, without changing any observable behavior. */
 static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
-                                    ub4 row, ub4 col_idx, resultset_row_t *rs_row)
+                                    ub4 row, ub4 col_idx, resultset_row_t *rs_row,
+                                    uint64_t *out_bytes)
 {
     int blob_index = cur->blob_index;
+    *out_bytes = 0;
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Entering col=%u row=%u abs_rownum=%u blob_index=%d",
@@ -652,6 +670,8 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
                               item.output_file_url, item.blob_size,
                               item.mime_type);
 
+    *out_bytes = item.blob_size;
+
     free(item.file_name);
     free(item.mime_type);
     free(item.blob_data);
@@ -672,9 +692,11 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
  * oracle_select_open()), so 'row' passed in from
  * oracle_select_fetch_batch()'s loop is always 0 in that case anyway. */
 static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
-                                    ub4 col_idx, resultset_row_t *rs_row)
+                                    ub4 col_idx, resultset_row_t *rs_row,
+                                    uint64_t *out_bytes)
 {
     int clob_index = cur->clob_index;
+    *out_bytes = 0;
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Entering col=%u name=%s abs_rownum=%u clob_index=%d",
@@ -767,6 +789,9 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
                      "inline content instead of a file reference",
                      clob_filepath);
         resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", clob_buf);
+        *out_bytes = lob_len;   /* real bytes were still read from Oracle,
+                                    just not written to a file - metrics
+                                    should reflect that regardless        */
         free(clob_buf);
         cur->clob_index++;
         return 0;
@@ -779,18 +804,31 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
 
     resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx], "CLOB", clob_url);
 
+    *out_bytes = lob_len;
+
     cur->clob_index++;
     return 0;
 }
 
-static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
-                                      resultset_t        **out_rs,
-                                      int                  *out_rows_fetched)
+static int oracle_select_fetch_batch(db_select_cursor_t      *cursor,
+                                      resultset_t             **out_rs,
+                                      int                       *out_rows_fetched,
+                                      db_fetch_batch_stats_t   *out_stats)
 {
     if (!cursor || !out_rs || !out_rows_fetched) return -1;
 
     *out_rs           = NULL;
     *out_rows_fetched = 0;
+    if (out_stats) memset(out_stats, 0, sizeof(*out_stats));
+
+    /* Short-circuit: a previous call already saw OCI_NO_DATA, meaning
+     * Oracle already told us this cursor is exhausted. Issuing a real
+     * OCIStmtFetch2 again here is exactly what produces ORA-01002 -
+     * see the struct comment on cursor->exhausted for the full
+     * reasoning. Safe, cheap no-op matching the caller's existing
+     * "rows_fetched == 0 means stop" contract. */
+    if (cursor->exhausted)
+        return 0;
 
     oci_context_t *ctx = cursor->ctx;
 
@@ -805,6 +843,16 @@ static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
         ORACLE_CHECK_OCI(ctx, fetch_status);
         return -1;
     }
+
+    /* OCI_NO_DATA can arrive WITH a non-zero row count - a short fetch
+     * (fewer rows available than requested) signals exhaustion on this
+     * same call, not a subsequent one. Record it now regardless of how
+     * many rows came back this time, so the NEXT call (if the caller's
+     * loop makes one, which it always does - it doesn't know yet
+     * whether this was the last real batch) hits the short-circuit
+     * above instead of issuing a real fetch on an already-done cursor. */
+    if (fetch_status == OCI_NO_DATA)
+        cursor->exhausted = 1;
 
     ub4 rows_fetched = 0;
     OCIAttrGet(cursor->stmt, OCI_HTYPE_STMT,
@@ -833,24 +881,49 @@ static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
     {
         resultset_row_t *rs_row = resultset_get_row(rs, (int)(r + 1));
 
+        /* Incremented BEFORE column dispatch, not after - CLOB filenames
+         * (build_clob_filename(), called from oracle_fetch_clob_field()
+         * below) read cursor->abs_rownum directly, and the original,
+         * pre-integration execute_query_batch() uses 1-based numbering
+         * for its own equivalent abs_rownum (row 1 is "row1", not
+         * "row0"). Found via a real before/after comparison
+         * (2026-09-13): incrementing after dispatch meant every CLOB
+         * filename was off by one row number versus the original -
+         * content was byte-identical, only the filename's row number
+         * was wrong. BLOB filenames were unaffected - they use
+         * blob_index, a separate counter, not this one. */
+        cursor->abs_rownum++;
+
         for (ub4 c = 0; c < cursor->col_count; c++)
         {
             if (cursor->data_types[c] == SQLT_BLOB)
             {
-                if (oracle_fetch_blob_field(ctx, cursor, r, c, rs_row) != 0)
+                uint64_t field_bytes = 0;
+                if (oracle_fetch_blob_field(ctx, cursor, r, c, rs_row, &field_bytes) != 0)
                 {
                     resultset_free(rs);
                     return -1;
+                }
+                if (out_stats)
+                {
+                    out_stats->blob_count++;
+                    out_stats->blob_bytes += field_bytes;
                 }
                 continue;
             }
 
             if (cursor->data_types[c] == SQLT_CLOB)
             {
-                if (oracle_fetch_clob_field(ctx, cursor, c, rs_row) != 0)
+                uint64_t field_bytes = 0;
+                if (oracle_fetch_clob_field(ctx, cursor, c, rs_row, &field_bytes) != 0)
                 {
                     resultset_free(rs);
                     return -1;
+                }
+                if (out_stats)
+                {
+                    out_stats->clob_count++;
+                    out_stats->clob_bytes += field_bytes;
                 }
                 continue;
             }
@@ -865,8 +938,6 @@ static int oracle_select_fetch_batch(db_select_cursor_t *cursor,
             resultset_set_field(rs_row, (int)c, cursor->col_names[c],
                                  type_str, value);
         }
-
-        cursor->abs_rownum++;
     }
 
     *out_rs           = rs;
