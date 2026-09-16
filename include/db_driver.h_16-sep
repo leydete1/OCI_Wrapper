@@ -3,16 +3,12 @@
  *
  * Vendor-neutral database driver interface (db_driver_t).
  *
- * SCOPE, updated as each module's abstraction lands (see
- * DB_Driver_Abstraction_Notes.md for the running history):
- *   connect / disconnect / pooling / select (cursor) - proven, live
- *   DELETE's scalar-bind execute + commit/rollback - in progress,
- *     2026-09-16 (see dml_execute()/commit()/rollback() below)
- * Deliberately NOT included yet: INSERT's array-bind-batch and BLOB/CLOB
- * SET-value cases, UPDATE, DDL. dml_execute() below is intentionally
- * shaped to be reusable by UPDATE and INSERT's own scalar-bind case
- * once those modules get their own pass - see its own doc comment for
- * why it's scalar-only, one-shot, and not cursor-shaped like SELECT.
+ * PoC SCOPE (see DB_Driver_Abstraction_Notes.md) - THIS PASS ONLY:
+ *   connect / disconnect / execute_select
+ * Deliberately NOT included yet: insert, update, delete, DDL, explicit
+ * transaction begin/commit/rollback, connection pooling entry points.
+ * Those get added to this same struct once the interface shape below is
+ * validated against a real Oracle driver and, ideally, a second vendor.
  * Adding a field to db_driver_t later is cheap; guessing every field's
  * final shape now and getting the boundary wrong is not - see notes
  * doc, section 2.
@@ -170,47 +166,6 @@ typedef struct {
 } db_select_request_t;
 
 /*
- * db_dml_request_t
- *
- * Everything a driver needs to run one non-SELECT DML statement (DELETE
- * today; UPDATE/INSERT's own scalar-bind case are the intended next
- * reuse - see dml_execute()'s doc comment). Deliberately not cursor-
- * shaped like db_select_request_t/db_select_cursor_t - there are no
- * rows to stream back, just a statement, its bind values, and a row
- * count - so this is a single request struct with no matching cursor
- * type at all.
- *
- * sql is expected fully-built, matching current behavior: today's
- * build_delete_sql() (OCI_Delete_Execute_Module.c) already wraps
- * DATE/TIMESTAMP/INTERVAL bind placeholders in Oracle-specific
- * TO_DATE()/TO_TIMESTAMP()/TO_YMINTERVAL()/TO_DSINTERVAL() syntax
- * *before* this struct is ever built - that SQL-dialect knowledge
- * deliberately stays in core for this pass (see ACID TEST above; a
- * second vendor would need different wrapping syntax, but there is no
- * second vendor's needs to design against yet, same reasoning as BINDS
- * below). bind_values are therefore always plain strings - the wrapper
- * function already turned any date/timestamp/interval value into
- * whatever string TO_DATE()/etc. expects; the driver never needs to
- * know a value was ever anything but a string.
- *
- * BINDS - unlike db_select_request_t, genuinely needed from day one
- * here: every WHERE-key value in a DELETE is bound (OCIBindByPos,
- * always SQLT_STR, matching build_delete_ctx_from_request()'s existing
- * behavior), there being no equivalent to select's "fully-substituted
- * SQL string" today for the write path.
- */
-typedef struct {
-    const char  *sql;          /* fully-built DELETE ... WHERE ... text,
-                                   TO_DATE()/etc. wrapping already
-                                   applied - see struct comment above  */
-    int          bind_count;
-    const char **bind_values;  /* bound by position, 1..bind_count,
-                                   always SQLT_STR - array and every
-                                   string it points to are caller-owned,
-                                   must outlive the dml_execute() call  */
-} db_dml_request_t;
-
-/*
  * db_column_meta_t
  *
  * One entry per column, returned by select_open() from the DESCRIBE
@@ -353,46 +308,6 @@ typedef struct {
  *   cursor was fully drained first. Safe to call on a cursor that
  *   select_open() never actually returned successfully is NOT
  *   guaranteed - only call this after a 0 return from select_open().
- *
- * dml_execute()
- *   Added 2026-09-16, DELETE's own abstraction pass (see notes doc's
- *   running history). Runs req->sql as one complete, self-contained
- *   operation - prepare, bind every req->bind_values entry by position,
- *   execute (iters=1), read back the row count, release the prepared
- *   statement - all inside this one call, unlike select's three-call
- *   cursor. No streaming to represent, so no cursor-shaped split is
- *   needed the way SELECT genuinely required one (see SELECT IS A
- *   CURSOR above) - this is DELETE's actual shape, not a simplification
- *   of it. *out_rows_affected is only meaningful when this returns 0.
- *   Returns 0 on success, non-zero on failure.
- *
- *   logger - added deliberately, not an oversight: unlike select_open()/
- *   select_fetch_batch() (which only ever have one caller and so could
- *   safely log via a hardcoded ctx->select_logger), this function is
- *   meant to be reused by UPDATE/INSERT's own scalar-bind case later
- *   (see SCOPE above) - each with its own logger (ctx->delete_logger/
- *   ctx->update_logger/ctx->insert_logger). Hardcoding one inside the
- *   driver would silently mis-attribute every log line the moment a
- *   second caller arrives, so the caller passes its own logger in
- *   explicitly instead - caught before implementation, not after.
- *
- *   Does NOT commit. Whether to commit after a successful dml_execute()
- *   is an application-level decision (ctx->active_tx - is a managed
- *   transaction already in progress, or does this module own its own
- *   standalone commit boundary?) - not a vendor concern, and keeping it
- *   a separate call preserves each calling module's existing
- *   commit-or-not branching exactly as it is today. Call commit() or
- *   rollback() explicitly afterward, same as today's inline
- *   OCITransCommit/OCITransRollback calls in each execute module.
- *
- * commit() / rollback()
- *   Commits or rolls back ctx's current transaction. Same contract as
- *   today's direct OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT)/
- *   OCITransRollback() calls, now behind the driver boundary - every
- *   other detail (when to call which, based on ctx->active_tx) stays a
- *   core decision untouched by this move, same reasoning as dml_execute()
- *   not committing itself. Same logger reasoning as dml_execute() above.
- *   Returns 0 on success, non-zero on failure.
  */
 typedef struct db_driver_t {
     const char *driver_name;   /* e.g. "oracle" - for logging only,
@@ -422,14 +337,6 @@ typedef struct db_driver_t {
                                 db_fetch_batch_stats_t   *out_stats);
 
     void (*select_close)(db_select_cursor_t *cursor);
-
-    int  (*dml_execute)(oci_context_t            *ctx,
-                         logger_t                 *logger,
-                         const db_dml_request_t   *req,
-                         int                      *out_rows_affected);
-
-    int  (*commit)(oci_context_t *ctx, logger_t *logger);
-    int  (*rollback)(oci_context_t *ctx, logger_t *logger);
 } db_driver_t;
 
 /*
