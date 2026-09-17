@@ -75,12 +75,26 @@
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
 #include "OCI_Transaction_Manager.h"
-#include "db_driver.h"        /* v2 driver integration, 2026-09-16 -
-                                  dml_execute()/commit()/rollback() -
-                                  core calls only the vendor-neutral
-                                  db_driver_get(), never driver_oracle.h
-                                  directly, same as SELECT's own
-                                  integration.                        */
+
+/* ------------------------------------------------------------------ */
+/*  OCI error macro - same pattern as rest of project                  */
+/* ------------------------------------------------------------------ */
+#define CHECK_OCI_DEL(errhp, status, ctx, label)                        \
+    do {                                                                 \
+        if ((status) != OCI_SUCCESS &&                                  \
+            (status) != OCI_SUCCESS_WITH_INFO)                          \
+        {                                                                \
+            text   _errbuf[512];                                         \
+            sb4    _errcode = 0;                                         \
+            OCIErrorGet((errhp), 1, NULL, &_errcode,                    \
+                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);     \
+            logger_write((ctx)->logger, LOG_ERROR, __func__, 0,         \
+                         "OCI Error %d: %s", _errcode,                  \
+                         (char *)_errbuf);                               \
+            rc = -1;                                                     \
+            goto label;                                                  \
+        }                                                                \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /*  Internal limits                                                     */
@@ -302,8 +316,12 @@ int execute_delete_batch(oci_context_t     *ctx,
                           execute_config_t  *cfg)
 {
     int            rc           = 0;
+    OCIStmt       *stmt         = NULL;
     xml_builder_t *xml          = NULL;
     delete_ctx_t  *dc           = NULL;
+    OCIBind      **bind_hdls    = NULL;
+    char         **scalar_bufs  = NULL;
+    sb2           *indicators   = NULL;
     int            rows_deleted = 0;
     struct timespec ts_start, ts_end;
     audit_old_value_t *old_values    = NULL;  /* before-image for audit */
@@ -443,28 +461,14 @@ int execute_delete_batch(oci_context_t     *ctx,
     if (ctx->metadata_cache)
         metrics.sql_hash = cache_hash_string(ctx->metadata_cache, sql_buf);
 
-    /* v2 driver integration (2026-09-16). The old, separate
-     * OCIStmtPrepare2 call that used to sit here is gone - dml_execute()
-     * does prepare/bind/execute/rowcount/release as one atomic call
-     * (see db_driver.h's own doc comment for why: no cursor to keep
-     * alive across calls the way SELECT genuinely needs, so there is
-     * nothing to gain from preparing early and executing later). The
-     * driver call itself now happens where Stage 4's bind/execute used
-     * to be, after the before-image/audit work below - sql_buf is
-     * already built and hashed by this point, ready to hand to
-     * dml_execute() once that stage is reached.
-     *
-     * Core only ever calls the vendor-neutral db_driver_get() - never
-     * reaches for driver_oracle.h directly, same reasoning as the
-     * SELECT integration. */
-    const db_driver_t *driver = db_driver_get(ctx);
-    if (!driver || !driver->dml_execute || !driver->commit || !driver->rollback)
-    {
-        logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
-                     "db_driver_get() returned an incomplete driver");
-        rc = -1;
-        goto Cleanup;
-    }
+    CHECK_OCI_DEL(ctx->errhp,
+        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                        (text *)sql_buf, (ub4)strlen(sql_buf),
+                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                 "OCIStmtPrepare2 OK");
 
     /* ================================================================
      *  Stage 2 Audit - Before-image + AUDIT_TRAIL write, BEFORE the
@@ -575,61 +579,96 @@ int execute_delete_batch(oci_context_t     *ctx,
     }
 
     /* ================================================================
-     *  Stage 3 - Build bind value array
-     *  v2 driver integration: no more manual bind_hdls/scalar_bufs/
-     *  indicators allocation here - dml_execute() owns OCIBindByPos
-     *  internally (driver_oracle.c). This stage now only needs to
-     *  build the plain array of pointers dml_execute() expects -
-     *  key_value strings are already null-terminated, caller-owned,
-     *  and outlive the call (dc stays alive through Stage 4 below), so
-     *  no copying/allocation is needed at all, unlike the old
-     *  scalar_bufs array.
+     *  Stage 3 - Allocate bind structures
+     *  One bind slot per WHERE key column.
+     *  All key values are bound as SQLT_STR scalars; Oracle conversion
+     *  functions in the SQL handle DATE/TIMESTAMP correctly.
      * ================================================================ */
     logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
-                 "Stage 3: Building bind value array keys=%d",
+                 "Stage 3: Allocating bind structures keys=%d",
                  dc->key_count);
 
-    const char *bind_values[MAX_DEL_KEY_COLS];
-    for (int k = 0; k < dc->key_count; k++)
-    {
-        bind_values[k] = dc->keys[k].key_value;
+    bind_hdls  = calloc(dc->key_count, sizeof(OCIBind *));
+    scalar_bufs= calloc(dc->key_count, sizeof(char *));
+    indicators  = calloc(dc->key_count, sizeof(sb2));
 
-        logger_write(ctx->delete_logger, LOG_DEBUG, __func__, 0,
-                     "Bind key=%d name='%s' type='%s' value='%s' "
-                     "bind_pos=%d",
-                     k, dc->keys[k].field_name,
-                     dc->keys[k].field_type,
-                     dc->keys[k].key_value,
-                     k + 1);
-    }
-
-    /* ================================================================
-     *  Stage 4 - Execute the DELETE via the driver
-     * ================================================================ */
-    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
-                 "Stage 4: Executing DELETE via driver");
-
-    clock_gettime(CLOCK_MONOTONIC, &ts_start);
-
-    db_dml_request_t dml_req;
-    memset(&dml_req, 0, sizeof(dml_req));
-    dml_req.sql         = sql_buf;
-    dml_req.bind_count  = dc->key_count;
-    dml_req.bind_values = bind_values;
-
-    if (driver->dml_execute(ctx, ctx->delete_logger, &dml_req, &rows_deleted) != 0)
+    if (!bind_hdls || !scalar_bufs || !indicators)
     {
         logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
-                     "driver dml_execute failed for sql=%s", sql_buf);
+                     "calloc failed for bind structures");
         rc = -1;
         goto Cleanup;
     }
 
+    for (int k = 0; k < dc->key_count; k++)
+    {
+        scalar_bufs[k] = calloc(1, MAX_COL_VALUE_SIZE);
+        if (!scalar_bufs[k])
+        {
+            logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                         "calloc failed for scalar_bufs[%d]", k);
+            rc = -1;
+            goto Cleanup;
+        }
+    }
+
+    /* ================================================================
+     *  Stage 4 - Bind key values and execute
+     * ================================================================ */
+    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                 "Stage 4: Binding key values and executing");
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+    for (int k = 0; k < dc->key_count; k++)
+    {
+        strncpy(scalar_bufs[k], dc->keys[k].key_value,
+                MAX_COL_VALUE_SIZE - 1);
+        scalar_bufs[k][MAX_COL_VALUE_SIZE - 1] = '\0';
+        indicators[k] = 0;   /* never NULL for a key */
+
+        logger_write(ctx->delete_logger, LOG_DEBUG, __func__, 0,
+                     "Binding WHERE key=%d name='%s' type='%s' "
+                     "value='%s' bind_pos=%d",
+                     k, dc->keys[k].field_name,
+                     dc->keys[k].field_type,
+                     dc->keys[k].key_value,
+                     k + 1);
+
+        CHECK_OCI_DEL(ctx->errhp,
+            OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
+                         (ub4)(k + 1),
+                         scalar_bufs[k],
+                         (sb4)MAX_COL_VALUE_SIZE,
+                         SQLT_STR,
+                         &indicators[k],
+                         NULL, NULL, 0, NULL, OCI_DEFAULT),
+            ctx, Cleanup);
+    }
+
+    logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                 "Calling OCIStmtExecute iters=1");
+
+    CHECK_OCI_DEL(ctx->errhp,
+        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
+                       1, 0, NULL, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
     metrics.execution_us  = metrics_now_us() - metrics.start_time_us;
     metrics.rows_affected = (uint64_t)rows_deleted;
 
+
+    /* ---- Retrieve affected row count ---- */
+    ub4 rows_affected = 0;
+    CHECK_OCI_DEL(ctx->errhp,
+        OCIAttrGet(stmt, OCI_HTYPE_STMT,
+                   &rows_affected, NULL,
+                   OCI_ATTR_ROW_COUNT, ctx->errhp),
+        ctx, Cleanup);
+
+    rows_deleted = (int)rows_affected;
+
     logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
-                 "driver dml_execute OK rows_deleted=%d", rows_deleted);
+                 "OCIStmtExecute OK rows_deleted=%d", rows_deleted);
 
     /* ================================================================
      *  Stage 5 - Commit
@@ -655,15 +694,11 @@ int execute_delete_batch(oci_context_t     *ctx,
     {
         /* ---- Commit ---- */
         logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
-                     "Stage 5: Calling driver commit");
+                     "Stage 5: Calling OCITransCommit");
 
-        if (driver->commit(ctx, ctx->delete_logger) != 0)
-        {
-            logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
-                         "driver commit failed");
-            rc = -1;
-            goto Cleanup;
-        }
+        CHECK_OCI_DEL(ctx->errhp,
+            OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT),
+            ctx, Cleanup);
 
         logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
                      "Commit successful rows_deleted=%d", rows_deleted);
@@ -830,12 +865,35 @@ Cleanup:
     {
         logger_write(ctx->delete_logger, LOG_WARN, __func__, 0,
                      "Rolling back due to error");
-        driver->rollback(ctx, ctx->delete_logger);
+        OCITransRollback(ctx->svchp, ctx->errhp, OCI_DEFAULT);
     }
 
+    if (scalar_bufs)
+    {
+        for (int k = 0; k < dc->key_count; k++)
+        {
+            if (scalar_bufs[k])
+            {
+                logger_write(ctx->delete_logger, LOG_DEBUG, __func__, 0,
+                             "free(scalar_bufs[%d])", k);
+                free(scalar_bufs[k]);
+            }
+        }
+        free(scalar_bufs);
+    }
+
+    if (indicators) free(indicators);
+    if (bind_hdls)  free(bind_hdls);
     if (dc)         free(dc);
     if (xml)        xml_free(xml);
     if (old_values) free(old_values);
+
+    if (stmt)
+    {
+        logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
+                     "OCIStmtRelease stmt");
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    }
 
     logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
                  "Cleanup complete rc=%d", rc);
