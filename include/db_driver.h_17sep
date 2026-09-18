@@ -211,101 +211,6 @@ typedef struct {
 } db_dml_request_t;
 
 /*
- * db_dml_returning_request_t / db_rowid_result_t
- *
- * Added 2026-09-18, UPDATE's own abstraction pass. Covers the case
- * dml_execute() deliberately doesn't: a statement with a
- * "RETURNING ROWID INTO :N" clause whose bind iteration count is
- * always 1 (see OCI_Update_Execute_Module.c's own extensive comment on
- * why - a single UPDATE...WHERE execution, not a batch of several),
- * but whose WHERE clause can still match an unknown number of physical
- * rows at execute time - confirmed directly against real data
- * (WHERE NUMBER_COL=300 matching 209 rows). A static, single-slot
- * output bind can only ever receive ONE of those rows' ROWIDs back;
- * this needs OCI's dynamic-bind callback mechanism instead
- * (OCIBindDynamic), which grows to however many rows Oracle actually
- * reports.
- *
- * Not UPDATE-specific despite the name of the module driving this
- * addition - OCI_Insert_Execute_Module.c already uses the identical
- * RETURNING ROWID INTO + dynamic-collector pattern for its own LOB
- * writes (see that module's own 2026-08-25 fix, same root cause) - this
- * interface is intended to be reused as-is once INSERT gets its own
- * abstraction pass, not rebuilt.
- *
- * sql must already contain the RETURNING ROWID INTO :N clause, with N
- * given explicitly via returning_bind_position - build_update_sql()
- * (core-side, untouched by this pass) already computes this position
- * correctly; the driver has no independent way to know it.
- */
-typedef struct {
-    const char  *sql;
-    int          bind_count;
-    const char **bind_values;
-    int          returning_bind_position;
-} db_dml_returning_request_t;
-
-/*
- * out->rowids is a flat buffer, ROWID_BUF_SIZE-per-entry (matching
- * OCI_Update_Execute_Module.c's own #define - see driver_oracle.c's own
- * copy of that constant, kept in sync deliberately rather than shared
- * across a core/driver boundary that shouldn't otherwise need to agree
- * on a buffer size). out->count is the REAL number of physical rows
- * Oracle reported - not the bind iteration count, which is always 1 for
- * every caller of dml_execute_returning_rowids() today. This is what
- * closes the "response always reports rows_affected=1 regardless of how
- * many rows genuinely matched" gap found during this pass's own
- * analysis (see notes doc) - core reads out->count directly instead of
- * assuming iteration count reflects affected rows.
- *
- * Caller-owned pointer through rowid_result_free() below, not raw
- * free() - the driver may allocate more than just the one buffer
- * internally.
- */
-typedef struct {
-    char *rowids;
-    int   count;
-} db_rowid_result_t;
-
-/*
- * db_lob_write_request_t
- *
- * Added 2026-09-18, UPDATE's own abstraction pass - the write-side
- * mirror of SELECT's existing oracle_fetch_blob_field()/
- * oracle_fetch_clob_field() (which read LOBs; this writes them),
- * covering the BLOB/CLOB SET-value case dml_execute() deliberately
- * doesn't (see build_update_sql()'s own EMPTY_BLOB()/EMPTY_CLOB()
- * placeholder handling, core-side, untouched by this pass) - the SQL
- * itself never binds a LOB value directly; a SELECT ... FOR UPDATE on
- * the target row's own ROWID obtains a live locator afterward, which
- * this call then writes to via chunked OCILobWrite.
- *
- * BLOB and CLOB deliberately kept asymmetric here, matching today's
- * real behavior exactly rather than unifying it as part of this
- * abstraction pass (a real design question raised and decided
- * 2026-09-18 - see notes doc): file_path is ALWAYS used for BLOB,
- * streamed by the driver chunk-by-chunk as it's read, never buffered
- * whole. CLOB ALWAYS arrives via inline_text instead - core has
- * already resolved whatever the request supplied (a literal value, or
- * the already-read contents of a file:// value) into memory before
- * this call, exactly as OCI_Update_Execute_Module.c's own
- * handle_clob_update() does today. Exactly one of file_path/
- * inline_text is populated, matching is_blob - the driver does not
- * infer which from whether a field is NULL.
- */
-typedef struct {
-    int          is_blob;       /* 1 = SQLT_BLOB, 0 = SQLT_CLOB/NCLOB  */
-    const char  *table_fq;      /* owner.table, or just table - already
-                                    resolved by core, same convention as
-                                    db_dml_request_t.sql being fully-built */
-    const char  *column_name;
-    const char  *rowid_str;
-    const char  *file_path;     /* BLOB only - see struct comment above */
-    const char  *inline_text;   /* CLOB only - see struct comment above */
-    size_t       inline_text_len;
-} db_lob_write_request_t;
-
-/*
  * db_column_meta_t
  *
  * One entry per column, returned by select_open() from the DESCRIBE
@@ -488,40 +393,6 @@ typedef struct {
  *   core decision untouched by this move, same reasoning as dml_execute()
  *   not committing itself. Same logger reasoning as dml_execute() above.
  *   Returns 0 on success, non-zero on failure.
- *
- * dml_execute_returning_rowids()
- *   Added 2026-09-18, UPDATE's own abstraction pass - see
- *   db_dml_returning_request_t/db_rowid_result_t's own doc comments
- *   above for the full "why does this need to exist separately from
- *   dml_execute()" reasoning (a dynamically-sized RETURNING ROWID INTO
- *   output, not a scalar in, scalar out call). Same one-shot,
- *   self-contained shape as dml_execute() otherwise - prepare, bind,
- *   execute, collect, release, all inside this one call - and the same
- *   "does not commit, caller calls commit()/rollback() explicitly
- *   afterward" contract. *out_result is only meaningful when this
- *   returns 0, and must be released via rowid_result_free() exactly
- *   once when the caller is done with it, whether or not it went on to
- *   call lob_write_by_rowid() for any of the rows in it.
- *
- * rowid_result_free()
- *   Releases everything dml_execute_returning_rowids() allocated into
- *   *result. Safe to call on a zeroed (never-populated) result; not
- *   safe to call twice on the same one.
- *
- * lob_write_by_rowid()
- *   Added 2026-09-18, UPDATE's own abstraction pass - see
- *   db_lob_write_request_t's own doc comment above for the full
- *   BLOB/CLOB asymmetry reasoning (preserved exactly as today's
- *   behavior already has it, a deliberate decision, not an oversight).
- *   One call writes one column's LOB content to one row, identified by
- *   its own ROWID (from a prior dml_execute_returning_rowids() call) -
- *   called once per affected row per LOB column by the caller, same
- *   shape as today's inline per-row loop in OCI_Update_Execute_Module.c
- *   (core decides how many rows and which columns; this call does the
- *   OCI work for exactly one of each). Returns 0 on success (including
- *   a genuinely empty value, which is a no-op success, not an error -
- *   matches today's is_empty short-circuit), non-zero on failure.
- *   *out_bytes_written is only meaningful when this returns 0.
  */
 typedef struct db_driver_t {
     const char *driver_name;   /* e.g. "oracle" - for logging only,
@@ -559,20 +430,6 @@ typedef struct db_driver_t {
 
     int  (*commit)(oci_context_t *ctx, logger_t *logger);
     int  (*rollback)(oci_context_t *ctx, logger_t *logger);
-
-    int  (*dml_execute_returning_rowids)(
-                         oci_context_t                     *ctx,
-                         logger_t                           *logger,
-                         const db_dml_returning_request_t   *req,
-                         db_rowid_result_t                  *out_result);
-
-    void (*rowid_result_free)(db_rowid_result_t *result);
-
-    int  (*lob_write_by_rowid)(
-                         oci_context_t                  *ctx,
-                         logger_t                        *logger,
-                         const db_lob_write_request_t   *req,
-                         uint64_t                        *out_bytes_written);
 } db_driver_t;
 
 /*
