@@ -1111,6 +1111,479 @@ static int oracle_rollback(oci_context_t *ctx, logger_t *logger)
     return 0;
 }
 
+/* ================================================================
+ * DML EXECUTE RETURNING ROWIDS / LOB WRITE BY ROWID (2026-09-18) -
+ * UPDATE's own abstraction pass (see db_driver.h's own doc comments
+ * for the full design reasoning - why this can't just be dml_execute()
+ * again, the rows_affected fix, the BLOB/CLOB asymmetry decision).
+ * Mirrors OCI_Update_Execute_Module.c's own dynamic_rowid_collector_t/
+ * rowid_in_callback()/rowid_out_callback()/handle_blob_update()/
+ * handle_clob_update() exactly - same OCI functions, same sequence,
+ * just behind the driver boundary instead of inline in that module.
+ * ================================================================ */
+
+#define ORACLE_ROWID_BUF_SIZE 24   /* matches OCI_Update_Execute_Module.c's
+                                       own ROWID_BUF_SIZE - kept as this
+                                       driver's own copy rather than
+                                       shared across the core/driver
+                                       boundary, see db_rowid_result_t's
+                                       own doc comment in db_driver.h    */
+
+typedef struct {
+    char           *bufs;
+    sb2            *inds;
+    ub2            *rcodes;
+    ub4             alen;
+    ub4             count;
+    ub4             capacity;
+    oci_context_t  *ctx;
+    logger_t       *logger;
+} oracle_rowid_collector_t;
+
+static void oracle_rowid_collector_init(oracle_rowid_collector_t *c,
+                                         oci_context_t *ctx, logger_t *logger)
+{
+    memset(c, 0, sizeof(*c));
+    c->ctx    = ctx;
+    c->logger = logger;
+}
+
+static void oracle_rowid_collector_free(oracle_rowid_collector_t *c)
+{
+    free(c->bufs);
+    free(c->inds);
+    free(c->rcodes);
+    memset(c, 0, sizeof(*c));
+}
+
+static int oracle_rowid_collector_ensure(oracle_rowid_collector_t *c, ub4 index)
+{
+    if (index < c->capacity) return 1;
+
+    ub4 new_capacity = c->capacity == 0 ? 16 : c->capacity * 2;
+    while (new_capacity <= index) new_capacity *= 2;
+
+    char *new_bufs   = realloc(c->bufs,   (size_t)new_capacity * ORACLE_ROWID_BUF_SIZE);
+    sb2  *new_inds   = realloc(c->inds,   (size_t)new_capacity * sizeof(sb2));
+    ub2  *new_rcodes = realloc(c->rcodes, (size_t)new_capacity * sizeof(ub2));
+    if (!new_bufs || !new_inds || !new_rcodes)
+    {
+        logger_write(c->logger, LOG_ERROR, __func__, 0,
+                     "oracle_rowid_collector: realloc failed growing to "
+                     "%u rows", new_capacity);
+        if (new_bufs)   c->bufs   = new_bufs;
+        if (new_inds)   c->inds   = new_inds;
+        if (new_rcodes) c->rcodes = new_rcodes;
+        return 0;
+    }
+
+    memset(new_bufs + (size_t)c->capacity * ORACLE_ROWID_BUF_SIZE, 0,
+           (size_t)(new_capacity - c->capacity) * ORACLE_ROWID_BUF_SIZE);
+
+    c->bufs     = new_bufs;
+    c->inds     = new_inds;
+    c->rcodes   = new_rcodes;
+    c->capacity = new_capacity;
+    return 1;
+}
+
+static sb4 oracle_rowid_in_callback(void *ictxp, OCIBind *bindp, ub4 iter,
+                                     ub4 index, void **bufpp, ub4 *alenp,
+                                     ub1 *piecep, void **indpp)
+{
+    (void)ictxp; (void)bindp; (void)iter; (void)index;
+    static const char empty = '\0';
+    *bufpp  = (void *)&empty;
+    *alenp  = 0;
+    *piecep = OCI_ONE_PIECE;
+    *indpp  = NULL;
+    return OCI_CONTINUE;
+}
+
+static sb4 oracle_rowid_out_callback(void *octxp, OCIBind *bindp,
+                                      ub4 iter, ub4 index,
+                                      void **outbufpp, ub4 **alenpp,
+                                      ub1 *piecep, void **indpp, ub2 **rcodepp)
+{
+    oracle_rowid_collector_t *c = (oracle_rowid_collector_t *)octxp;
+    (void)bindp; (void)iter;
+
+    if (!oracle_rowid_collector_ensure(c, index))
+    {
+        *outbufpp = NULL;
+        return OCI_ERROR;
+    }
+
+    c->alen   = (ub4)ORACLE_ROWID_BUF_SIZE;
+    *outbufpp = c->bufs + (size_t)index * ORACLE_ROWID_BUF_SIZE;
+    *alenpp   = &c->alen;
+    *piecep   = OCI_ONE_PIECE;
+    *indpp    = &c->inds[index];
+    *rcodepp  = &c->rcodes[index];
+
+    if (index + 1 > c->count) c->count = index + 1;
+
+    return OCI_CONTINUE;
+}
+
+static int oracle_dml_execute_returning_rowids(
+                         oci_context_t                     *ctx,
+                         logger_t                           *logger,
+                         const db_dml_returning_request_t   *req,
+                         db_rowid_result_t                  *out_result)
+{
+    if (!ctx || !req || !req->sql || !out_result) return -1;
+    if (req->bind_count > 0 && !req->bind_values) return -1;
+
+    memset(out_result, 0, sizeof(*out_result));
+
+    OCIStmt *stmt = NULL;
+
+    sword prepare_rc = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                                        (text *)req->sql,
+                                        (ub4)strlen(req->sql),
+                                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (prepare_rc != OCI_SUCCESS && prepare_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, prepare_rc);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "OCIStmtPrepare2 OK bind_count=%d returning_pos=%d",
+                 req->bind_count, req->returning_bind_position);
+
+    OCIBind **bind_hdls = NULL;
+    if (req->bind_count > 0)
+    {
+        bind_hdls = calloc((size_t)req->bind_count, sizeof(OCIBind *));
+        if (!bind_hdls)
+        {
+            logger_write(logger, LOG_ERROR, __func__, 0,
+                         "calloc failed for bind_hdls (bind_count=%d)",
+                         req->bind_count);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            return -1;
+        }
+    }
+
+    for (int k = 0; k < req->bind_count; k++)
+    {
+        const char *value = req->bind_values[k] ? req->bind_values[k] : "";
+
+        sword bind_rc = OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
+                                      (ub4)(k + 1),
+                                      (void *)value,
+                                      (sb4)(strlen(value) + 1),
+                                      SQLT_STR,
+                                      NULL, NULL, NULL, 0, NULL,
+                                      OCI_DEFAULT);
+        if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+        {
+            ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+            free(bind_hdls);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            return -1;
+        }
+    }
+
+    /* RETURNING ROWID INTO - dynamic bind, not a static array. See
+     * db_dml_returning_request_t's own doc comment in db_driver.h for
+     * why: the bind iteration count is always 1, but the WHERE clause
+     * it binds against can still match many physical rows. */
+    oracle_rowid_collector_t collector;
+    oracle_rowid_collector_init(&collector, ctx, logger);
+
+    OCIBind *rowid_bind_hdl = NULL;
+    sword rowid_bind_rc = OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
+                                        (ub4)req->returning_bind_position,
+                                        NULL,
+                                        (sb4)ORACLE_ROWID_BUF_SIZE,
+                                        SQLT_STR,
+                                        NULL,
+                                        NULL, NULL, 0, NULL,
+                                        OCI_DATA_AT_EXEC);
+    if (rowid_bind_rc != OCI_SUCCESS && rowid_bind_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, rowid_bind_rc);
+        free(bind_hdls);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    sword dynamic_rc = OCIBindDynamic(rowid_bind_hdl, ctx->errhp,
+                                       (void *)&collector, oracle_rowid_in_callback,
+                                       (void *)&collector, oracle_rowid_out_callback);
+    if (dynamic_rc != OCI_SUCCESS && dynamic_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, dynamic_rc);
+        free(bind_hdls);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "Calling OCIStmtExecute iters=1");
+
+    sword exec_rc = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
+                                    1, 0, NULL, NULL, OCI_DEFAULT);
+    if (exec_rc != OCI_SUCCESS && exec_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, exec_rc);
+        free(bind_hdls);
+        oracle_rowid_collector_free(&collector);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "OCIStmtExecute OK rows_reported=%u (RETURNING ROWID "
+                 "via OCIBindDynamic)", collector.count);
+
+    /* Ownership of the rowid buffer transfers to out_result - inds/
+     * rcodes are not part of db_rowid_result_t's own contract (core
+     * never inspected them even before this abstraction - see
+     * dynamic_rowid_collector_t's own comment in
+     * OCI_Update_Execute_Module.c), freed here rather than exposed. */
+    out_result->rowids = collector.bufs;
+    out_result->count  = (int)collector.count;
+    collector.bufs = NULL;   /* ownership transferred, don't free below */
+    free(collector.inds);
+    free(collector.rcodes);
+
+    free(bind_hdls);
+    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    return 0;
+}
+
+static void oracle_rowid_result_free(db_rowid_result_t *result)
+{
+    if (!result) return;
+    free(result->rowids);
+    result->rowids = NULL;
+    result->count  = 0;
+}
+
+static int oracle_lob_write_by_rowid(
+                         oci_context_t                  *ctx,
+                         logger_t                        *logger,
+                         const db_lob_write_request_t   *req,
+                         uint64_t                        *out_bytes_written)
+{
+    if (!ctx || !req || !req->table_fq || !req->column_name ||
+        !req->rowid_str || !out_bytes_written)
+        return -1;
+
+    *out_bytes_written = 0;
+
+    /* Matches handle_blob_update()/handle_clob_update()'s own is_empty
+     * short-circuit - a no-op success, not an error. */
+    if (req->is_blob && !req->file_path)
+        return 0;
+    if (!req->is_blob && (!req->inline_text || req->inline_text_len == 0))
+        return 0;
+
+    char sql_sel[512];
+    snprintf(sql_sel, sizeof(sql_sel),
+             "SELECT %s FROM %s WHERE ROWID = :rid FOR UPDATE",
+             req->column_name, req->table_fq);
+
+    OCIStmt *stmt_sel = NULL;
+    sword prepare_rc = OCIStmtPrepare2(ctx->svchp, &stmt_sel, ctx->errhp,
+                                        (text *)sql_sel, (ub4)strlen(sql_sel),
+                                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (prepare_rc != OCI_SUCCESS && prepare_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, prepare_rc);
+        return -1;
+    }
+
+    OCIBind *bind_rid = NULL;
+    sword bind_rc = OCIBindByName(stmt_sel, &bind_rid, ctx->errhp,
+                                   (text *)":rid", -1,
+                                   (dvoid *)req->rowid_str,
+                                   (sb4)(strlen(req->rowid_str) + 1),
+                                   SQLT_STR, NULL, NULL, NULL, 0, NULL,
+                                   OCI_DEFAULT);
+    if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+        OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    OCILobLocator *lob_loc = NULL;
+    sword desc_rc = OCIDescriptorAlloc(ctx->envhp, (void **)&lob_loc,
+                                        OCI_DTYPE_LOB, 0, NULL);
+    if (desc_rc != OCI_SUCCESS && desc_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, desc_rc);
+        OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    OCIDefine *def_lob = NULL;
+    sword define_rc = OCIDefineByPos(stmt_sel, &def_lob, ctx->errhp, 1,
+                                      &lob_loc,
+                                      (sb4)sizeof(OCILobLocator *),
+                                      req->is_blob ? SQLT_BLOB : SQLT_CLOB,
+                                      NULL, NULL, NULL, OCI_DEFAULT);
+    if (define_rc != OCI_SUCCESS && define_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, define_rc);
+        OCIDescriptorFree(lob_loc, OCI_DTYPE_LOB);
+        OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    sword sel_exec_rc = OCIStmtExecute(ctx->svchp, stmt_sel, ctx->errhp,
+                                        0, 0, NULL, NULL, OCI_DEFAULT);
+    if (sel_exec_rc != OCI_SUCCESS && sel_exec_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, sel_exec_rc);
+        OCIDescriptorFree(lob_loc, OCI_DTYPE_LOB);
+        OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    sword fetch_rc = OCIStmtFetch2(stmt_sel, ctx->errhp,
+                                    1, OCI_FETCH_NEXT, 0, OCI_DEFAULT);
+    if (fetch_rc != OCI_SUCCESS && fetch_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, fetch_rc);
+        OCIDescriptorFree(lob_loc, OCI_DTYPE_LOB);
+        OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "Persistent %s locator obtained - writing",
+                 req->is_blob ? "BLOB" : "CLOB");
+
+    int rc = 0;
+
+    if (req->is_blob)
+    {
+        /* BLOB: always streamed from file_path, chunk by chunk, never
+         * buffered whole - matches handle_blob_update() exactly, and
+         * the explicit decision (2026-09-18) not to unify this with
+         * CLOB's approach - see db_lob_write_request_t's own doc
+         * comment in db_driver.h. */
+        FILE *fp = fopen(req->file_path, "rb");
+        if (!fp)
+        {
+            logger_write(logger, LOG_ERROR, __func__, 0,
+                         "Failed to open BLOB file: %s", req->file_path);
+            rc = -1;
+            goto Cleanup;
+        }
+
+        fseek(fp, 0, SEEK_END);
+        long file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+
+        if (file_size <= 0)
+        {
+            fclose(fp);
+            goto Cleanup;
+        }
+
+        ub1 *chunk_buf = malloc(ctx->ini->chunk_read_size);
+        if (!chunk_buf)
+        {
+            fclose(fp);
+            rc = -1;
+            goto Cleanup;
+        }
+
+        ub4    offset          = 1;
+        size_t bytes_remaining = (size_t)file_size;
+
+        while (bytes_remaining > 0)
+        {
+            size_t chunk = ctx->ini->chunk_read_size;
+            if (chunk > bytes_remaining) chunk = bytes_remaining;
+
+            size_t nread = fread(chunk_buf, 1, chunk, fp);
+            if (nread == 0)
+            {
+                free(chunk_buf);
+                fclose(fp);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            ub4 amount = (ub4)nread;
+
+            sword write_rc = OCILobWrite(ctx->svchp, ctx->errhp,
+                                          lob_loc, &amount, offset,
+                                          chunk_buf, (ub4)nread,
+                                          OCI_ONE_PIECE,
+                                          NULL, NULL, 0, SQLCS_IMPLICIT);
+            if (write_rc != OCI_SUCCESS && write_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                ORACLE_CHECK_OCI_LOG(ctx, logger, write_rc);
+                free(chunk_buf);
+                fclose(fp);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            offset          += (ub4)nread;
+            bytes_remaining -= nread;
+        }
+
+        free(chunk_buf);
+        fclose(fp);
+
+        *out_bytes_written = (uint64_t)file_size;
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "BLOB write complete size=%ld", file_size);
+    }
+    else
+    {
+        /* CLOB: always written from an already-resolved in-memory
+         * buffer (inline_text/inline_text_len) - core has already done
+         * whatever file read or literal-value resolution was needed,
+         * matching handle_clob_update() exactly. */
+        ub4    offset          = 1;
+        size_t bytes_remaining = req->inline_text_len;
+
+        while (bytes_remaining > 0)
+        {
+            size_t chunk = ctx->ini->chunk_read_size;
+            if (chunk > bytes_remaining) chunk = bytes_remaining;
+
+            ub4 amount = (ub4)chunk;
+
+            sword write_rc = OCILobWrite(
+                ctx->svchp, ctx->errhp, lob_loc, &amount, offset,
+                (dvoid *)(req->inline_text +
+                          (req->inline_text_len - bytes_remaining)),
+                (ub4)chunk, OCI_ONE_PIECE,
+                NULL, NULL, 0, SQLCS_IMPLICIT);
+            if (write_rc != OCI_SUCCESS && write_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                ORACLE_CHECK_OCI_LOG(ctx, logger, write_rc);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            offset          += (ub4)chunk;
+            bytes_remaining -= chunk;
+        }
+
+        *out_bytes_written = (uint64_t)req->inline_text_len;
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "CLOB write complete total=%zu", req->inline_text_len);
+    }
+
+Cleanup:
+    OCIDescriptorFree(lob_loc, OCI_DTYPE_LOB);
+    OCIStmtRelease(stmt_sel, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    return rc;
+}
+
 static const db_driver_t oracle_driver = {
     .driver_name          = "oracle",
     .connect              = oracle_connect,
@@ -1125,8 +1598,12 @@ static const db_driver_t oracle_driver = {
     .select_close         = oracle_select_close,
     .dml_execute          = oracle_dml_execute,
     .commit               = oracle_commit,
-    .rollback             = oracle_rollback
+    .rollback             = oracle_rollback,
+    .dml_execute_returning_rowids = oracle_dml_execute_returning_rowids,
+    .rowid_result_free            = oracle_rowid_result_free,
+    .lob_write_by_rowid           = oracle_lob_write_by_rowid
 };
+
 
 const db_driver_t *oracle_driver_get(void)
 {
