@@ -207,7 +207,16 @@ typedef struct {
     const char **bind_values;  /* bound by position, 1..bind_count,
                                    always SQLT_STR - array and every
                                    string it points to are caller-owned,
-                                   must outlive the dml_execute() call  */
+                                   must outlive the dml_execute() call.
+                                   bind_values[k] == NULL means bind SQL
+                                   NULL at that position (added 2026-09-19,
+                                   found during UPDATE's own pass - a
+                                   NULL entry used to silently become an
+                                   empty string; harmless for DELETE's
+                                   own WHERE keys, never legitimately
+                                   NULL, but genuinely wrong for
+                                   UPDATE's SET clause, which can - see
+                                   driver_oracle.c's own fix)          */
 } db_dml_request_t;
 
 /*
@@ -226,23 +235,103 @@ typedef struct {
  * (OCIBindDynamic), which grows to however many rows Oracle actually
  * reports.
  *
- * Not UPDATE-specific despite the name of the module driving this
- * addition - OCI_Insert_Execute_Module.c already uses the identical
- * RETURNING ROWID INTO + dynamic-collector pattern for its own LOB
- * writes (see that module's own 2026-08-25 fix, same root cause) - this
- * interface is intended to be reused as-is once INSERT gets its own
- * abstraction pass, not rebuilt.
+ * Correction (2026-09-20, found and fixed before INSERT's own pass ever
+ * started, while checking reusability rather than assuming it): the
+ * note originally here claimed OCI_Insert_Execute_Module.c "already
+ * uses the identical RETURNING ROWID INTO + dynamic-collector pattern"
+ * for its own LOB writes. Checked directly against that module's real
+ * code - it doesn't. INSERT's own RETURNING ROWID bind is a STATIC
+ * array (rowid_bufs, calloc'd to execute_count, bound via plain
+ * OCIBindByPos + OCIBindArrayOfStruct) - not OCIBindDynamic at all.
+ * That's the correct choice for INSERT's own shape: unlike UPDATE's
+ * WHERE clause, INSERT always knows exactly how many rows it's
+ * inserting in advance, so there's no "unknown count until execute
+ * time" problem to solve with a dynamic bind. row_count below is what
+ * actually makes this struct/function reusable for that real shape -
+ * see its own doc comment.
  *
  * sql must already contain the RETURNING ROWID INTO :N clause, with N
- * given explicitly via returning_bind_position - build_update_sql()
- * (core-side, untouched by this pass) already computes this position
- * correctly; the driver has no independent way to know it.
+ * given explicitly via returning_bind_position - build_update_sql()/
+ * build_insert_sql() (core-side, untouched by this pass) already
+ * compute this position correctly; the driver has no independent way
+ * to know it.
  */
 typedef struct {
     const char  *sql;
     int          bind_count;
-    const char **bind_values;
+    const char **bind_values;  /* same NULL-means-SQL-NULL convention as
+                                   db_dml_request_t's own bind_values -
+                                   see its doc comment above.
+
+                                   Layout depends on row_count below:
+                                   row_count <= 1 (DELETE/UPDATE's own
+                                   shape, unchanged since 2026-09-18) -
+                                   exactly bind_count entries, one value
+                                   per bind position, same as
+                                   db_dml_request_t.
+
+                                   row_count > 1 (added 2026-09-20,
+                                   INSERT's own shape) - a FLAT,
+                                   ROW-MAJOR array of bind_count *
+                                   row_count entries: row 0's bind_count
+                                   values first, then row 1's, and so
+                                   on - bind_values[row * bind_count +
+                                   col]. Matches INSERT's own real
+                                   multi-row batch (OCIBindArrayOfStruct,
+                                   N distinct values per bind position,
+                                   one per row) - not a value repeated
+                                   across every row the way UPDATE's own
+                                   SET clause is (see
+                                   db_dml_returning_request_t's own note
+                                   above on why UPDATE never needed this:
+                                   its bind iteration count is always 1,
+                                   only the WHERE-matched row count
+                                   varies, which is what the ROWID
+                                   collector already handles).          */
     int          returning_bind_position;
+    int          row_count;    /* Added 2026-09-20, INSERT's own
+                                   abstraction pass. 0 or 1 = today's
+                                   exact single-row behavior, unchanged -
+                                   every existing DELETE/UPDATE call site
+                                   needs no changes at all, still served
+                                   by the dynamic ROWID collector
+                                   (OCIBindDynamic). >1 = a real
+                                   multi-row batch (INSERT's own
+                                   OCIStmtExecute iters, up to
+                                   ctx->ini->max_bulk_inserts) - bind_values
+                                   is then read as the flat, row-major
+                                   array described above, and every
+                                   scalar column bind additionally uses
+                                   OCIBindArrayOfStruct, matching
+                                   OCI_Insert_Execute_Module.c's own
+                                   existing bind loop exactly.
+
+                                   Correction (2026-09-20, same day):
+                                   this originally planned to route
+                                   row_count > 1 through the SAME
+                                   dynamic collector DELETE/UPDATE use,
+                                   reasoning that its per-iteration
+                                   callback should generalize to any
+                                   iters count. Real testing
+                                   (Driver_Insert_Test.c's own Test
+                                   2/3/6) showed that reasoning was
+                                   wrong: the array insert itself always
+                                   succeeded correctly, but the dynamic
+                                   callback only ever fired once
+                                   regardless of the real iters value -
+                                   a genuine, unresolved OCI-level
+                                   limitation for this specific
+                                   combination. row_count > 1 now uses a
+                                   STATIC array bind instead (matching
+                                   OCI_Insert_Execute_Module.c's own
+                                   real, already-proven code exactly,
+                                   not a second guess) - see
+                                   oracle_dml_execute_returning_rowids()'s
+                                   own comment in driver_oracle.c for
+                                   the full account. Left the original
+                                   reasoning above rather than deleting
+                                   it, as an honest record of what was
+                                   tried and why it changed.            */
 } db_dml_returning_request_t;
 
 /*
@@ -502,6 +591,19 @@ typedef struct {
  *   returns 0, and must be released via rowid_result_free() exactly
  *   once when the caller is done with it, whether or not it went on to
  *   call lob_write_by_rowid() for any of the rows in it.
+ *
+ *   Extended 2026-09-20, INSERT's own abstraction pass - req->row_count
+ *   > 1 binds every scalar column as a real array (OCIBindArrayOfStruct,
+ *   matching INSERT's own multi-row batch exactly), reading
+ *   req->bind_values as the flat, row-major layout its own doc comment
+ *   describes, instead of the single-value-per-position bind DELETE/
+ *   UPDATE's calls (row_count 0 or 1) still use unchanged. The ROWID
+ *   output itself uses a DIFFERENT mechanism for row_count > 1 than
+ *   for the single-row case - a static array bind, not the dynamic
+ *   collector - after real testing showed the dynamic callback doesn't
+ *   fire per-iteration when other positions are array-bound; see
+ *   db_dml_returning_request_t's own doc comment above for the full
+ *   account of what was tried first and why.
  *
  * rowid_result_free()
  *   Releases everything dml_execute_returning_rowids() allocated into

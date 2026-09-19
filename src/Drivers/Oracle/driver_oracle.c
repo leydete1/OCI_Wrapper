@@ -1010,14 +1010,26 @@ static int oracle_dml_execute(oci_context_t            *ctx,
      * below already owns that (confirmed against
      * OCI_Delete_Execute_Module.c's own bind_hdls handling). */
     OCIBind **bind_hdls = NULL;
+    /* Indicators - one sb2 per bind position, persisting until
+     * OCIStmtExecute actually reads them (NOT at bind time - a classic
+     * OCI lifetime trap this fix nearly fell into: a loop-local sb2
+     * would go out of scope long before execute runs). Only entries
+     * for a NULL bind_values[k] are ever set to -1; every other slot
+     * stays 0 (calloc'd), meaning "not null", exactly matching
+     * OCIBindByPos's own indp=NULL convention for a value that's
+     * always present - see the loop below. */
+    sb2 *null_inds = NULL;
     if (req->bind_count > 0)
     {
-        bind_hdls = calloc((size_t)req->bind_count, sizeof(OCIBind *));
-        if (!bind_hdls)
+        bind_hdls  = calloc((size_t)req->bind_count, sizeof(OCIBind *));
+        null_inds  = calloc((size_t)req->bind_count, sizeof(sb2));
+        if (!bind_hdls || !null_inds)
         {
             logger_write(logger, LOG_ERROR, __func__, 0,
-                         "calloc failed for bind_hdls (bind_count=%d)",
+                         "calloc failed for bind_hdls/null_inds (bind_count=%d)",
                          req->bind_count);
+            free(bind_hdls);
+            free(null_inds);
             OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
             return -1;
         }
@@ -1025,25 +1037,43 @@ static int oracle_dml_execute(oci_context_t            *ctx,
 
     for (int k = 0; k < req->bind_count; k++)
     {
-        const char *value = req->bind_values[k] ? req->bind_values[k] : "";
+        const char *value = req->bind_values[k];
+
+        /* Bug fix (2026-09-19, found during UPDATE's own abstraction
+         * pass, before it was ever integrated - a NULL bind_values[k]
+         * used to silently become an empty string, not SQL NULL. That
+         * was harmless for DELETE's own WHERE keys (never legitimately
+         * NULL), but UPDATE's SET clause genuinely needs to set a
+         * column to NULL - binding '' isn't reliably the same as
+         * binding NULL outside Oracle's own VARCHAR2 empty-string
+         * quirk, and relying on that quirk rather than being explicit
+         * is fragile. null_inds[k] (persisting until OCIStmtExecute
+         * actually reads it, unlike a loop-local sb2 would) now says
+         * so explicitly - already 0 ("not null") from calloc for every
+         * position with a real value; only set to -1 here when
+         * value is NULL. */
+        if (!value) null_inds[k] = -1;
 
         sword bind_rc = OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
                                       (ub4)(k + 1),
-                                      (void *)value,
-                                      (sb4)(strlen(value) + 1),
+                                      value ? (void *)value : NULL,
+                                      value ? (sb4)(strlen(value) + 1) : 0,
                                       SQLT_STR,
-                                      NULL, NULL, NULL, 0, NULL,
+                                      value ? NULL : &null_inds[k],
+                                      NULL, NULL, 0, NULL,
                                       OCI_DEFAULT);
         if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
         {
             ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
             free(bind_hdls);
+            free(null_inds);
             OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
             return -1;
         }
 
         logger_write(logger, LOG_DEBUG, __func__, 0,
-                     "Bound value at position %d", k + 1);
+                     "Bound value at position %d (%s)", k + 1,
+                     value ? "value" : "SQL NULL");
     }
 
     logger_write(logger, LOG_INFO, __func__, 0,
@@ -1055,6 +1085,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, exec_rc);
         free(bind_hdls);
+        free(null_inds);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
         return -1;
     }
@@ -1067,6 +1098,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, attr_rc);
         free(bind_hdls);
+        free(null_inds);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
         return -1;
     }
@@ -1077,6 +1109,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
                  "OCIStmtExecute OK rows_affected=%d", *out_rows_affected);
 
     free(bind_hdls);
+    free(null_inds);
     OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
     return 0;
 }
@@ -1226,6 +1259,26 @@ static sb4 oracle_rowid_out_callback(void *octxp, OCIBind *bindp,
     return OCI_CONTINUE;
 }
 
+static void oracle_free_dml_returning_binds(OCIBind **bind_hdls,
+                                             sb2 *null_inds,
+                                             char **array_bufs,
+                                             sb2 **array_inds,
+                                             int bind_count)
+{
+    free(bind_hdls);
+    free(null_inds);
+    if (array_bufs || array_inds)
+    {
+        for (int j = 0; j < bind_count; j++)
+        {
+            if (array_bufs) free(array_bufs[j]);
+            if (array_inds) free(array_inds[j]);
+        }
+        free(array_bufs);
+        free(array_inds);
+    }
+}
+
 static int oracle_dml_execute_returning_rowids(
                          oci_context_t                     *ctx,
                          logger_t                           *logger,
@@ -1250,108 +1303,344 @@ static int oracle_dml_execute_returning_rowids(
     }
 
     logger_write(logger, LOG_INFO, __func__, 0,
-                 "OCIStmtPrepare2 OK bind_count=%d returning_pos=%d",
-                 req->bind_count, req->returning_bind_position);
+                 "OCIStmtPrepare2 OK bind_count=%d returning_pos=%d "
+                 "row_count=%d",
+                 req->bind_count, req->returning_bind_position,
+                 req->row_count);
+
+    /* iters is what OCIStmtExecute actually runs - req->row_count <= 1
+     * means "today's DELETE/UPDATE shape", always exactly 1 iteration,
+     * unchanged since 2026-09-18. row_count > 1 is INSERT's own real
+     * batch (added 2026-09-20) - see db_dml_returning_request_t's own
+     * doc comment in db_driver.h for the full reasoning on why the
+     * bind SHAPE differs below but the ROWID collector doesn't need to
+     * change at all. */
+    int iters = (req->row_count > 1) ? req->row_count : 1;
 
     OCIBind **bind_hdls = NULL;
+    sb2      *null_inds = NULL;   /* only used when iters == 1 - see
+                                      oracle_dml_execute()'s own comment
+                                      on this same pattern            */
+    /* Only used when iters > 1 - one flat, row-major buffer and one
+     * indicator array per bind position, freed after execute (must
+     * stay valid until OCIStmtExecute actually reads them, same
+     * lifetime trap null_inds above already had to be built around).  */
+    char **array_bufs = NULL;
+    sb2   **array_inds = NULL;
+
     if (req->bind_count > 0)
     {
         bind_hdls = calloc((size_t)req->bind_count, sizeof(OCIBind *));
-        if (!bind_hdls)
+        if (iters == 1)
+            null_inds = calloc((size_t)req->bind_count, sizeof(sb2));
+        else
+        {
+            array_bufs = calloc((size_t)req->bind_count, sizeof(char *));
+            array_inds = calloc((size_t)req->bind_count, sizeof(sb2 *));
+        }
+
+        if (!bind_hdls || (iters == 1 && !null_inds) ||
+            (iters > 1 && (!array_bufs || !array_inds)))
         {
             logger_write(logger, LOG_ERROR, __func__, 0,
-                         "calloc failed for bind_hdls (bind_count=%d)",
-                         req->bind_count);
+                         "calloc failed for bind structures (bind_count=%d "
+                         "iters=%d)", req->bind_count, iters);
+            oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                             array_bufs, array_inds,
+                                             req->bind_count);
             OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
             return -1;
         }
     }
 
-    for (int k = 0; k < req->bind_count; k++)
+    if (iters == 1)
     {
-        const char *value = req->bind_values[k] ? req->bind_values[k] : "";
-
-        sword bind_rc = OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
-                                      (ub4)(k + 1),
-                                      (void *)value,
-                                      (sb4)(strlen(value) + 1),
-                                      SQLT_STR,
-                                      NULL, NULL, NULL, 0, NULL,
-                                      OCI_DEFAULT);
-        if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+        /* Today's DELETE/UPDATE shape, unchanged since 2026-09-18 - one
+         * value per bind position. */
+        for (int k = 0; k < req->bind_count; k++)
         {
-            ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
-            free(bind_hdls);
-            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-            return -1;
+            const char *value = req->bind_values[k];
+            if (!value) null_inds[k] = -1;
+
+            sword bind_rc = OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
+                                          (ub4)(k + 1),
+                                          value ? (void *)value : NULL,
+                                          value ? (sb4)(strlen(value) + 1) : 0,
+                                          SQLT_STR,
+                                          value ? NULL : &null_inds[k],
+                                          NULL, NULL, 0, NULL,
+                                          OCI_DEFAULT);
+            if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+                oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                                 array_bufs, array_inds,
+                                                 req->bind_count);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
+        }
+    }
+    else
+    {
+        /* INSERT's own real multi-row batch (added 2026-09-20) - each
+         * bind position gets a genuine array of row_count distinct
+         * values (OCIBindArrayOfStruct), read from req->bind_values'
+         * flat, row-major layout - see db_dml_returning_request_t's
+         * own doc comment in db_driver.h for that layout's exact
+         * shape. OCIBindArrayOfStruct needs a uniform stride across
+         * every row for a given column - computed here as the longest
+         * value actually present for that column, not a blanket
+         * worst-case size, to avoid wasting memory on every other
+         * column when only one happens to hold a long value. Matches
+         * OCI_Insert_Execute_Module.c's own bind loop in spirit (same
+         * OCIBindByPos + OCIBindArrayOfStruct pair, same skip-for-
+         * empty/NULL handling) even though that module computes its
+         * own stride from real column metadata rather than the data
+         * itself - the driver has no metadata to consult, only the
+         * values it was actually handed, and sizing from those is
+         * exactly as correct for what OCI itself requires (a stride
+         * long enough for every row's value, nothing more). */
+        for (int k = 0; k < req->bind_count; k++)
+        {
+            size_t max_len = 0;
+            for (int r = 0; r < req->row_count; r++)
+            {
+                const char *v = req->bind_values[(size_t)r * req->bind_count + k];
+                if (v)
+                {
+                    size_t l = strlen(v);
+                    if (l > max_len) max_len = l;
+                }
+            }
+            size_t stride = max_len + 1;   /* +1 for NUL terminator */
+
+            array_bufs[k] = calloc((size_t)req->row_count, stride);
+            array_inds[k] = calloc((size_t)req->row_count, sizeof(sb2));
+            if (!array_bufs[k] || !array_inds[k])
+            {
+                logger_write(logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for array bind col=%d "
+                             "row_count=%d stride=%zu",
+                             k, req->row_count, stride);
+                oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                                 array_bufs, array_inds,
+                                                 req->bind_count);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
+
+            for (int r = 0; r < req->row_count; r++)
+            {
+                const char *v = req->bind_values[(size_t)r * req->bind_count + k];
+                char *slot = array_bufs[k] + (size_t)r * stride;
+                if (v)
+                {
+                    strncpy(slot, v, stride - 1);
+                    array_inds[k][r] = 0;
+                }
+                else
+                {
+                    slot[0] = '\0';
+                    array_inds[k][r] = -1;
+                }
+            }
+
+            sword bind_rc = OCIBindByPos(stmt, &bind_hdls[k], ctx->errhp,
+                                          (ub4)(k + 1),
+                                          array_bufs[k],
+                                          (sb4)stride,
+                                          SQLT_STR,
+                                          array_inds[k],
+                                          NULL, NULL, 0, NULL,
+                                          OCI_DEFAULT);
+            if (bind_rc == OCI_SUCCESS || bind_rc == OCI_SUCCESS_WITH_INFO)
+                bind_rc = OCIBindArrayOfStruct(bind_hdls[k], ctx->errhp,
+                                                (ub4)stride,
+                                                (ub4)sizeof(sb2),
+                                                0, 0);
+            if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+                oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                                 array_bufs, array_inds,
+                                                 req->bind_count);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
         }
     }
 
-    /* RETURNING ROWID INTO - dynamic bind, not a static array. See
-     * db_dml_returning_request_t's own doc comment in db_driver.h for
-     * why: the bind iteration count is always 1, but the WHERE clause
-     * it binds against can still match many physical rows. */
+    /* RETURNING ROWID INTO. Two genuinely different mechanisms, chosen
+     * deliberately by iters rather than one mechanism stretched to fit
+     * both - a design correction (2026-09-20) from the original
+     * intent of reusing one proven mechanism everywhere (see
+     * db_dml_returning_request_t's own doc comment in db_driver.h,
+     * left in place as the honest history of that decision and why it
+     * changed).
+     *
+     * iters == 1 (DELETE/UPDATE's own shape, unchanged since
+     * 2026-09-18) - a dynamic bind (OCIBindDynamic), because the WHERE
+     * clause can match an unknown number of physical rows at execute
+     * time; a static, single-slot bind could only ever receive one of
+     * them back.
+     *
+     * iters > 1 (INSERT's own real batch, added 2026-09-20) - a STATIC
+     * array (OCIBindByPos + OCIBindArrayOfStruct on a calloc'd flat
+     * buffer, sized to iters exactly), not the dynamic collector.
+     * Tried the dynamic mechanism here first, reasoning that its
+     * per-iteration callback should generalize to any iters count the
+     * same way the static array binds already do - that reasoning
+     * turned out wrong: real testing (Driver_Insert_Test.c's own Test
+     * 2/3/6, with diagnostics added specifically to pin this down)
+     * showed the array insert itself always succeeded correctly (every
+     * row landed, confirmed via an independent direct COUNT), but the
+     * dynamic callback only ever fired once regardless of the real
+     * iters value - a genuine, unresolved OCI-level limitation for
+     * this specific combination, not a bug in the surrounding bind
+     * logic. Rather than keep debugging an uncertain mechanism, this
+     * uses the SAME static-array approach OCI_Insert_Execute_Module.c's
+     * own real code already proves works for exactly this shape
+     * (row count known in advance, not discovered at execute time) -
+     * a known-correct path, not a second guess. */
     oracle_rowid_collector_t collector;
-    oracle_rowid_collector_init(&collector, ctx, logger);
+    char  *static_rowid_bufs = NULL;
+    sb2   *static_rowid_inds = NULL;
+    OCIBind *rowid_bind_hdl  = NULL;
+    sword rowid_bind_rc, dynamic_or_array_rc;
 
-    OCIBind *rowid_bind_hdl = NULL;
-    sword rowid_bind_rc = OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
-                                        (ub4)req->returning_bind_position,
-                                        NULL,
-                                        (sb4)ORACLE_ROWID_BUF_SIZE,
-                                        SQLT_STR,
-                                        NULL,
-                                        NULL, NULL, 0, NULL,
-                                        OCI_DATA_AT_EXEC);
-    if (rowid_bind_rc != OCI_SUCCESS && rowid_bind_rc != OCI_SUCCESS_WITH_INFO)
+    if (iters == 1)
     {
-        ORACLE_CHECK_OCI_LOG(ctx, logger, rowid_bind_rc);
-        free(bind_hdls);
-        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-        return -1;
+        oracle_rowid_collector_init(&collector, ctx, logger);
+
+        rowid_bind_rc = OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
+                                      (ub4)req->returning_bind_position,
+                                      NULL,
+                                      (sb4)ORACLE_ROWID_BUF_SIZE,
+                                      SQLT_STR,
+                                      NULL,
+                                      NULL, NULL, 0, NULL,
+                                      OCI_DATA_AT_EXEC);
+        if (rowid_bind_rc == OCI_SUCCESS || rowid_bind_rc == OCI_SUCCESS_WITH_INFO)
+            dynamic_or_array_rc = OCIBindDynamic(
+                rowid_bind_hdl, ctx->errhp,
+                (void *)&collector, oracle_rowid_in_callback,
+                (void *)&collector, oracle_rowid_out_callback);
+        else
+            dynamic_or_array_rc = rowid_bind_rc;
+    }
+    else
+    {
+        static_rowid_bufs = calloc((size_t)iters, ORACLE_ROWID_BUF_SIZE);
+        static_rowid_inds = calloc((size_t)iters, sizeof(sb2));
+        if (!static_rowid_bufs || !static_rowid_inds)
+        {
+            logger_write(logger, LOG_ERROR, __func__, 0,
+                         "calloc failed for static_rowid_bufs/inds (iters=%d)",
+                         iters);
+            free(static_rowid_bufs);
+            free(static_rowid_inds);
+            oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                             array_bufs, array_inds,
+                                             req->bind_count);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            return -1;
+        }
+
+        rowid_bind_rc = OCIBindByPos(stmt, &rowid_bind_hdl, ctx->errhp,
+                                      (ub4)req->returning_bind_position,
+                                      static_rowid_bufs,
+                                      (sb4)ORACLE_ROWID_BUF_SIZE,
+                                      SQLT_STR,
+                                      static_rowid_inds,
+                                      NULL, NULL, 0, NULL,
+                                      OCI_DEFAULT);
+        if (rowid_bind_rc == OCI_SUCCESS || rowid_bind_rc == OCI_SUCCESS_WITH_INFO)
+            dynamic_or_array_rc = OCIBindArrayOfStruct(
+                rowid_bind_hdl, ctx->errhp,
+                (ub4)ORACLE_ROWID_BUF_SIZE, (ub4)sizeof(sb2), 0, 0);
+        else
+            dynamic_or_array_rc = rowid_bind_rc;
     }
 
-    sword dynamic_rc = OCIBindDynamic(rowid_bind_hdl, ctx->errhp,
-                                       (void *)&collector, oracle_rowid_in_callback,
-                                       (void *)&collector, oracle_rowid_out_callback);
-    if (dynamic_rc != OCI_SUCCESS && dynamic_rc != OCI_SUCCESS_WITH_INFO)
+    if ((rowid_bind_rc != OCI_SUCCESS && rowid_bind_rc != OCI_SUCCESS_WITH_INFO) ||
+        (dynamic_or_array_rc != OCI_SUCCESS && dynamic_or_array_rc != OCI_SUCCESS_WITH_INFO))
     {
-        ORACLE_CHECK_OCI_LOG(ctx, logger, dynamic_rc);
-        free(bind_hdls);
+        ORACLE_CHECK_OCI_LOG(ctx, logger,
+            rowid_bind_rc != OCI_SUCCESS && rowid_bind_rc != OCI_SUCCESS_WITH_INFO
+                ? rowid_bind_rc : dynamic_or_array_rc);
+        free(static_rowid_bufs);
+        free(static_rowid_inds);
+        oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                         array_bufs, array_inds,
+                                         req->bind_count);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
         return -1;
     }
 
     logger_write(logger, LOG_INFO, __func__, 0,
-                 "Calling OCIStmtExecute iters=1");
+                 "Calling OCIStmtExecute iters=%d", iters);
 
     sword exec_rc = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
-                                    1, 0, NULL, NULL, OCI_DEFAULT);
+                                    (ub4)iters, 0, NULL, NULL, OCI_DEFAULT);
     if (exec_rc != OCI_SUCCESS && exec_rc != OCI_SUCCESS_WITH_INFO)
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, exec_rc);
-        free(bind_hdls);
-        oracle_rowid_collector_free(&collector);
+        free(static_rowid_bufs);
+        free(static_rowid_inds);
+        oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                         array_bufs, array_inds,
+                                         req->bind_count);
+        if (iters == 1) oracle_rowid_collector_free(&collector);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
         return -1;
     }
 
-    logger_write(logger, LOG_INFO, __func__, 0,
-                 "OCIStmtExecute OK rows_reported=%u (RETURNING ROWID "
-                 "via OCIBindDynamic)", collector.count);
+    if (iters == 1)
+    {
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "OCIStmtExecute OK rows_reported=%u (RETURNING ROWID "
+                     "via OCIBindDynamic)", collector.count);
 
-    /* Ownership of the rowid buffer transfers to out_result - inds/
-     * rcodes are not part of db_rowid_result_t's own contract (core
-     * never inspected them even before this abstraction - see
-     * dynamic_rowid_collector_t's own comment in
-     * OCI_Update_Execute_Module.c), freed here rather than exposed. */
-    out_result->rowids = collector.bufs;
-    out_result->count  = (int)collector.count;
-    collector.bufs = NULL;   /* ownership transferred, don't free below */
-    free(collector.inds);
-    free(collector.rcodes);
+        /* Ownership of the rowid buffer transfers to out_result -
+         * inds/rcodes are not part of db_rowid_result_t's own contract
+         * (core never inspected them even before this abstraction -
+         * see dynamic_rowid_collector_t's own comment in
+         * OCI_Update_Execute_Module.c), freed here rather than exposed. */
+        out_result->rowids = collector.bufs;
+        out_result->count  = (int)collector.count;
+        collector.bufs = NULL;   /* ownership transferred, don't free below */
+        free(collector.inds);
+        free(collector.rcodes);
+    }
+    else
+    {
+        /* A successful array-bound INSERT of iters rows always
+         * produces exactly iters ROWIDs - unlike UPDATE's WHERE clause,
+         * there is no "how many actually happened" discovery needed
+         * here; the row count IS the batch size, by definition. */
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "OCIStmtExecute OK rows_reported=%d (RETURNING ROWID "
+                     "via static array bind)", iters);
 
-    free(bind_hdls);
+        out_result->rowids = static_rowid_bufs;
+        out_result->count  = iters;
+        static_rowid_bufs = NULL;   /* ownership transferred - static_rowid_inds
+                                        is NOT transferred, freed by the
+                                        unconditional cleanup right below,
+                                        same as every other path through
+                                        this function - freeing it here
+                                        too was the double-free (found via
+                                        Driver_Insert_Test.c's own Test 2,
+                                        caught by ASan immediately rather
+                                        than silently corrupting memory). */
+    }
+
+    free(static_rowid_bufs);
+    free(static_rowid_inds);
+    oracle_free_dml_returning_binds(bind_hdls, null_inds,
+                                     array_bufs, array_inds,
+                                     req->bind_count);
     OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
     return 0;
 }

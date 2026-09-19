@@ -17,10 +17,10 @@ export LSAN_OPTIONS=suppressions=/home/leyden100/eclipse-workspace/OCI_Wrapper/D
 
 
 #Test stage 4 Driver_Delete_Test
-./Driver_Update_Test > /home/leyden100/eclipse-workspace/OCI_Wrapper/logs/Driver_Update_Test.log 2>&1
+./Driver_Insert_Test > /home/leyden100/eclipse-workspace/OCI_Wrapper/logs/Driver_Insert_Test.log 2>&1
 
 echo "EXIT CODE: $?" >> /home/leyden100/eclipse-workspace/OCI_Wrapper/logs/oracle_driver_run.log
-cat /home/leyden100/eclipse-workspace/OCI_Wrapper/logs/Driver_Update_Test.log
+cat /home/leyden100/eclipse-workspace/OCI_Wrapper/logs/Driver_Insert_Test.log
 
 
 
