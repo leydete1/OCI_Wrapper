@@ -266,6 +266,21 @@ struct db_select_cursor_t {
      * that case - only a genuinely short fetch exposes it, which nothing
      * before this load test's real query mix ever exercised. */
     int             exhausted;   /* 0/1 - set once OCI_NO_DATA is seen */
+
+    /* Added 2026-09-21, EXECUTE_PROCEDURE's own abstraction pass - a
+     * cursor built by select_open_from_cursor() wraps a REFCURSOR
+     * statement handle that was originally obtained via OCIHandleAlloc()
+     * in oracle_dml_execute_procedure() (matching
+     * OCI_Execute_Procedure_Module.c's own bind_parameters(), which
+     * does the same), NOT via OCIStmtPrepare2() the way every select_
+     * open() cursor's own stmt always has been. These two need
+     * genuinely different release calls - OCIStmtRelease() expects
+     * state OCIStmtPrepare2() sets up (a statement-cache key) that a
+     * bare OCIHandleAlloc()'d handle never has; the original code
+     * correctly uses OCIHandleFree() for exactly this case. Found and
+     * fixed before it ever shipped, not after a real failure - see
+     * oracle_select_cursor_free()'s own branch on this flag below. */
+    int             stmt_owned_via_handle_alloc;
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -334,11 +349,153 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
     if (cur->col_names)  free(cur->col_names);
 
     /* Statement released last, same order execute_query_batch()'s own
-     * Cleanup label uses (free_batch_ctx() before OCIStmtRelease). */
+     * Cleanup label uses (free_batch_ctx() before OCIStmtRelease).
+     * Branches on stmt_owned_via_handle_alloc - see that field's own
+     * comment in the struct definition above for why a REFCURSOR's
+     * handle genuinely can't use the same release call a prepared
+     * statement's own handle uses. */
     if (cur->stmt && cur->ctx)
-        OCIStmtRelease(cur->stmt, cur->ctx->errhp, NULL, 0, OCI_DEFAULT);
+    {
+        if (cur->stmt_owned_via_handle_alloc)
+            OCIHandleFree(cur->stmt, OCI_HTYPE_STMT);
+        else
+            OCIStmtRelease(cur->stmt, cur->ctx->errhp, NULL, 0, OCI_DEFAULT);
+    }
 
     free(cur);
+}
+
+/* Shared describe/define logic between oracle_select_open() (a freshly
+ * prepared+described statement) and oracle_select_open_from_cursor()
+ * (an already-open REFCURSOR from a procedure call) - factored out
+ * 2026-09-21 rather than duplicated a third time, once
+ * select_open_from_cursor() made the overlap obvious. needs_execute
+ * distinguishes the one real difference: select_open()'s own statement
+ * still needs its real OCIStmtExecute (its own prior call only
+ * described it); a REFCURSOR is already open and fetching-ready from
+ * the procedure's own OPEN statement, so this must NOT execute it
+ * again. cur->stmt/cur->batch_size must already be set by the caller
+ * before this runs. */
+static int oracle_select_describe_and_define(oci_context_t       *ctx,
+                                              db_select_cursor_t  *cur,
+                                              int                  needs_execute,
+                                              db_column_meta_t   **out_columns,
+                                              int                 *out_column_count,
+                                              int                 *out_batch_size)
+{
+    sword pcount_rc = OCIAttrGet(cur->stmt, OCI_HTYPE_STMT,
+                                  &cur->col_count, 0,
+                                  OCI_ATTR_PARAM_COUNT, ctx->errhp);
+    ORACLE_CHECK_OCI(ctx, pcount_rc);
+    /* Bug fix (2026-09-21, found while investigating a NULL-logger
+     * report on a real test failure - prompted a closer check of
+     * ORACLE_CHECK_OCI's own contract rather than assuming the logger
+     * gap alone explained it). ORACLE_CHECK_OCI is log-only - unlike
+     * the older CHECK_OCI_XXX macros elsewhere in this project, it has
+     * no control-flow of its own; every caller must check the real
+     * status explicitly. This call never did - only col_count==0 was
+     * checked below, which is the OUTPUT value, not whether the call
+     * itself succeeded. A genuine OCIAttrGet failure would previously
+     * fall through with cur->col_count holding whatever it held before
+     * the failed call (uninitialized/garbage, not reliably zero),
+     * sizing every array below from bad data. Pre-existing in the
+     * original oracle_select_open() before this function was factored
+     * out of it - carried forward faithfully during that refactor, not
+     * introduced by it, and not caught until now. */
+    if (pcount_rc != OCI_SUCCESS && pcount_rc != OCI_SUCCESS_WITH_INFO)
+        return -1;
+
+    if (cur->col_count == 0)
+    {
+        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
+                     "No columns returned for select_open");
+        return -1;
+    }
+
+    cur->def           = calloc(cur->col_count, sizeof(OCIDefine *));
+    cur->buffers       = calloc(cur->col_count, sizeof(char *));
+    cur->buf_sizes     = calloc(cur->col_count, sizeof(ub4));
+    cur->indicators    = calloc(cur->col_count, sizeof(sb2 *));
+    cur->data_types    = calloc(cur->col_count, sizeof(ub2));
+    cur->data_sizes    = calloc(cur->col_count, sizeof(ub4));
+    cur->col_names     = calloc(cur->col_count, sizeof(*cur->col_names));
+    cur->col_blob_locs = calloc(cur->col_count, sizeof(OCILobLocator **));
+
+    if (!cur->def || !cur->buffers || !cur->buf_sizes || !cur->indicators ||
+        !cur->data_types || !cur->data_sizes || !cur->col_names || !cur->col_blob_locs)
+        return -1;
+
+    /* Required by get_multi_metadata()'s contract even for a scalar-
+     * only cursor - see block comment above oracle_select_open(). */
+    ORACLE_CHECK_OCI(ctx,
+        OCIDescriptorAlloc(ctx->envhp, (void **)&cur->clob_loc,
+                           OCI_DTYPE_LOB, 0, NULL));
+    if (!cur->clob_loc) return -1;
+
+    multi_meta_request_t mmr;
+    memset(&mmr, 0, sizeof(mmr));
+    mmr.ctx           = ctx;
+    mmr.stmt          = cur->stmt;
+    mmr.col_count     = cur->col_count;
+    mmr.fetch_count   = cur->batch_size;
+    mmr.def           = cur->def;
+    mmr.buffers       = cur->buffers;
+    mmr.buf_sizes     = cur->buf_sizes;
+    mmr.indicators    = cur->indicators;
+    mmr.data_types    = cur->data_types;
+    mmr.data_sizes    = cur->data_sizes;
+    mmr.col_names     = cur->col_names;
+    mmr.col_blob_locs = cur->col_blob_locs;
+    mmr.clob_loc      = cur->clob_loc;
+    mmr.deps          = NULL;   /* get_multi_metadata() ignores this field entirely */
+
+    if (get_multi_metadata(&mmr) != 0)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "get_multi_metadata failed in select_open");
+        return -1;
+    }
+
+    /* CLOB array-fetch restriction - OCI QUIRK - DO NOT REMOVE (same
+     * quirk execute_query_batch() documents at its own call site). */
+    for (ub4 i = 0; i < cur->col_count; i++)
+    {
+        if (cur->data_types[i] == SQLT_CLOB)
+        {
+            cur->batch_size = 1;
+            break;
+        }
+    }
+
+    if (needs_execute)
+    {
+        /* Bug fix (found via Driver_Select_Test.c's first real run) -
+         * OCIStmtExecute(...OCI_DESCRIBE_ONLY) only describes the
+         * statement - it does NOT open a live cursor to fetch from.
+         * Not needed here for select_open_from_cursor()'s own case -
+         * a REFCURSOR is already open and fetch-ready from the
+         * procedure's own OPEN statement, executing it again would be
+         * wrong, not just redundant. */
+        ORACLE_CHECK_OCI(ctx,
+            OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
+                           0, 0, NULL, NULL, OCI_DEFAULT));
+    }
+
+    db_column_meta_t *columns = calloc(cur->col_count, sizeof(db_column_meta_t));
+    if (!columns) return -1;
+
+    for (ub4 i = 0; i < cur->col_count; i++)
+    {
+        snprintf(columns[i].field_name, sizeof(columns[i].field_name),
+                 "%s", cur->col_names[i]);
+        snprintf(columns[i].field_type, sizeof(columns[i].field_type),
+                 "%s", oracle_type_to_string(cur->data_types[i]));
+    }
+
+    *out_columns      = columns;
+    *out_column_count = (int)cur->col_count;
+    *out_batch_size   = (int)cur->batch_size;
+    return 0;
 }
 
 static int oracle_select_open(oci_context_t              *ctx,
@@ -379,114 +536,79 @@ static int oracle_select_open(oci_context_t              *ctx,
         OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
                        0, 0, NULL, NULL, OCI_DESCRIBE_ONLY));
 
-    ORACLE_CHECK_OCI(ctx,
-        OCIAttrGet(cur->stmt, OCI_HTYPE_STMT,
-                   &cur->col_count, 0, OCI_ATTR_PARAM_COUNT, ctx->errhp));
+    db_column_meta_t *columns      = NULL;
+    int                column_count = 0;
+    int                batch_size   = 0;
 
-    if (cur->col_count == 0)
-    {
-        logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
-                     "No columns returned for select_open");
-        oracle_select_cursor_free(cur);
-        return -1;
-    }
-
-    cur->def           = calloc(cur->col_count, sizeof(OCIDefine *));
-    cur->buffers       = calloc(cur->col_count, sizeof(char *));
-    cur->buf_sizes     = calloc(cur->col_count, sizeof(ub4));
-    cur->indicators    = calloc(cur->col_count, sizeof(sb2 *));
-    cur->data_types    = calloc(cur->col_count, sizeof(ub2));
-    cur->data_sizes    = calloc(cur->col_count, sizeof(ub4));
-    cur->col_names     = calloc(cur->col_count, sizeof(*cur->col_names));
-    cur->col_blob_locs = calloc(cur->col_count, sizeof(OCILobLocator **));
-
-    if (!cur->def || !cur->buffers || !cur->buf_sizes || !cur->indicators ||
-        !cur->data_types || !cur->data_sizes || !cur->col_names || !cur->col_blob_locs)
+    if (oracle_select_describe_and_define(ctx, cur, 1 /* needs_execute */,
+                                           &columns, &column_count,
+                                           &batch_size) != 0)
     {
         oracle_select_cursor_free(cur);
         return -1;
-    }
-
-    /* Required by get_multi_metadata()'s contract even for a scalar-
-     * only cursor - see block comment above. */
-    ORACLE_CHECK_OCI(ctx,
-        OCIDescriptorAlloc(ctx->envhp, (void **)&cur->clob_loc,
-                           OCI_DTYPE_LOB, 0, NULL));
-    if (!cur->clob_loc) { oracle_select_cursor_free(cur); return -1; }
-
-    multi_meta_request_t mmr;
-    memset(&mmr, 0, sizeof(mmr));
-    mmr.ctx           = ctx;
-    mmr.stmt          = cur->stmt;
-    mmr.col_count     = cur->col_count;
-    mmr.fetch_count   = cur->batch_size;
-    mmr.def           = cur->def;
-    mmr.buffers       = cur->buffers;
-    mmr.buf_sizes     = cur->buf_sizes;
-    mmr.indicators    = cur->indicators;
-    mmr.data_types    = cur->data_types;
-    mmr.data_sizes    = cur->data_sizes;
-    mmr.col_names     = cur->col_names;
-    mmr.col_blob_locs = cur->col_blob_locs;
-    mmr.clob_loc      = cur->clob_loc;
-    mmr.deps          = NULL;   /* get_multi_metadata() ignores this field entirely */
-
-    if (get_multi_metadata(&mmr) != 0)
-    {
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "get_multi_metadata failed in select_open");
-        oracle_select_cursor_free(cur);
-        return -1;
-    }
-
-    /* v2: LOB columns are now supported - see LOB IMPLEMENTATION block
-     * above and oracle_fetch_blob_field()/oracle_fetch_clob_field()
-     * below. This pass no longer rejects them with
-     * DB_SELECT_UNSUPPORTED_LOB (that constant stays defined in
-     * db_driver.h in case a genuinely unsupported type shows up later -
-     * it's just not returned from here for CLOB/BLOB any more). */
-
-    /* CLOB array-fetch restriction - OCI QUIRK - DO NOT REMOVE (same
-     * quirk execute_query_batch() documents at its own call site).
-     * Downgrades the ACTUAL fetch count only - cur->alloc_batch_size
-     * (set above, before this) stays at the original request size, so
-     * cleanup still frees every locator slot get_multi_metadata()
-     * actually allocated, not just however many this cursor ends up
-     * fetching at a time. */
-    for (ub4 i = 0; i < cur->col_count; i++)
-    {
-        if (cur->data_types[i] == SQLT_CLOB)
-        {
-            cur->batch_size = 1;
-            break;
-        }
-    }
-
-    /* Bug fix (found via Driver_Select_Test.c's first real run) -
-     * OCIStmtExecute(...OCI_DESCRIBE_ONLY) above only describes the
-     * statement - it does NOT open a live cursor to fetch from.
-     * execute_query_batch() always follows its own describe step with
-     * a SEPARATE, real OCIStmtExecute(...OCI_DEFAULT) (its Stage 3)
-     * before any OCIStmtFetch2 call - this was missing here entirely,
-     * so select_fetch_batch()'s first fetch had nothing to fetch from. */
-    ORACLE_CHECK_OCI(ctx,
-        OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
-                       0, 0, NULL, NULL, OCI_DEFAULT));
-
-    db_column_meta_t *columns = calloc(cur->col_count, sizeof(db_column_meta_t));
-    if (!columns) { oracle_select_cursor_free(cur); return -1; }
-
-    for (ub4 i = 0; i < cur->col_count; i++)
-    {
-        snprintf(columns[i].field_name, sizeof(columns[i].field_name),
-                 "%s", cur->col_names[i]);
-        snprintf(columns[i].field_type, sizeof(columns[i].field_type),
-                 "%s", oracle_type_to_string(cur->data_types[i]));
     }
 
     *out_columns      = columns;
-    *out_column_count = (int)cur->col_count;
-    *out_batch_size   = (int)cur->batch_size;
+    *out_column_count = column_count;
+    *out_batch_size   = batch_size;
+    *out_cursor       = cur;
+
+    return 0;
+}
+
+/* Added 2026-09-21, EXECUTE_PROCEDURE's own abstraction pass - see
+ * db_driver.h's own doc comment on select_open_from_cursor() for the
+ * full design reasoning. cursor_handle is a db_proc_param_t's own
+ * out_cursor_handle from a prior dml_execute_procedure() call - opaque
+ * to core, but genuinely an OCIStmt* under the hood, already open and
+ * fetch-ready from the procedure's own OPEN statement. */
+static int oracle_select_open_from_cursor(oci_context_t        *ctx,
+                                           void                 *cursor_handle,
+                                           db_select_cursor_t  **out_cursor,
+                                           db_column_meta_t    **out_columns,
+                                           int                  *out_column_count,
+                                           int                  *out_batch_size)
+{
+    if (!ctx || !cursor_handle || !out_cursor || !out_columns ||
+        !out_column_count || !out_batch_size)
+        return -1;
+
+    *out_cursor       = NULL;
+    *out_columns      = NULL;
+    *out_column_count = 0;
+    *out_batch_size   = 0;
+
+    db_select_cursor_t *cur = calloc(1, sizeof(*cur));
+    if (!cur) return -1;
+
+    cur->ctx  = ctx;
+    cur->stmt = (OCIStmt *)cursor_handle;
+    /* See struct comment on this field - a REFCURSOR's handle was
+     * obtained via OCIHandleAlloc() in oracle_dml_execute_procedure(),
+     * not OCIStmtPrepare2(), and needs the matching release call. */
+    cur->stmt_owned_via_handle_alloc = 1;
+
+    cur->batch_size = (ub4)ctx->ini->query_fetch_batch_size;
+    if (cur->batch_size < 1) cur->batch_size = 1;
+    cur->alloc_batch_size = cur->batch_size;
+
+    db_column_meta_t *columns      = NULL;
+    int                column_count = 0;
+    int                batch_size   = 0;
+
+    /* needs_execute=0 - see oracle_select_describe_and_define()'s own
+     * comment on why. */
+    if (oracle_select_describe_and_define(ctx, cur, 0,
+                                           &columns, &column_count,
+                                           &batch_size) != 0)
+    {
+        oracle_select_cursor_free(cur);
+        return -1;
+    }
+
+    *out_columns      = columns;
+    *out_column_count = column_count;
+    *out_batch_size   = batch_size;
     *out_cursor       = cur;
 
     return 0;
@@ -1873,6 +1995,244 @@ Cleanup:
     return rc;
 }
 
+/* ================================================================
+ * DML EXECUTE PROCEDURE (2026-09-21) - EXECUTE_PROCEDURE's own
+ * abstraction pass (see db_driver.h's own doc comments for
+ * dml_execute_procedure()/db_proc_param_t for the full design
+ * reasoning - named, mixed-type, two-way binds, nothing already built
+ * fits this shape). Mirrors OCI_Execute_Procedure_Module.c's own
+ * bind_parameters() exactly - same three-way SQLT_RSET/SQLT_INT/
+ * SQLT_STR dispatch, same by-name binding, same "copy IN value into
+ * the buffer OCI will overwrite for OUT/IN_OUT" pattern - just behind
+ * the driver boundary instead of inline in that module.
+ * ================================================================ */
+static int oracle_dml_execute_procedure(oci_context_t               *ctx,
+                                         logger_t                    *logger,
+                                         db_proc_execute_request_t   *req)
+{
+    if (!ctx || !req || !req->plsql_block) return -1;
+    if (req->param_count > 0 && !req->params) return -1;
+
+    OCIStmt *stmt = NULL;
+
+    sword prepare_rc = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                                        (text *)req->plsql_block,
+                                        (ub4)strlen(req->plsql_block),
+                                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (prepare_rc != OCI_SUCCESS && prepare_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, prepare_rc);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "OCIStmtPrepare2 OK param_count=%d", req->param_count);
+
+    /* Indicators - one sb2 per param, persisting until OCIStmtExecute
+     * actually reads them. A loop-local sb2 here would repeat the exact
+     * bind-lifetime bug already found and fixed once in this project
+     * (oracle_dml_execute()'s own first NULL-bind attempt) - caught
+     * this time before it was ever built, not after. */
+    sb2 *indicators = NULL;
+    if (req->param_count > 0)
+    {
+        indicators = calloc((size_t)req->param_count, sizeof(sb2));
+        if (!indicators)
+        {
+            logger_write(logger, LOG_ERROR, __func__, 0,
+                         "calloc failed for indicators (param_count=%d)",
+                         req->param_count);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < req->param_count; i++)
+    {
+        db_proc_param_t *p = &req->params[i];
+        OCIBind         *bind_hdl = NULL;
+
+        char bind_name[132];
+        snprintf(bind_name, sizeof(bind_name), ":%s", p->name);
+
+        sword bind_rc;
+
+        if (p->type == DB_PROC_TYPE_CURSOR)
+        {
+            OCIStmt *cursor_stmt = NULL;
+
+            sword alloc_rc = OCIHandleAlloc(ctx->envhp, (void **)&cursor_stmt,
+                                             OCI_HTYPE_STMT, 0, NULL);
+            if (alloc_rc != OCI_SUCCESS && alloc_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                ORACLE_CHECK_OCI_LOG(ctx, logger, alloc_rc);
+                free(indicators);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
+
+            bind_rc = OCIBindByName(stmt, &bind_hdl, ctx->errhp,
+                                     (text *)bind_name, -1,
+                                     &cursor_stmt, (sb4)sizeof(OCIStmt *),
+                                     SQLT_RSET, &indicators[i],
+                                     NULL, NULL, 0, NULL, OCI_DEFAULT);
+
+            if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                /* Bind itself failed - cursor_stmt was already
+                 * allocated above and would otherwise leak here; the
+                 * shared bind_rc check below can't reach it (out of
+                 * scope), so it's freed right here instead. Found
+                 * while reviewing this branch, not by a test - a real,
+                 * if unlikely (bind failures are rare), leak on a path
+                 * nothing would have exercised without a genuine OCI
+                 * failure to trigger it. */
+                OCIHandleFree(cursor_stmt, OCI_HTYPE_STMT);
+                ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+                free(indicators);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
+
+            /* Stashed now, corrected after execute below if the
+             * indicator turns out to mean the cursor was never opened
+             * (indicators[i]==-1 - see UNIT_TEST_CURSOR_PROC's own
+             * deliberately-conditional OPEN). bind_rc is guaranteed
+             * success here - the failure case already returned above. */
+            p->out_cursor_handle = (void *)cursor_stmt;
+
+            logger_write(logger, LOG_DEBUG, __func__, 0,
+                         "CURSOR bind param='%s'", p->name);
+        }
+        else if (p->type == DB_PROC_TYPE_INT &&
+                 (p->direction == DB_PROC_DIR_OUT ||
+                  p->direction == DB_PROC_DIR_IN_OUT))
+        {
+            if (p->direction == DB_PROC_DIR_IN_OUT && p->in_value)
+                p->out_int = atoi(p->in_value);
+
+            bind_rc = OCIBindByName(stmt, &bind_hdl, ctx->errhp,
+                                     (text *)bind_name, -1,
+                                     &p->out_int, (sb4)sizeof(int),
+                                     SQLT_INT, &indicators[i],
+                                     NULL, NULL, 0, NULL, OCI_DEFAULT);
+
+            logger_write(logger, LOG_DEBUG, __func__, 0,
+                         "INTEGER OUT bind param='%s'", p->name);
+        }
+        else
+        {
+            /* Scalar IN / OUT / IN_OUT, and INT-typed pure IN too
+             * (matches bind_parameters()'s own fallthrough - a pure IN
+             * NUMBER/INTEGER value is still bound as SQLT_STR there,
+             * only OUT/IN_OUT INT gets the SQLT_INT path). Copy the IN
+             * value into out_value - the same buffer OCI will overwrite
+             * for OUT/IN_OUT - matching bind_parameters()'s own
+             * approach exactly; a pure OUT param's out_value simply
+             * starts empty. */
+            if (!p->out_value || p->out_value_size == 0)
+            {
+                logger_write(logger, LOG_ERROR, __func__, 0,
+                             "param '%s' is STR-typed but out_value/"
+                             "out_value_size not provided", p->name);
+                free(indicators);
+                OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+                return -1;
+            }
+
+            if (p->in_value)
+            {
+                strncpy(p->out_value, p->in_value, p->out_value_size - 1);
+                p->out_value[p->out_value_size - 1] = '\0';
+            }
+            else
+            {
+                p->out_value[0] = '\0';
+            }
+
+            if (p->direction == DB_PROC_DIR_IN && strlen(p->out_value) == 0)
+                indicators[i] = -1;
+            else
+                indicators[i] = 0;
+
+            bind_rc = OCIBindByName(stmt, &bind_hdl, ctx->errhp,
+                                     (text *)bind_name, -1,
+                                     p->out_value, (sb4)p->out_value_size,
+                                     SQLT_STR, &indicators[i],
+                                     NULL, NULL, 0, NULL, OCI_DEFAULT);
+
+            logger_write(logger, LOG_DEBUG, __func__, 0,
+                         "Scalar bind param='%s' value='%s' indicator=%d",
+                         p->name, p->out_value, indicators[i]);
+        }
+
+        if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+        {
+            ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+            free(indicators);
+            OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+            return -1;
+        }
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "Calling OCIStmtExecute iters=1 (PL/SQL anonymous block)");
+
+    sword exec_rc = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
+                                    1, 0, NULL, NULL, OCI_DEFAULT);
+    if (exec_rc != OCI_SUCCESS && exec_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI_LOG(ctx, logger, exec_rc);
+        free(indicators);
+        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        return -1;
+    }
+
+    logger_write(logger, LOG_INFO, __func__, 0, "PL/SQL execute OK");
+
+    /* Collect scalar OUT/IN_OUT values and finalise CURSOR handles - now
+     * that execute has actually run and indicators[] holds real,
+     * meaningful values. out_int/out_value were already written
+     * directly into by OCI itself during execute (bound straight to
+     * &p->out_int / p->out_value above) - nothing further to copy for
+     * those; only out_is_null (every type) and out_cursor_handle
+     * (CURSOR only, when genuinely never opened) need setting here. */
+    for (int i = 0; i < req->param_count; i++)
+    {
+        db_proc_param_t *p = &req->params[i];
+        int is_null = (indicators[i] == -1);
+
+        if (p->type == DB_PROC_TYPE_CURSOR)
+        {
+            if (is_null && p->out_cursor_handle)
+            {
+                /* Bound successfully, but the procedure never actually
+                 * opened it (see UNIT_TEST_CURSOR_PROC) - free the
+                 * handle allocated above rather than leak it, and
+                 * report NULL, matching bind_parameters()'s own
+                 * "if (!p->cursor_stmt) skip" / "if (indicator==-1)
+                 * emit empty resultset" handling. */
+                OCIHandleFree(p->out_cursor_handle, OCI_HTYPE_STMT);
+                p->out_cursor_handle = NULL;
+            }
+            p->out_is_null = is_null;
+            continue;
+        }
+
+        if (p->direction != DB_PROC_DIR_OUT &&
+            p->direction != DB_PROC_DIR_IN_OUT) continue;
+
+        p->out_is_null = is_null;
+
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "OUT param '%s' is_null=%d", p->name, is_null);
+    }
+
+    free(indicators);
+    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    return 0;
+}
+
 static const db_driver_t oracle_driver = {
     .driver_name          = "oracle",
     .connect              = oracle_connect,
@@ -1890,7 +2250,9 @@ static const db_driver_t oracle_driver = {
     .rollback             = oracle_rollback,
     .dml_execute_returning_rowids = oracle_dml_execute_returning_rowids,
     .rowid_result_free            = oracle_rowid_result_free,
-    .lob_write_by_rowid           = oracle_lob_write_by_rowid
+    .lob_write_by_rowid           = oracle_lob_write_by_rowid,
+    .dml_execute_procedure        = oracle_dml_execute_procedure,
+    .select_open_from_cursor      = oracle_select_open_from_cursor
 };
 
 

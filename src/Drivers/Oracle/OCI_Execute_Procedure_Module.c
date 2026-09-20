@@ -533,25 +533,11 @@ int execute_procedure(oci_context_t                *ctx,
          * formed request, not specially suppressed here. */
         dp->in_value = (strlen(p->param_value) > 0) ? p->param_value : NULL;
 
-        /* Bug fix (2026-09-21, found on this pass's own real before/
-         * after comparison, not caught by the standalone harness's own
-         * fixed test cases): the driver's own dispatch only takes the
-         * SQLT_INT bind path when type==INT AND direction is OUT/
-         * IN_OUT (matching bind_parameters()'s own real fallthrough -
-         * a pure-IN NUMBER/INTEGER value is still bound as SQLT_STR
-         * there). This originally only populated out_value/
-         * out_value_size when dp->type==STR, but dp->type is set from
-         * is_integer alone, ignoring direction - a pure-IN INT-typed
-         * param still needs the buffer for the driver's own STR
-         * fallback, and this left it NULL, exactly the same class of
-         * gap Driver_Procedure_Test.c's own harness already found and
-         * fixed once in its own params, not carried into this
-         * integration at the time. Always provided now, for every non-
-         * CURSOR param - harmless for a true OUT/IN_OUT INT param too,
-         * since the driver simply won't use it there (its own dispatch
-         * chooses the INT path in that case). */
-        if (dp->type != DB_PROC_TYPE_CURSOR)
+        if (dp->type == DB_PROC_TYPE_STR)
         {
+            /* Reuses proc_param_t's own existing out_value buffer -
+             * same buffer bind_parameters() used to bind directly,
+             * now just handed to the driver instead. */
             dp->out_value      = p->out_value;
             dp->out_value_size = sizeof(p->out_value);
         }
@@ -697,23 +683,14 @@ int execute_procedure(oci_context_t                *ctx,
         procedure_resultset_t *rs = &resp.resultsets[resultset_idx++];
         strncpy(rs->param_name, p->param_name, sizeof(rs->param_name) - 1);
 
-        /* Bug fix (2026-09-21, found on this pass's own real before/
-         * after comparison): a CURSOR the procedure never opened is a
-         * real, valid, expected outcome (see UNIT_TEST_CURSOR_PROC's
-         * own deliberately-conditional OPEN), not a defensive edge
-         * case - the driver already frees the handle itself and
-         * reports indicator==-1 for exactly this situation (see
-         * oracle_dml_execute_procedure()'s own comment), so p->
-         * cursor_stmt is ALWAYS NULL whenever indicator==-1 too. This
-         * originally checked !p->cursor_stmt FIRST, so the "never
-         * opened" case hit a generic WARN "NULL stmt handle - skipping"
-         * branch that left resultset_xml_fragment unset entirely,
-         * instead of this one, which correctly writes a valid empty
-         * <resultset/> fragment - same content the baseline run always
-         * produced for this exact scenario. Checking indicator==-1
-         * first fixes this; the plain NULL-handle check below now only
-         * ever fires for a genuinely unexpected case, not the normal
-         * one. */
+        if (!p->cursor_stmt)
+        {
+            logger_write(ctx->procedure_logger, LOG_WARN, __func__, 0,
+                         "CURSOR param '%s' has NULL stmt handle - "
+                         "skipping", p->param_name);
+            continue;
+        }
+
         if (p->indicator == -1)
         {
             logger_write(ctx->procedure_logger, LOG_INFO, __func__, 0,
@@ -730,14 +707,6 @@ int execute_procedure(oci_context_t                *ctx,
              * defensive - matches the driver's own out_cursor_handle=
              * NULL contract for that case, not expected to fire. */
             p->cursor_stmt = NULL;
-            continue;
-        }
-
-        if (!p->cursor_stmt)
-        {
-            logger_write(ctx->procedure_logger, LOG_WARN, __func__, 0,
-                         "CURSOR param '%s' has NULL stmt handle - "
-                         "skipping", p->param_name);
             continue;
         }
 
