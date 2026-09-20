@@ -331,7 +331,7 @@ int main(void)
 
     int rows2 = -1;
     printf("Test 2 (dml_execute single-key)     ... ");
-    int rc2 = driver->dml_execute(&worker_ctx, &delete_l, &req2, &rows2);
+    int rc2 = driver->dml_execute(&worker_ctx, &delete_l, &req2, &rows2, NULL, 0);
     if (rc2 != 0 || rows2 != 1)
     {
         printf("FAILED - rc=%d rows_affected=%d (expected rc=0, rows=1)\n", rc2, rows2);
@@ -375,7 +375,7 @@ int main(void)
     }
     else
     {
-        int rc4 = driver->dml_execute(&worker_ctx, &delete_l, &req4, &rows4);
+        int rc4 = driver->dml_execute(&worker_ctx, &delete_l, &req4, &rows4, NULL, 0);
         if (rc4 != 0 || rows4 != 1)
         {
             printf("FAILED - dml_execute rc=%d rows_affected=%d (expected rc=0, rows=1)\n",
@@ -415,7 +415,7 @@ int main(void)
     }
     else
     {
-        int rc5 = driver->dml_execute(&worker_ctx, &delete_l, &req5, &rows5);
+        int rc5 = driver->dml_execute(&worker_ctx, &delete_l, &req5, &rows5, NULL, 0);
         if (rc5 != 0 || rows5 != 1)
         {
             printf("FAILED - rc=%d rows_affected=%d (expected rc=0, rows=1)\n", rc5, rows5);
@@ -438,7 +438,7 @@ int main(void)
     req6.bind_values = bind6;
 
     int rows6 = -1;
-    int rc6 = driver->dml_execute(&worker_ctx, &delete_l, &req6, &rows6);
+    int rc6 = driver->dml_execute(&worker_ctx, &delete_l, &req6, &rows6, NULL, 0);
     if (rc6 != 0 || rows6 != 0)
     {
         printf("FAILED - rc=%d rows_affected=%d (expected rc=0, rows=0)\n", rc6, rows6);

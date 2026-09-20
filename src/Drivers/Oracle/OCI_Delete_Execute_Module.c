@@ -617,7 +617,8 @@ int execute_delete_batch(oci_context_t     *ctx,
     dml_req.bind_count  = dc->key_count;
     dml_req.bind_values = bind_values;
 
-    if (driver->dml_execute(ctx, ctx->delete_logger, &dml_req, &rows_deleted) != 0)
+    if (driver->dml_execute(ctx, ctx->delete_logger, &dml_req, &rows_deleted,
+                             NULL, 0) != 0)
     {
         logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
                      "driver dml_execute failed for sql=%s", sql_buf);

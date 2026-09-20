@@ -334,7 +334,7 @@ int main(void)
     req2.bind_values = bind2;
 
     int rows2 = -1;
-    int rc2 = driver->dml_execute(&worker_ctx, &update_l, &req2, &rows2);
+    int rc2 = driver->dml_execute(&worker_ctx, &update_l, &req2, &rows2, NULL, 0);
     char verify2[256];
     if (rc2 != 0 || rows2 != 1)
     {
@@ -379,7 +379,7 @@ int main(void)
         req4.bind_values = bind4;
 
         int rows4 = -1;
-        int rc4 = driver->dml_execute(&worker_ctx, &update_l, &req4, &rows4);
+        int rc4 = driver->dml_execute(&worker_ctx, &update_l, &req4, &rows4, NULL, 0);
         char verify4[256];
         if (rc4 != 0 || rows4 != 1)
         {

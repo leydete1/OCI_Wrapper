@@ -1101,10 +1101,38 @@ static void oracle_select_close(db_select_cursor_t *cursor)
         } \
     } while (0)
 
+/* Added 2026-09-22, the DDL module's own abstraction pass - see
+ * db_driver.h's own doc comment on dml_execute()'s out_error_message
+ * parameter for why this needs to exist at all (execute_ddl_statement()'s
+ * own callers embed the real Oracle error text in the client-facing
+ * response, unlike every prior caller of this function). Deliberately
+ * NOT folded into ORACLE_CHECK_OCI_LOG itself - that macro is used
+ * pervasively across every function in this file, and widening its own
+ * contract would touch far more call sites than this one function
+ * actually needs changed. A second OCIErrorGet() call here (alongside
+ * ORACLE_CHECK_OCI_LOG's own) is accepted, minor duplication - OCIErrorGet
+ * is idempotent, just re-reading the same already-set error state, and
+ * this is far safer than reworking the shared macro for one caller's
+ * own need. out_buf/out_buf_size may be NULL/0 - a no-op then, matching
+ * dml_execute()'s own optional contract. */
+static void oracle_capture_error_text(oci_context_t *ctx, sword status,
+                                       char *out_buf, size_t out_buf_size)
+{
+    if (!out_buf || out_buf_size == 0) return;
+    if (status == OCI_SUCCESS || status == OCI_SUCCESS_WITH_INFO) return;
+
+    text errbuf[512]; sb4 errcode = 0;
+    OCIErrorGet(ctx->errhp, 1, NULL, &errcode, errbuf,
+                sizeof(errbuf), OCI_HTYPE_ERROR);
+    snprintf(out_buf, out_buf_size, "OCI Error %d: %s", (int)errcode, (char *)errbuf);
+}
+
 static int oracle_dml_execute(oci_context_t            *ctx,
                                logger_t                 *logger,
                                const db_dml_request_t   *req,
-                               int                      *out_rows_affected)
+                               int                      *out_rows_affected,
+                               char                     *out_error_message,
+                               size_t                    out_error_message_size)
 {
     if (!ctx || !req || !req->sql || !out_rows_affected) return -1;
     if (req->bind_count > 0 && !req->bind_values) return -1;
@@ -1120,6 +1148,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     if (prepare_rc != OCI_SUCCESS && prepare_rc != OCI_SUCCESS_WITH_INFO)
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, prepare_rc);
+        oracle_capture_error_text(ctx, prepare_rc, out_error_message, out_error_message_size);
         return -1;
     }
 
@@ -1187,6 +1216,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
         if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
         {
             ORACLE_CHECK_OCI_LOG(ctx, logger, bind_rc);
+            oracle_capture_error_text(ctx, bind_rc, out_error_message, out_error_message_size);
             free(bind_hdls);
             free(null_inds);
             OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
@@ -1206,6 +1236,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     if (exec_rc != OCI_SUCCESS && exec_rc != OCI_SUCCESS_WITH_INFO)
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, exec_rc);
+        oracle_capture_error_text(ctx, exec_rc, out_error_message, out_error_message_size);
         free(bind_hdls);
         free(null_inds);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
@@ -1219,6 +1250,7 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     if (attr_rc != OCI_SUCCESS && attr_rc != OCI_SUCCESS_WITH_INFO)
     {
         ORACLE_CHECK_OCI_LOG(ctx, logger, attr_rc);
+        oracle_capture_error_text(ctx, attr_rc, out_error_message, out_error_message_size);
         free(bind_hdls);
         free(null_inds);
         OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);

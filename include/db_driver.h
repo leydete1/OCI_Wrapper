@@ -678,6 +678,23 @@ typedef struct {
  *   of it. *out_rows_affected is only meaningful when this returns 0.
  *   Returns 0 on success, non-zero on failure.
  *
+ *   out_error_message/out_error_message_size - added 2026-09-22, the
+ *   DDL module's own abstraction pass. Optional, NULL-able (pass
+ *   out_error_message=NULL, out_error_message_size=0 to skip this
+ *   entirely) - every existing DELETE/UPDATE/INSERT/PROCEDURE call site
+ *   needs no changes at all. Unlike every prior caller, which only ever
+ *   logs a failure and lets the caller check the log file,
+ *   execute_ddl_statement()'s own callers embed the actual Oracle error
+ *   text directly in the client-facing response
+ *   (<error_message>ORA-00955: ...</error_message>) - confirmed
+ *   directly against ddl_execution_result_t's own real struct and
+ *   get_ddl_execution_response_xml()'s own real output, not assumed.
+ *   When out_error_message is non-NULL and dml_execute() returns
+ *   non-zero, it holds the same OCIErrorGet() text already written to
+ *   the log - same source, just also handed back to the caller instead
+ *   of only logged. Untouched (left as whatever the caller passed in,
+ *   typically empty) when this call succeeds.
+ *
  *   logger - added deliberately, not an oversight: unlike select_open()/
  *   select_fetch_batch() (which only ever have one caller and so could
  *   safely log via a hardcoded ctx->select_logger), this function is
@@ -829,7 +846,9 @@ typedef struct db_driver_t {
     int  (*dml_execute)(oci_context_t            *ctx,
                          logger_t                 *logger,
                          const db_dml_request_t   *req,
-                         int                      *out_rows_affected);
+                         int                      *out_rows_affected,
+                         char                     *out_error_message,
+                         size_t                    out_error_message_size);
 
     int  (*commit)(oci_context_t *ctx, logger_t *logger);
     int  (*rollback)(oci_context_t *ctx, logger_t *logger);

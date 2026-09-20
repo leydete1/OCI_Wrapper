@@ -25,30 +25,23 @@
                                         * DDL regardless)               */
 #include "XML_Helper.h"
 #include "logger.h"
+#include "db_driver.h"        /* v2 driver integration, 2026-09-22 -
+                                  dml_execute() (bind_count=0 - none of
+                                  the six DDL types ever bind a
+                                  variable) - core calls only the
+                                  vendor-neutral db_driver_get(), never
+                                  driver_oracle.h directly, same as
+                                  SELECT/DELETE/UPDATE/INSERT/PROCEDURE's
+                                  own integrations.                    */
 
 /* ------------------------------------------------------------------ */
-/*  OCI error macro - consistent with the rest of the project           */
-/*  (OCI_Insert_Execute_Module.c's own CHECK_OCI_INS, adapted to        */
-/*  write into result->error_message instead of goto-ing to a cleanup   */
-/*  label - this function has no OCI resources to release except the    */
-/*  one statement handle, freed unconditionally in Cleanup either way)  */
+/*  CHECK_OCI_DDL removed here (Phase 2, 2026-09-22) - no remaining     */
+/*  caller once execute_ddl_statement()'s own prepare/execute/release   */
+/*  moved behind driver->dml_execute() (see the v2 driver integration   */
+/*  comment above). Its own error-message-into-result->error_message    */
+/*  behaviour is now covered by dml_execute()'s own out_error_message   */
+/*  parameter pair instead, pointed directly at the same buffer.        */
 /* ------------------------------------------------------------------ */
-#define CHECK_OCI_DDL(errhp, status, result_ptr, label)                    \
-    do {                                                                    \
-        if ((status) != OCI_SUCCESS &&                                     \
-            (status) != OCI_SUCCESS_WITH_INFO)                             \
-        {                                                                   \
-            text _errbuf[512];                                              \
-            sb4  _errcode = 0;                                              \
-            OCIErrorGet((errhp), 1, NULL, &_errcode,                       \
-                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);         \
-            snprintf((result_ptr)->error_message,                          \
-                     sizeof((result_ptr)->error_message),                  \
-                     "OCI Error %d: %s", _errcode, (char *)_errbuf);       \
-            (result_ptr)->success = 0;                                      \
-            goto label;                                                    \
-        }                                                                   \
-    } while (0)
 
 /* ==================================================================
  *  execute_ddl_statement
@@ -92,7 +85,6 @@ int execute_ddl_statement(oci_context_t            *ctx,
         return 0;
     }
 
-    OCIStmt *stmt = NULL;
     struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
@@ -138,18 +130,57 @@ int execute_ddl_statement(oci_context_t            *ctx,
     tx_handle_t local_tx;
     int owns_standalone_tx = begin_standalone_tx_if_needed(ctx, &local_tx);
 
-    result->success = 1;   /* CHECK_OCI_DDL flips this to 0 on failure */
+    /* v2 driver integration (2026-09-22). The old, separate
+     * OCIStmtPrepare2/OCIStmtExecute/OCIStmtRelease calls that used to
+     * sit here are gone - dml_execute() does prepare/execute/release as
+     * one atomic call (bind_count=0 - none of the six DDL types ever
+     * bind a variable, confirmed directly against every build_*_ddl_
+     * text() function, not assumed). out_error_message/
+     * out_error_message_size point directly at result->error_message/
+     * sizeof(result->error_message) - the same buffer CHECK_OCI_DDL
+     * used to populate itself, now populated by the driver instead via
+     * the exact same OCIErrorGet() call it already makes internally
+     * for logging (see db_driver.h's own doc comment on this parameter
+     * pair - added specifically for this module's own real need to
+     * embed the actual Oracle error text in the client-facing
+     * response, unlike every other execute module in this project).
+     *
+     * Core only ever calls the vendor-neutral db_driver_get() - never
+     * reaches for driver_oracle.h directly, same reasoning as every
+     * other module's own integration. */
+    const db_driver_t *driver = db_driver_get(ctx);
+    if (!driver || !driver->dml_execute)
+    {
+        snprintf(result->error_message, sizeof(result->error_message),
+                 "db_driver_get() returned an incomplete driver");
+        result->success = 0;
+        logger_write(ctx->ddl_logger, LOG_ERROR, __func__, 0, "%s",
+                     result->error_message);
+        free(exec_text);
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        result->execution_time_seconds =
+            (double)(ts_end.tv_sec - ts_start.tv_sec) +
+            (double)(ts_end.tv_nsec - ts_start.tv_nsec) / 1e9;
+        end_standalone_tx_if_owned(ctx, owns_standalone_tx);
+        return 0;
+    }
 
-    CHECK_OCI_DDL(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)exec_text, (ub4)strlen(exec_text),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
-        result, Cleanup);
+    result->success = 1;   /* dml_execute() failure flips this to 0 below */
 
-    CHECK_OCI_DDL(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp,
-                       1, 0, NULL, NULL, OCI_DEFAULT),
-        result, Cleanup);
+    db_dml_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql         = exec_text;
+    req.bind_count  = 0;
+    req.bind_values = NULL;
+
+    int rows_affected = 0;   /* unused for DDL - no meaningful row count */
+    if (driver->dml_execute(ctx, ctx->ddl_logger, &req, &rows_affected,
+                             result->error_message,
+                             sizeof(result->error_message)) != 0)
+    {
+        result->success = 0;
+        goto Cleanup;
+    }
 
     /* No explicit OCITransCommit - DDL auto-commits unconditionally,
      * see header doc comment. Issuing one here would be a harmless
@@ -160,8 +191,6 @@ int execute_ddl_statement(oci_context_t            *ctx,
                  "execute_ddl_statement OK: operation=%s", label);
 
 Cleanup:
-    if (stmt)
-        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
     free(exec_text);
 
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
