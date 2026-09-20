@@ -395,6 +395,134 @@ typedef struct {
 } db_lob_write_request_t;
 
 /*
+ * db_proc_param_direction_t / db_proc_param_type_t
+ *
+ * Added 2026-09-21, EXECUTE_PROCEDURE's own abstraction pass - genuinely
+ * new territory, not an extension of anything DELETE/UPDATE/INSERT
+ * built (their shared dml_execute()/dml_execute_returning_rowids()
+ * family assumes positional, input-only, single-type binds; this
+ * module's real bind shape is none of those - see db_proc_param_t's
+ * own doc comment below). Deliberately its own enum here, not a reuse
+ * of OCI_Execute_Procedure_Module.h's own param_direction_t - db_driver.h
+ * stays self-contained, no dependency on any module-specific header,
+ * same as every other struct in this file.
+ */
+typedef enum {
+    DB_PROC_DIR_IN     = 0,
+    DB_PROC_DIR_OUT    = 1,
+    DB_PROC_DIR_IN_OUT = 2
+} db_proc_param_direction_t;
+
+typedef enum {
+    DB_PROC_TYPE_STR    = 0,   /* VARCHAR2/DATE/TIMESTAMP - bound SQLT_STR.
+                                   Any TO_DATE()/TO_TIMESTAMP() wrapping a
+                                   DATE/TIMESTAMP value needs is core's
+                                   own concern, applied before the value
+                                   ever reaches this struct - same
+                                   division of responsibility as every
+                                   other module's own SQL-text-building
+                                   step, untouched by this pass.         */
+    DB_PROC_TYPE_INT    = 1,   /* NUMBER/INTEGER - bound SQLT_INT        */
+    DB_PROC_TYPE_CURSOR = 2    /* SYS_REFCURSOR - bound SQLT_RSET, OUT
+                                   only. Never IN or IN_OUT - a cursor
+                                   can't be passed in, confirmed against
+                                   level2_validate_procedure()'s own
+                                   check rather than assumed.            */
+} db_proc_param_type_t;
+
+/*
+ * db_proc_param_t
+ *
+ * One request-side parameter, carrying its own post-execute output slot
+ * on the same entry - IN_OUT genuinely needs both together, matching
+ * OCI_Execute_Procedure_Module.c's own bind_parameters(): the very same
+ * OCI bind buffer is read for the IN value and overwritten with the OUT
+ * value by one OCIBindByName call, not two separate binds.
+ *
+ * name is the bind variable name without its leading ':' -
+ * build_plsql_block() (core-side, untouched by this pass) already wrote
+ * "BEGIN proc(:P1, :P2...); END;" using these same names before this
+ * struct is ever built; the driver binds by NAME here, not position -
+ * this module's own genuine bind shape, unlike every other execute
+ * module's positional binds.
+ *
+ * out_value/out_value_size follow the same "caller-owned buffer, driver
+ * only writes into it" convention already used elsewhere in this file
+ * (see db_lob_write_request_t's own file_path/inline_text, never
+ * driver-allocated) - not a db_rowid_result_t-style driver-allocated,
+ * separately-freed output. Unlike a dynamically-sized ROWID list, every
+ * scalar OUT value here has one known, bounded size decided entirely by
+ * core (MAX_PARAM_VALUE_SIZE in the module calling this), so there is
+ * nothing here that genuinely needs driver-side allocation.
+ */
+typedef struct {
+    const char                *name;
+    db_proc_param_type_t       type;
+    db_proc_param_direction_t  direction;
+
+    const char *in_value;      /* IN/IN_OUT value - NULL means SQL NULL,
+                                   same convention as every other bind
+                                   interface in this file. Ignored for a
+                                   pure OUT param, and always for
+                                   CURSOR (never has a meaningful value
+                                   going in).                            */
+
+    char   *out_value;         /* caller-owned buffer, written for
+                                   STR-typed OUT/IN_OUT only, untouched
+                                   otherwise - caller must size it
+                                   itself via out_value_size.            */
+    size_t  out_value_size;
+    int     out_int;           /* written for INT-typed OUT/IN_OUT only */
+    int     out_is_null;       /* driver sets 1 if the returned OUT
+                                   value (any type) is genuinely NULL -
+                                   out_value/out_int's own content is
+                                   then meaningless. Matches
+                                   proc_param_t's own indicator==-1
+                                   check today.                          */
+
+    void   *out_cursor_handle; /* CURSOR OUT only - opaque; an Oracle
+                                   OCIStmt* under the hood, but never
+                                   typed as one here (core stays vendor-
+                                   neutral). NULL if this cursor was
+                                   never actually opened by the
+                                   procedure - a real, valid outcome,
+                                   not an error (see
+                                   UNIT_TEST_CURSOR_PROC's own
+                                   deliberately-conditional OPEN). Pass
+                                   directly to select_open_from_cursor()
+                                   to fetch it - ownership transfers
+                                   there, and select_close() afterward
+                                   releases the underlying cursor
+                                   statement too, same as it already
+                                   releases a normal SELECT's own
+                                   prepared statement. Never use this
+                                   for a non-CURSOR param.               */
+} db_proc_param_t;
+
+/*
+ * db_proc_execute_request_t
+ *
+ * plsql_block must already be a complete, ready-to-prepare anonymous
+ * block ("BEGIN proc(:P1,...); END;") - build_plsql_block() (core-side,
+ * untouched by this pass) already builds this exactly as today.
+ */
+typedef struct {
+    const char       *plsql_block;
+    int                param_count;
+    db_proc_param_t   *params;      /* NOT const - dml_execute_procedure()
+                                        writes each entry's own out_value/
+                                        out_int/out_is_null/
+                                        out_cursor_handle fields in place.
+                                        Deliberate deviation from the
+                                        const-request convention every
+                                        other *_request_t in this file
+                                        follows - genuinely necessary
+                                        here, not an oversight, since
+                                        IN_OUT's whole point is a value
+                                        that changes.                    */
+} db_proc_execute_request_t;
+
+/*
  * db_column_meta_t
  *
  * One entry per column, returned by select_open() from the DESCRIBE
@@ -624,6 +752,50 @@ typedef struct {
  *   a genuinely empty value, which is a no-op success, not an error -
  *   matches today's is_empty short-circuit), non-zero on failure.
  *   *out_bytes_written is only meaningful when this returns 0.
+ *
+ * dml_execute_procedure()
+ *   Added 2026-09-21, EXECUTE_PROCEDURE's own abstraction pass - see
+ *   db_proc_param_t's own doc comment above for the full "why is this
+ *   genuinely different from dml_execute()" reasoning (named, mixed-
+ *   type, two-way binds - nothing already built fits this). One
+ *   self-contained call - prepare, bind every param by name and type,
+ *   execute (always iters=1, PL/SQL anonymous blocks can't be array-
+ *   executed - confirmed directly against the module's own Stage 4
+ *   comment), collect every scalar OUT/IN_OUT value in place, stash
+ *   every CURSOR OUT param's own open statement handle, release the
+ *   outer block's own statement (independent of any CURSOR handles,
+ *   which persist until fetched). Does NOT commit, and core never
+ *   needs to call commit()/rollback() after this either - procedures
+ *   manage their own transactions internally, confirmed directly
+ *   against this module's own doc comment ("no commit issued by this
+ *   module directly"), not assumed. No row-count concept exists here
+ *   at all, unlike every DML call in this file - returns only 0 on
+ *   success, non-zero on failure.
+ *
+ * select_open_from_cursor()
+ *   Added 2026-09-21, EXECUTE_PROCEDURE's own abstraction pass - the
+ *   piece that makes reusing SELECT's own proven fetch machinery for a
+ *   CURSOR OUT parameter genuinely possible, replacing a second,
+ *   older-style parallel fetch implementation
+ *   (fetch_cursor_to_xml()/cur_batch_ctx_t in
+ *   OCI_Execute_Procedure_Module.c) that wrote straight to XML rather
+ *   than through the resultset_t/response_write_xml() pipeline every
+ *   other module already uses. Takes cursor_handle - a
+ *   db_proc_param_t's own out_cursor_handle from a prior
+ *   dml_execute_procedure() call - and does only the DESCRIBE/DEFINE
+ *   half of what select_open() does; the prepare/execute half already
+ *   happened as part of the procedure's own execute. Returns the exact
+ *   same db_select_cursor_t/db_column_meta_t[]/column_count/batch_size
+ *   shape select_open() returns, so select_fetch_batch()/select_close()
+ *   work completely unchanged afterward - genuine reuse of an already-
+ *   proven path, not a parallel one. select_close() releases the
+ *   underlying cursor statement too, same as it already releases a
+ *   normal SELECT's own prepared statement - no separate cleanup call
+ *   exists or is needed for a fetched cursor handle. Returns 0 on
+ *   success, non-zero on failure (including DB_SELECT_UNSUPPORTED_LOB,
+ *   same meaning as select_open()'s own use of it, if the cursor's
+ *   result has a LOB column this pass's driver doesn't support through
+ *   this interface yet).
  */
 typedef struct db_driver_t {
     const char *driver_name;   /* e.g. "oracle" - for logging only,
@@ -675,6 +847,19 @@ typedef struct db_driver_t {
                          logger_t                        *logger,
                          const db_lob_write_request_t   *req,
                          uint64_t                        *out_bytes_written);
+
+    int  (*dml_execute_procedure)(
+                         oci_context_t               *ctx,
+                         logger_t                     *logger,
+                         db_proc_execute_request_t   *req);
+
+    int  (*select_open_from_cursor)(
+                         oci_context_t              *ctx,
+                         void                       *cursor_handle,
+                         db_select_cursor_t        **out_cursor,
+                         db_column_meta_t          **out_columns,
+                         int                         *out_column_count,
+                         int                         *out_batch_size);
 } db_driver_t;
 
 /*
