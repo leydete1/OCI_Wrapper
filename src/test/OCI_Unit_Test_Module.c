@@ -1035,16 +1035,16 @@ static int test_ut_date_005(oci_context_t *ctx, char *message, size_t message_ma
  * UT-CONN-002 already uses.
  *
  * 2026-08-01 redesign: the original version of this test created a
- * genuinely separate, independent OCI_Connect()/OCI_Disconnect() cycle
+ * genuinely separate, independent OCI_Connect_standalone()/OCI_Disconnect_standalone() cycle
  * on its own temp_ctx, specifically to exercise the direct (non-
  * pooled) connect path in isolation. Found via a real Tier 2 run to
  * destabilise the REAL, already-active connection - every metadata
  * lookup after this test ran began failing consistently and
  * permanently with an empty "OCI Error 0" (the classic signature of
  * OCI_INVALID_HANDLE, where OCIErrorGet() finds nothing to report on
- * the now-bad handle). OCI_Connect()/OCI_Disconnect() are correctly,
+ * the now-bad handle). OCI_Connect_standalone()/OCI_Disconnect_standalone() are correctly,
  * independently scoped at the C level (OCIEnvCreate() writes into
- * whichever ctx is passed in, OCI_Disconnect() only frees that same
+ * whichever ctx is passed in, OCI_Disconnect_standalone() only frees that same
  * ctx's own handles) - the corruption most likely happens at a lower
  * level, inside Oracle's own native client library (libclntsh), which
  * may not be safe for two independent OCIEnvCreate() environments to
@@ -1177,7 +1177,7 @@ static int test_ut_conn_003(oci_context_t *ctx, char *message, size_t message_ma
  * poison every test that runs after this one in the same pass, for a
  * reason that has nothing to do with whatever those tests are actually
  * checking. Instead, this test opens its own separate, independent,
- * non-pooled connection (OCI_Connect()) specifically to be the victim,
+ * non-pooled connection (OCI_Connect_standalone()) specifically to be the victim,
  * and uses the test's own already-open ctx only to issue the KILL
  * SESSION command against that separate connection - ctx itself is
  * never at risk.
@@ -1207,7 +1207,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
     memset(&victim, 0, sizeof(victim));
     victim.ini = ctx->ini;
 
-    if (OCI_Connect(&victim) != 0)
+    if (OCI_Connect_standalone(&victim) != 0)
     {
         snprintf(message, message_max,
                  "Could not open a separate, independent connection to "
@@ -1221,7 +1221,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
                  "Freshly-opened victim connection already reports as "
                  "not alive, before anything has killed it - "
                  "OCI_Pool_session_is_alive() itself looks broken");
-        OCI_Disconnect(&victim);
+        OCI_Disconnect_standalone(&victim);
         return -1;
     }
 
@@ -1249,7 +1249,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
     {
         snprintf(message, message_max,
                  "Could not determine the victim connection's own SID");
-        OCI_Disconnect(&victim);
+        OCI_Disconnect_standalone(&victim);
         return -1;
     }
 
@@ -1283,7 +1283,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
                  "Could not determine the victim connection's own "
                  "SERIAL# via V$SESSION (sid=%d) - this may itself need "
                  "a grant (SELECT_CATALOG_ROLE or equivalent)", sid);
-        OCI_Disconnect(&victim);
+        OCI_Disconnect_standalone(&victim);
         return -1;
     }
 
@@ -1308,7 +1308,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
                  "privilege; grant it (or run this specific test as a "
                  "user who has it) to actually exercise self-healing "
                  "reconnect detection", sid, serial);
-        OCI_Disconnect(&victim);
+        OCI_Disconnect_standalone(&victim);
         return -1;
     }
 
@@ -1322,7 +1322,7 @@ static int test_ut_conn_005(oci_context_t *ctx, char *message, size_t message_ma
         result = -1;
     }
 
-    OCI_Disconnect(&victim);
+    OCI_Disconnect_standalone(&victim);
     return result;
 }
 

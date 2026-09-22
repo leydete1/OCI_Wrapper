@@ -29,7 +29,7 @@
 
 
 
-int OCI_Connect(oci_context_t *ctx)
+int OCI_Connect_standalone(oci_context_t *ctx)
 {
     struct timespec ts_start, ts_end;
     int rc = 0;
@@ -267,7 +267,7 @@ Cleanup:
 
 
 
-void OCI_Disconnect(oci_context_t *ctx)
+void OCI_Disconnect_standalone(oci_context_t *ctx)
 {
 	sword status;
 	char entry_msg[512];

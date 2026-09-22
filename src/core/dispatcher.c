@@ -68,41 +68,23 @@
 #include "OCI_Execute_Procedure_Module.h"
 #include "OCI_Auth_Manager.h"             /* auth_authenticate() - new,
                                             * Security Module Stage 2 */
-#include "OCI_DDL_Create_User_Module.h"   /* create_user_request_t,
-                                              get_create_user_template(),
-                                              build_create_user_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep) */
-#include "OCI_DDL_Grant_Module.h"         /* grant_request_t,
-                                              get_grant_template(),
-                                              build_grant_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep), second
-                                              operation */
-#include "OCI_DDL_Create_Table_Module.h"  /* create_table_request_t,
-                                              get_create_table_template(),
-                                              build_create_table_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep), third
-                                              operation */
-#include "OCI_DDL_Drop_Table_Module.h"    /* drop_table_request_t,
-                                              get_drop_table_template(),
-                                              build_drop_table_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep), fourth
-                                              operation */
-#include "OCI_DDL_Create_View_Module.h"   /* create_view_request_t,
-                                              get_create_view_template(),
-                                              build_create_view_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep), fifth
-                                              operation */
-#include "OCI_DDL_Create_Procedure_Module.h" /* create_procedure_request_t,
-                                              get_create_procedure_template(),
-                                              build_create_procedure_ddl_text() -
-                                              new, Independent DDL Module
-                                              proposal (03-Sep), sixth
-                                              operation */
+#include "OCI_DDL_Modules.h"              /* create_user_request_t,
+                                              grant_request_t,
+                                              create_table_request_t,
+                                              drop_table_request_t,
+                                              create_view_request_t,
+                                              create_procedure_request_t
+                                              and every get_*_template()/
+                                              build_*_ddl_text() - merge of
+                                              the six Independent DDL Module
+                                              headers (2026-09-20 follow-up
+                                              proposal, connection
+                                              consolidation + DDL merge item)
+                                              - see OCI_DDL_Modules.h itself
+                                              for the six original headers'
+                                              design notes, preserved there
+                                              verbatim under each module's
+                                              own section. */
 #include "OCI_DDL_Execute_Module.h"       /* execute_ddl_statement(),
                                               get_ddl_execution_response_xml/
                                               json() - new, shared executor

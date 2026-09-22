@@ -30,35 +30,22 @@
 #include "metadata_cache_meta.h"         /* metadata_cache_get_or_fetch()    */
 #include "OCI_Auth_Manager.h"            /* authenticate_request_t - new,
                                            * Security Module Stage 2         */
-#include "OCI_DDL_Create_User_Module.h"  /* create_user_request_t,
-                                             validate_create_user_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep) */
-#include "OCI_DDL_Grant_Module.h"        /* grant_request_t,
-                                             validate_grant_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep), second
-                                             operation */
-#include "OCI_DDL_Create_Table_Module.h" /* create_table_request_t,
-                                             validate_create_table_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep), third
-                                             operation */
-#include "OCI_DDL_Drop_Table_Module.h"   /* drop_table_request_t,
-                                             validate_drop_table_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep), fourth
-                                             operation */
-#include "OCI_DDL_Create_View_Module.h"  /* create_view_request_t,
-                                             validate_create_view_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep), fifth
-                                             operation */
-#include "OCI_DDL_Create_Procedure_Module.h" /* create_procedure_request_t,
-                                             validate_create_procedure_request() -
-                                             new, Independent DDL Module
-                                             proposal (03-Sep), sixth
-                                             operation */
+#include "OCI_DDL_Modules.h"             /* create_user_request_t,
+                                             grant_request_t,
+                                             create_table_request_t,
+                                             drop_table_request_t,
+                                             create_view_request_t,
+                                             create_procedure_request_t and
+                                             every validate_*_request() -
+                                             merge of the six Independent
+                                             DDL Module headers (2026-09-20
+                                             follow-up proposal, connection
+                                             consolidation + DDL merge item)
+                                             - see OCI_DDL_Modules.h itself
+                                             for the six original headers'
+                                             design notes, preserved there
+                                             verbatim under each module's
+                                             own section. */
 #include "OCI_Authz_Manager.h"           /* check_permission_request_t -
                                            * new, Security Module Stage 5    */
 

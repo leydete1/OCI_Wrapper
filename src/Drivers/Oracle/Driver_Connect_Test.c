@@ -2,7 +2,7 @@
  * Driver_Connect_Test.c
  *
  * Validates db_driver_t's connect()/disconnect() against the existing,
- * known-good OCI_Connect()/OCI_Disconnect() path - order-of-attack step
+ * known-good OCI_Connect_standalone()/OCI_Disconnect_standalone() path - order-of-attack step
  * 4 from DB_Driver_Abstraction_Notes.md: "Validate against the existing
  * connect/select test fixtures - same external behavior, different
  * internal wiring." Modelled directly on Level2_Insert_Test.c's own
@@ -10,7 +10,7 @@
  * is a fair comparison against a pattern already proven live.
  *
  * What it does:
- *   Round A - connect via the existing direct call:  OCI_Connect(&ctx_a)
+ *   Round A - connect via the existing direct call:  OCI_Connect_standalone(&ctx_a)
  *   Round B - connect via the new interface:         driver->connect(&ctx_b)
  *   Both use a fresh, non-pooled ctx (pool_slot_index = -1), same
  *   config.ini, same credentials - so success/failure and timing should
@@ -115,13 +115,13 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     int failed = 0;
 
-    /* ---- Round A: direct OCI_Connect(), the known-good path ---- */
+    /* ---- Round A: direct OCI_Connect_standalone(), the known-good path ---- */
     oci_context_t ctx_a; app_config_t config_a;
     logger_t err_a, conn_a;
     printf("Round A (direct OCI_Connect)  ... ");
     if (init_ctx(&ctx_a, &config_a, &err_a, &conn_a) != 0) { printf("INIT FAILED\n"); return 1; }
-    if (OCI_Connect(&ctx_a) != 0) { printf("FAILED - see %s\n", config_a.connection_log_file_name); failed = 1; }
-    else { printf("OK\n"); OCI_Disconnect(&ctx_a); }
+    if (OCI_Connect_standalone(&ctx_a) != 0) { printf("FAILED - see %s\n", config_a.connection_log_file_name); failed = 1; }
+    else { printf("OK\n"); OCI_Disconnect_standalone(&ctx_a); }
 
     /* ---- Round B: via db_driver_t ---- */
     oci_context_t ctx_b; app_config_t config_b;

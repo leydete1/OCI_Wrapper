@@ -2,12 +2,12 @@
  * driver_oracle.c
  *
  * connect()/disconnect() are thin delegating wrappers around the
- * existing OCI_Connect()/OCI_Disconnect() (OCI_Connection.c) - they are
- * NOT reimplemented here, and OCI_Connect()/OCI_Disconnect() themselves
+ * existing OCI_Connect_standalone()/OCI_Disconnect_standalone() (OCI_Connection.c) - they are
+ * NOT reimplemented here, and OCI_Connect_standalone()/OCI_Disconnect_standalone() themselves
  * are NOT touched or moved out of OCI_Connection.c in this pass.
  *
  * Why delegate instead of relocate:
- *   OCI_Connect()/OCI_Disconnect() have three other direct callers today
+ *   OCI_Connect_standalone()/OCI_Disconnect_standalone() have three other direct callers today
  *   (Data_Manager_Bootstrap.c, Level2_Insert_Test.c, OCI_Unit_Test_Module.c
  *   - the last one specifically exercises a standalone, non-pooled
  *   connect/disconnect cycle as a stale-handle test victim). None of
@@ -21,7 +21,7 @@
  *   with zero risk to the other three callers, which are completely
  *   unaffected by this file's existence.
  *
- *   Physically moving the OCI_Connect()/OCI_Disconnect() bodies into
+ *   Physically moving the OCI_Connect_standalone()/OCI_Disconnect_standalone() bodies into
  *   this file - and updating the three other callers to go through
  *   db_driver_t instead - is a follow-up, purely mechanical pass once
  *   this delegation has been validated against Level2_Insert_Test.c's
@@ -31,8 +31,8 @@
  * validated - PASS confirmed live against freepdb1).
  * connect()/disconnect() below now do the ctx->ini->use_connection_pool
  * if/else that Data_Manager_Bootstrap.c used to do inline at every call
- * site (OCI_Connect_pool()/OCI_Disconnect_pool() vs OCI_Connect()/
- * OCI_Disconnect()). Bootstrap itself is NOT updated to call through
+ * site (OCI_Connect_pool()/OCI_Disconnect_pool() vs OCI_Connect_standalone()/
+ * OCI_Disconnect_standalone()). Bootstrap itself is NOT updated to call through
  * db_driver_t in this pass - same reasoning as above: prove it against
  * a fixture first (see Driver_Pool_Test.c), then switch real callers
  * over as a separate, low-risk mechanical step once proven, without
@@ -104,7 +104,7 @@ static int oracle_connect(oci_context_t *ctx)
     if (ctx->ini->use_connection_pool)
         return OCI_Connect_pool(ctx);
 
-    return OCI_Connect(ctx);
+    return OCI_Connect_standalone(ctx);
 }
 
 static void oracle_disconnect(oci_context_t *ctx)
@@ -115,7 +115,7 @@ static void oracle_disconnect(oci_context_t *ctx)
         return;
     }
 
-    OCI_Disconnect(ctx);
+    OCI_Disconnect_standalone(ctx);
 }
 
 static int oracle_get_session(oci_context_t *ctx, oci_context_t *worker_ctx)

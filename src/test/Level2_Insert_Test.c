@@ -15,7 +15,7 @@
  * actually touched by the code paths this harness exercises
  * (error/logger/connection/Metadata/insert - logger_write() is
  * NULL-safe, so every other logger is deliberately left NULL rather
- * than pulled in for no reason), connects once via OCI_Connect(), then
+ * than pulled in for no reason), connects once via OCI_Connect_standalone(), then
  * runs level1_parse() + level2_validate_insert() against every
  * .xml/.json fixture in INPUT_XML_DIR, disconnecting once at the end.
  *
@@ -273,7 +273,7 @@ int main_25JUL(int argc, char **argv)
         return 1;
     }
 
-    /* ---- Only the loggers actually touched by OCI_Connect(),
+    /* ---- Only the loggers actually touched by OCI_Connect_standalone(),
      * metadata_cache_get_or_fetch()/get_request_metadata(),
      * level1_parse() (uses ctx->logger, not ctx->select_logger -
      * confirmed by grep), and level2_validate_insert()/validate_field() -
@@ -339,13 +339,13 @@ int main_25JUL(int argc, char **argv)
     ctx.metadata_cache = metadata_cache_init(ctx.ini, ctx.Metadata_logger);
     printf("metadata_cache_init() -> %s\n", ctx.metadata_cache ? "enabled" : "disabled/NULL");
 
-    printf("calling OCI_Connect()...\n");
-    if (OCI_Connect(&ctx) != 0)
+    printf("calling OCI_Connect_standalone()...\n");
+    if (OCI_Connect_standalone(&ctx) != 0)
     {
         fprintf(stderr, "OCI_Connect failed - check %s\n", config.connection_log_file_name);
         return 1;
     }
-    printf("OCI_Connect() OK\n");
+    printf("OCI_Connect_standalone() OK\n");
 
     int rc;
     if (file_mode)
@@ -363,9 +363,9 @@ int main_25JUL(int argc, char **argv)
         rc = run_directory(&ctx, INPUT_XML_DIR);
     }
 
-    printf("calling OCI_Disconnect()...\n");
-    OCI_Disconnect(&ctx);
-    printf("OCI_Disconnect() done\n");
+    printf("calling OCI_Disconnect_standalone()...\n");
+    OCI_Disconnect_standalone(&ctx);
+    printf("OCI_Disconnect_standalone() done\n");
 
     /* ---- Cleanup - closes the two real leaks LeakSanitizer found.
      * The rest of what LSan reports (OCIEnvCreate/kpeDbgInitDBGC/

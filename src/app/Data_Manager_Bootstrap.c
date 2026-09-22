@@ -76,6 +76,22 @@
 
 #include "OCI_Connection.h"
 #include "OCI_Connection_Pool.h"
+#include "db_driver.h"                   /* db_driver_get(), db_driver_t -
+                                             connect()/disconnect()/
+                                             get_session() now route
+                                             through here instead of
+                                             branching on use_pool inline
+                                             (2026-09-22 follow-up
+                                             proposal, connection
+                                             consolidation item) - see
+                                             the use_pool mirror + driver
+                                             acquisition near "Determine
+                                             connection mode" below.     */
+#include "driver_oracle.h"                /* db_driver_get()'s Oracle
+                                             implementation - still the
+                                             only driver this project has,
+                                             same as every other caller of
+                                             db_driver_get().             */
 #include "OCI_Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Delete_Execute_Module.h"
@@ -1348,7 +1364,25 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Mirror the resolved value (ini default, possibly overridden by
+     * the command-line argument above) back into
+     * ctx.ini->use_connection_pool - driver->connect()/disconnect()/
+     * get_session() below all read that field directly (see
+     * driver_oracle.c's oracle_connect()), so this is what makes the
+     * command-line override actually take effect through the driver
+     * rather than the driver silently ignoring it and using whatever
+     * config.ini said. */
+    ctx.ini->use_connection_pool = use_pool;
 
+    const db_driver_t *driver = db_driver_get(&ctx);
+    if (!driver || !driver->connect || !driver->disconnect ||
+        !driver->get_session)
+    {
+        logger_write(&logger, LOG_ERROR, __func__, 0,
+                     "db_driver_get() returned an incomplete driver");
+        logger_close(&logger);
+        return -1;
+    }
 
 
 
@@ -1366,35 +1400,29 @@ int main(int argc, char *argv[])
     logger_write(&logger, LOG_INFO, __func__, 0,
                  "================================================\n");
 
-    /* ---- Connect ---- */
-    if (use_pool)
+    /* ---- Connect ----
+     * Routed through driver->connect() (driver_oracle.c's
+     * oracle_connect()) rather than branching on use_pool here
+     * directly - oracle_connect() does the identical
+     * ctx->ini->use_connection_pool if/else itself, and
+     * ctx.ini->use_connection_pool was just set to this resolved
+     * use_pool value above (ini default, possibly overridden by the
+     * command-line argument), so there is exactly one source of
+     * truth for the branch, not two - the follow-up mechanical pass
+     * driver_oracle.c's own top-of-file comment anticipated, now
+     * that Driver_Pool_Test.c/Driver_Connect_Test.c have both
+     * proven the delegation. */
+    logger_write(&logger, LOG_INFO, __func__, 0,
+                 "Calling driver->connect (use_connection_pool=%d)", use_pool);
+    if (driver->connect(&ctx) != 0)
     {
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "Calling OCI_Connect_pool");
-        if (OCI_Connect_pool(&ctx) != 0)
-        {
-            logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "OCI_Connect_pool failed");
-            logger_close(&logger);
-            return -1;
-        }
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "OCI_Connect_pool OK");
+        logger_write(&logger, LOG_ERROR, __func__, 0,
+                     "driver->connect failed");
+        logger_close(&logger);
+        return -1;
     }
-    else
-    {
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "Calling OCI_Connect");
-        if (OCI_Connect(&ctx) != 0)
-        {
-            logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "OCI_Connect failed");
-            logger_close(&logger);
-            return -1;
-        }
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "OCI_Connect OK");
-    }
+    logger_write(&logger, LOG_INFO, __func__, 0,
+                 "driver->connect OK");
 
     /* ---- Startup self-test ----
      * ctx is fully set up at this point (loggers + connection) - see
@@ -1629,7 +1657,7 @@ int main(int argc, char *argv[])
                      "Failed to open input_xml dir: %s", input_dir);
         metrics_writer_stop_and_join(ctx.metrics_writer);
         shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-        use_pool ? OCI_Disconnect_pool(&ctx) : OCI_Disconnect(&ctx);
+        driver->disconnect(&ctx);
         logger_close(&logger);
         return -1;
     }
@@ -1672,7 +1700,7 @@ int main(int argc, char *argv[])
 
     if (use_pool)
     {
-        if (OCI_Pool_get_session(&ctx, &worker_ctx) != 0)
+        if (driver->get_session(&ctx, &worker_ctx) != 0)
         {
             logger_write(&logger, LOG_ERROR, __func__, 0,
                          "OCI_Pool_get_session failed - cannot start "
@@ -1680,7 +1708,7 @@ int main(int argc, char *argv[])
             closedir(dir);
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            OCI_Disconnect_pool(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -1800,7 +1828,7 @@ int main(int argc, char *argv[])
                          "start.");
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            OCI_Disconnect(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -1813,7 +1841,7 @@ int main(int argc, char *argv[])
          * for its logger pointers), and every worker thread below
          * borrows its own independent session anyway. Release this one
          * now rather than holding it uselessly for the whole run.      */
-        OCI_Pool_release_session(&ctx, tx_ctx);
+        driver->release_session(&ctx, tx_ctx);
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "Released the startup-only pinned session - each "
                      "worker thread borrows its own below");
@@ -1832,7 +1860,7 @@ int main(int argc, char *argv[])
                          "consumer_file.ini (both must be > 0)");
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            OCI_Disconnect_pool(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -1877,7 +1905,7 @@ int main(int argc, char *argv[])
             queue_manager_destroy(qm);
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            OCI_Disconnect_pool(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -1899,7 +1927,7 @@ int main(int argc, char *argv[])
             queue_manager_destroy(qm);
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            OCI_Disconnect_pool(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -2020,7 +2048,7 @@ int main(int argc, char *argv[])
         metrics_writer_stop_and_join(ctx.metrics_writer);
 
         shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-        OCI_Disconnect_pool(&ctx);
+        driver->disconnect(&ctx);
         logger_close(&logger);
         return 0;
     }
@@ -2081,7 +2109,7 @@ int main(int argc, char *argv[])
                          "down.");
             metrics_writer_stop_and_join(ctx.metrics_writer);
             shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-            if (use_pool) OCI_Disconnect_pool(&ctx); else OCI_Disconnect(&ctx);
+            driver->disconnect(&ctx);
             logger_close(&logger);
             return -1;
         }
@@ -2102,7 +2130,7 @@ int main(int argc, char *argv[])
 
         metrics_writer_stop_and_join(ctx.metrics_writer);
         shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
-        if (use_pool) OCI_Disconnect_pool(&ctx); else OCI_Disconnect(&ctx);
+        driver->disconnect(&ctx);
         logger_close(&logger);
         return 0;
     }
@@ -2309,7 +2337,7 @@ int main(int argc, char *argv[])
      *      has been committed or rolled back ---- */
     if (use_pool)
     {
-        OCI_Pool_release_session(&ctx, &worker_ctx);
+        driver->release_session(&ctx, &worker_ctx);
         logger_write(&logger, LOG_INFO, __func__, 0,
                      "Released pinned pool session back to pool");
     }
@@ -2347,18 +2375,9 @@ int main(int argc, char *argv[])
      * use_pool (response to closure proposal, 13 Aug 2026). */
     shutdown_metrics_pool(&metrics_ctx, metrics_pool_connected);
 
-    if (use_pool)
-    {
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "Calling OCI_Disconnect_pool");
-        OCI_Disconnect_pool(&ctx);
-    }
-    else
-    {
-        logger_write(&logger, LOG_INFO, __func__, 0,
-                     "Calling OCI_Disconnect");
-        OCI_Disconnect(&ctx);
-    }
+    logger_write(&logger, LOG_INFO, __func__, 0,
+                 "Calling driver->disconnect (use_connection_pool=%d)", use_pool);
+    driver->disconnect(&ctx);
     /*Free input and output xml*/
     if (ctx.INPUT_XML)
       {

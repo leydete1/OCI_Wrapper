@@ -1699,7 +1699,7 @@ table_metadata_alltabs_t *get_table_metadata(oci_context_t *ctx,
     /* Each fetch buffer is 1024 bytes - large enough for any column
      * including INMEMORY_SERVICE_NAME VARCHAR2(1000).               */
 #define TM_BUF_SIZE  1024
-#define TM_COL_COUNT   89
+#define TM_COL_COUNT   91
 
     char      fetch_bufs[TM_COL_COUNT][TM_BUF_SIZE];
     sb2       indicators[TM_COL_COUNT];
@@ -1860,9 +1860,18 @@ table_metadata_alltabs_t *get_table_metadata(oci_context_t *ctx,
     COPY_STR(logical_replication,        86);
     COPY_STR(staging,                    87);
     COPY_STR(row_change_tracking,        88);
-    /* Note: has_reservable_column = col 89, vector_index_type = col 90
-     * but we only have 89 columns (indices 0..88).
-     * Recount: OWNER=0 ... VECTOR_INDEX_TYPE=88. Correct.            */
+    COPY_STR(has_reservable_column,      89);
+    COPY_STR(vector_index_type,          90);
+    /* Fixed 2026-09-21 (Data Manager follow-up proposal, item 2):
+     * the SELECT list actually has 91 columns (OWNER=0 ...
+     * VECTOR_INDEX_TYPE=90) - TM_COL_COUNT was 89 and the previous
+     * version of this comment's "recount" miscounted, leaving these
+     * last two columns selected but never OCIDefineByPos'd. That
+     * define/select-count mismatch is what caused OCIStmtExecute/
+     * OCIStmtFetch2 to desync and kill the session (ORA-03114) in
+     * Driver_Metadata_Test.c's Test 3/4/5 - not an environment or
+     * pool problem. Verified by counting the SELECT literal directly
+     * against TM_COL_COUNT rather than by eye a second time.          */
 
     /* ================================================================
      *  Dump all fields to Metadata_logger at DEBUG level
