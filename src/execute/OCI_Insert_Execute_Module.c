@@ -1100,8 +1100,24 @@ int execute_insert_batch(oci_context_t    *ctx,
      *
      * If ctx->active_tx is NULL this module owns the commit, which is
      * the original standalone behaviour.
-     */
-    if (ctx->active_tx)
+     *
+     * Fixed 2026-09-23 (confirmed data-loss bug, unrelated to the
+     * driver->commit() retry work done the same week): checking
+     * ctx->active_tx alone was wrong ever since
+     * begin_standalone_tx_if_needed() started giving every standalone
+     * call its own audit-only transaction identity (2026-07-26) - that
+     * self-assigned identity also made ctx->active_tx non-NULL, so
+     * this branch always thought a caller owned the transaction and
+     * always skipped the real commit below. end_standalone_tx_if_owned()
+     * only ever cleared ctx->active_tx, never actually committed, so
+     * every transaction_required=0 insert executed its OCIStmtExecute
+     * but never issued OCITransCommit - confirmed by a live isolated
+     * test (row genuinely absent from the table afterwards, reproduced
+     * twice). owns_standalone_tx (set above by
+     * begin_standalone_tx_if_needed()'s return value) is exactly the
+     * distinction needed: true only when THIS call gave itself the
+     * identity, false when an outer caller genuinely owns it.         */
+    if (ctx->active_tx && !owns_standalone_tx)
     {
         logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                       "Skipping OCITransCommit - managed transaction active "
@@ -1304,9 +1320,16 @@ Cleanup:
     logger_write(ctx->insert_logger, LOG_INFO, __func__, 0, "Stage 6: Cleanup");
 
     /* Rollback on any error (skipped when a managed transaction is active) */
+    /* Fixed 2026-09-23 - same fix as the commit-decision check above:
+     * owns_standalone_tx, not ctx->active_tx alone, is what actually
+     * distinguishes an outer caller's transaction from this call's own
+     * self-assigned audit identity. Without this fix a standalone call
+     * that errored partway through would also wrongly skip its own
+     * rollback here, leaving whatever partial work it had done neither
+     * committed nor rolled back. */
     if (rc != 0 && rows_inserted > 0)
     {
-        if (ctx->active_tx)
+        if (ctx->active_tx && !owns_standalone_tx)
         {
             logger_write(ctx->insert_logger, LOG_WARN, __func__, 0,
                          "Error detected but managed transaction is active - "

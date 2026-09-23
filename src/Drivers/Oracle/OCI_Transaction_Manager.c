@@ -387,6 +387,89 @@ int tx_begin(tx_handle_t  *handle,
  */
 #define ORA_NOTHING_TO_COMMIT  0      /* OCI_SUCCESS - already clean  */
 
+int oci_trans_commit_retry(oci_context_t *ctx, logger_t *logger,
+                            int max_retries, int retry_delay_ms,
+                            int *out_attempts, sb4 *out_ora_code)
+{
+    int   attempt    = 0;
+    sword oci_status = OCI_ERROR;
+    sb4   ora_code   = 0;          /* ORA-XXXXX from OCIErrorGet  */
+
+    /* ---- Retry loop for transient OCI errors - extracted verbatim
+     * from tx_commit() 2026-09-23, see this function's header comment
+     * in OCI_Transaction_Manager.h for why. ---- */
+    while (attempt <= max_retries)
+    {
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "OCITransCommit attempt %d/%d",
+                     attempt + 1, max_retries + 1);
+
+        oci_status = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+
+        if (oci_status == OCI_SUCCESS ||
+            oci_status == OCI_SUCCESS_WITH_INFO)
+        {
+            break;   /* success                                        */
+        }
+
+        /* ---- Extract OCI error code BEFORE deciding what to do ---- */
+        text errbuf[512] = {0};
+        ora_code = 0;
+        OCIErrorGet(ctx->errhp, 1, NULL, &ora_code,
+                    errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
+
+        logger_write(logger, LOG_WARN, __func__, 0,
+                     "OCITransCommit attempt %d returned non-success  "
+                     "oci_status=%d  ORA-%05d: %s",
+                     attempt + 1, (int)oci_status, (int)ora_code,
+                     (char *)errbuf);
+
+        /*
+         * If the individual execute modules have already committed the
+         * work (which is the current behaviour - each module calls
+         * OCITransCommit internally), Oracle may return an error here
+         * because there is genuinely no open transaction to commit.
+         * On a local non-XA connection this usually comes back as
+         * OCI_SUCCESS (no-op), but if for any reason an error is
+         * returned and the ORA code indicates "nothing outstanding",
+         * treat it as success rather than failure.
+         *
+         * Codes handled as soft success:
+         *   ORA-00000  normal successful completion
+         *   ORA-01085  preceding call did not execute  (already clean)
+         */
+        if (ora_code == 0 || ora_code == 1085)
+        {
+            logger_write(logger, LOG_INFO, __func__, 0,
+                         "ORA-%05d treated as soft success "
+                         "(no outstanding work to commit)",
+                         (int)ora_code);
+            oci_status = OCI_SUCCESS;   /* rewrite so success path runs */
+            break;
+        }
+
+        if (attempt >= max_retries)
+            break;   /* exhausted retries - fall through to failure     */
+
+        attempt++;
+
+        /* Delay before retry */
+        if (retry_delay_ms > 0)
+        {
+            struct timespec delay;
+            delay.tv_sec  = retry_delay_ms / 1000;
+            delay.tv_nsec = (long)(retry_delay_ms % 1000) * 1000000L;
+            nanosleep(&delay, NULL);
+        }
+    }
+
+    if (out_attempts) *out_attempts = attempt + 1;
+    if (out_ora_code) *out_ora_code = ora_code;
+
+    return (oci_status == OCI_SUCCESS || oci_status == OCI_SUCCESS_WITH_INFO)
+           ? 0 : -1;
+}
+
 int tx_commit(tx_handle_t  *handle,
               char        **result_xml)
 {
@@ -408,85 +491,21 @@ int tx_commit(tx_handle_t  *handle,
         return TX_ERR_NO_ACTIVE;
     }
 
-    int      rc          = TX_OK;
-    int      attempt     = 0;
-    sword    oci_status  = OCI_ERROR;
-    sb4      ora_code    = 0;          /* ORA-XXXXX from OCIErrorGet  */
+    int rc = TX_OK;
+    int attempts  = 0;
+    sb4 ora_code  = 0;
 
-    /* ---- Retry loop for transient OCI errors ---- */
-    while (attempt <= handle->max_retries)
-    {
-        logger_write(ctx->transaction_logger, LOG_INFO, __func__, 0,
-                     "OCITransCommit attempt %d/%d tx_id='%s'",
-                     attempt + 1, handle->max_retries + 1,
-                     handle->transaction_id);
-
-        oci_status = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
-
-        if (oci_status == OCI_SUCCESS ||
-            oci_status == OCI_SUCCESS_WITH_INFO)
-        {
-            break;   /* success                                        */
-        }
-
-        /* ---- Extract OCI error code BEFORE deciding what to do ---- */
-        /*
-         * Always log the OCI error immediately on every failure so the
-         * root cause appears in the transaction log even if we later
-         * decide to treat it as a soft success.  The previous version
-         * only logged during the retry wait, which meant the final
-         * failure had no Oracle error detail in the log at all.
-         */
-        text errbuf[512] = {0};
-        ora_code = 0;
-        OCIErrorGet(ctx->errhp, 1, NULL, &ora_code,
-                    errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
-
-        logger_write(ctx->transaction_logger, LOG_WARN, __func__, 0,
-                     "OCITransCommit attempt %d returned non-success  "
-                     "oci_status=%d  ORA-%05d: %s  tx_id='%s'",
-                     attempt + 1, (int)oci_status, (int)ora_code,
-                     (char *)errbuf,
-                     handle->transaction_id);
-
-        /*
-         * If the individual execute modules have already committed the
-         * work (which is the current behaviour - each module calls
-         * OCITransCommit internally), Oracle may return an error here
-         * because there is genuinely no open transaction to commit.
-         * On a local non-XA connection this usually comes back as
-         * OCI_SUCCESS (no-op), but if for any reason an error is
-         * returned and the ORA code indicates "nothing outstanding",
-         * treat it as COMMITTED rather than ABORTED.
-         *
-         * Codes handled as soft success:
-         *   ORA-00000  normal successful completion
-         *   ORA-01085  preceding call did not execute  (already clean)
-         */
-        if (ora_code == 0 || ora_code == 1085)
-        {
-            logger_write(ctx->transaction_logger, LOG_INFO, __func__, 0,
-                         "ORA-%05d treated as soft success "
-                         "(no outstanding work to commit) tx_id='%s'",
-                         (int)ora_code, handle->transaction_id);
-            oci_status = OCI_SUCCESS;   /* rewrite so success path runs */
-            break;
-        }
-
-        if (attempt >= handle->max_retries)
-            break;   /* exhausted retries - fall through to abort      */
-
-        attempt++;
-
-        /* Delay before retry */
-        if (handle->retry_delay_ms > 0)
-        {
-            struct timespec delay;
-            delay.tv_sec  = handle->retry_delay_ms / 1000;
-            delay.tv_nsec = (long)(handle->retry_delay_ms % 1000) * 1000000L;
-            nanosleep(&delay, NULL);
-        }
-    }
+    /* ---- Retry mechanics now shared with oracle_commit() (driver_
+     * oracle.c) - see oci_trans_commit_retry()'s header comment in
+     * OCI_Transaction_Manager.h. Note: the per-attempt WARN/INFO trace
+     * lines logged inside the shared helper no longer carry tx_id=
+     * (the helper is transaction-handle-agnostic) - the summary line
+     * below still does, which is the one Driver_Transaction_Test.c's
+     * Test 5 actually keys off. */
+    int commit_rc = oci_trans_commit_retry(ctx, ctx->transaction_logger,
+                                            handle->max_retries,
+                                            handle->retry_delay_ms,
+                                            &attempts, &ora_code);
 
     handle->end_time_us = tx_now_us();
     uint64_t duration   = handle->end_time_us - handle->start_time_us;
@@ -500,7 +519,7 @@ int tx_commit(tx_handle_t  *handle,
      * mean the transaction is no longer active on this thread. */
     logger_clear_txid();
 
-    if (oci_status == OCI_SUCCESS || oci_status == OCI_SUCCESS_WITH_INFO)
+    if (commit_rc == 0)
     {
         handle->status = TX_STATUS_COMMITTED;
         rc             = TX_OK;
@@ -513,7 +532,7 @@ int tx_commit(tx_handle_t  *handle,
                          handle->transaction_id,
                          handle->session_id,
                          (unsigned long long)duration,
-                         attempt + 1);
+                         attempts);
     }
     else
     {
@@ -521,7 +540,7 @@ int tx_commit(tx_handle_t  *handle,
                      "OCITransCommit FAILED after %d attempt(s) - "
                      "rolling back and setting ABORTED  "
                      "ORA-%05d  tx_id='%s'",
-                     attempt + 1, (int)ora_code,
+                     attempts, (int)ora_code,
                      handle->transaction_id);
 
         /* Best-effort rollback */

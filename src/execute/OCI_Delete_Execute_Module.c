@@ -645,8 +645,13 @@ int execute_delete_batch(oci_context_t     *ctx,
      *
      * If ctx->active_tx is NULL this module owns the commit, which is
      * the original standalone behaviour.
-     */
-    if (ctx->active_tx)
+     *
+     * Fixed 2026-09-23 (same data-loss bug as OCI_Insert_Execute_
+     * Module.c - see its own copy of this comment for the full
+     * explanation). owns_standalone_tx distinguishes "an outer caller
+     * genuinely owns this transaction" from "I only have an
+     * active_tx because I gave myself one for audit traceability".  */
+    if (ctx->active_tx && !owns_standalone_tx)
     {
         logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
                      "Commit successful rows_deleted=%d",

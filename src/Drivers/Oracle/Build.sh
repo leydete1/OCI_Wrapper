@@ -8,8 +8,8 @@
     -I/home/leyden100/eclipse-workspace/OCI_Wrapper/include \
     -I. \
     -O0 -g3 -Wall -fmessage-length=0 -fsanitize=address -fno-omit-frame-pointer \
-    -o Driver_Level2Parser_Test \
-     Driver_Level2Parser_Test.c db_driver.c driver_oracle.c  \
+    -o Driver_Transaction_Test \
+     Driver_Transaction_Test.c db_driver.c driver_oracle.c  \
      OCI_Audit_Trail_Manager.c OCI_Connection.c oci_cache.c OCI_Connection_Pool.c string_utils.c \
      ini_reader.c logger.c metrics.c  ctx_utils.c OCI_Table_Metadata_Module.c OCI_Delete_Execute_Module.c\
       OCI_Blob_Utils.c OCI_Clob_Utils.c  XML_Helper.c OCI_Resultset_Builder.c\

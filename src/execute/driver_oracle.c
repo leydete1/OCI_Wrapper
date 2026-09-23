@@ -67,6 +67,18 @@
 #include "driver_oracle.h"
 #include "OCI_Connection.h"
 #include "OCI_Connection_Pool.h"
+#include "OCI_Transaction_Manager.h"       /* oci_trans_commit_retry() -
+                                              shared retry mechanics with
+                                              tx_commit(), added 2026-09-23
+                                              so oracle_commit() gets the
+                                              same transient-error
+                                              resilience instead of a
+                                              single bare OCITransCommit
+                                              with no retry at all. See
+                                              OCI_Transaction_Manager.h's
+                                              header comment on that
+                                              function for the full
+                                              rationale.                */
 #include "OCI_Table_Metadata_Module.h"   /* get_multi_metadata() - the
                                             same OCIParamGet/OCIDefineByPos/
                                             OCIDefineArrayOfStruct work
@@ -1272,14 +1284,30 @@ static int oracle_commit(oci_context_t *ctx, logger_t *logger)
 {
     if (!ctx) return -1;
 
-    sword status = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
-    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO)
+    /* Retries via oci_trans_commit_retry() (OCI_Transaction_Manager.c)
+     * since 2026-09-23 - same tx_max_retries/tx_retry_delay_ms config
+     * fields tx_commit() uses, same ORA-00000/ORA-01085 soft-success
+     * handling. Previously this was a single bare OCITransCommit with
+     * no retry, unlike the managed-transaction path - see this
+     * function's include comment above and the header comment on
+     * oci_trans_commit_retry() itself for the full rationale. */
+    int max_retries    = ctx->ini ? ctx->ini->tx_max_retries    : 0;
+    int retry_delay_ms = ctx->ini ? ctx->ini->tx_retry_delay_ms : 0;
+    int attempts = 0;
+    sb4 ora_code = 0;
+
+    int rc = oci_trans_commit_retry(ctx, logger, max_retries, retry_delay_ms,
+                                     &attempts, &ora_code);
+    if (rc != 0)
     {
-        ORACLE_CHECK_OCI_LOG(ctx, logger, status);
+        logger_write(logger, LOG_ERROR, __func__, 0,
+                     "OCITransCommit FAILED after %d attempt(s)  ORA-%05d",
+                     attempts, (int)ora_code);
         return -1;
     }
 
-    logger_write(logger, LOG_INFO, __func__, 0, "OCITransCommit OK");
+    logger_write(logger, LOG_INFO, __func__, 0,
+                 "OCITransCommit OK (attempts=%d)", attempts);
     return 0;
 }
 
