@@ -1,0 +1,1 @@
+{"operation":"GRANT","status":"TEMPLATE_GENERATED","grantee":"MIGRATOR_USER","object_name":"EMPLOYEES","privilege_count":2,"generated_ddl":"GRANT SELECT, INSERT ON HR.EMPLOYEES TO MIGRATOR_USER;"}

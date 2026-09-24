@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_async_bad_http_json","operation":"-","error_code":"LEVEL2_ASYNC_INVALID","error_text":"Request aborted. Level 2 validation failed - async_call_back_url must be https:// - plaintext callback URLs are not permitted."}

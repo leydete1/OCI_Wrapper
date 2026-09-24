@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 5_2 - Multi-operation standalone transaction test
+ Clone of Round_5_1 (single INSERT, transaction required="0") extended
+ to THREE separate <operation> elements, still under transaction
+ required="0" - built 2026-09-23 to observe how the 2026-09-23
+ standalone-commit fix behaves when a file has more than one
+ client-level operation with no explicit transaction requested.
+
+ Each operation is a single-row INSERT into OCI_FIELD_TEST with its own
+ distinct NUMBER_COL (531, 532, 533) so each can be traced independently
+ in insert_Data_Manager.log and metrics_Data_Manager.csv - in
+ particular, whether each operation gets its OWN transaction_id (three
+ independent commits) or all three share ONE transaction_id (one
+ implicit unit), per the open question from the 2026-09-23 conversation
+ on multi-operation semantics under transaction_required=0.
+
+ No CLOB fields here (unlike Round_5/5_1) - kept deliberately simple so
+ the CLOB guard's execute_count=1 forcing doesn't add a second variable
+ to an already-open question.
+
+ Decisive check after running this in isolation:
+   SELECT COUNT(*) FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (531,532,533);
+   - expect 3 if all three operations' commits succeeded, regardless of
+     whether they used one shared transaction_id or three independent
+     ones - the count alone does not distinguish the two cases, the
+     transaction_id column in metrics_Data_Manager.csv does.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_5_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>531</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 5_2 op 1 of 3</value></field>
+            </row>
+        </operation>
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>532</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 5_2 op 2 of 3</value></field>
+            </row>
+        </operation>
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>533</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 5_2 op 3 of 3</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

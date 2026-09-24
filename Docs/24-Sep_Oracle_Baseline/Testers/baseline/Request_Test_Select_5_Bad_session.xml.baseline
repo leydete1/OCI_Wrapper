@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_select_3</audit_id>
+<operation>SESSION_VALIDATION</operation>
+<error_code>SESSION_NOT_FOUND</error_code>
+<error_text>The session_id on this request is missing, unknown, or expired - a valid session is required before this request can be processed.</error_text>
+</execution_envelope>
+</output_xml>

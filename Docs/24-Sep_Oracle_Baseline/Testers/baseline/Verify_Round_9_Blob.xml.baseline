@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<sql_query>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)</sql_query>
+<truncated>false</truncated>
+</execution_envelope>
+<resultset>
+</resultset>
+<execution_envelope>
+<num_rows>0</num_rows>
+<execution_time_total>0.000899</execution_time_total>
+<fetch_batch_size>5</fetch_batch_size>
+<blobs_extracted>0</blobs_extracted>
+<clobs_extracted>0</clobs_extracted>
+</execution_envelope>
+</output_xml>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Drop_Table_Template>
+  <operation>DROP_TABLE</operation>
+  <table_name>MIGRATION_LOG</table_name>
+  <owner>HR</owner>
+  <cascade_constraints>1</cascade_constraints>
+  <purge>0</purge>
+  <generated_ddl>DROP TABLE HR.MIGRATION_LOG CASCADE CONSTRAINTS;</generated_ddl>
+</Drop_Table_Template>

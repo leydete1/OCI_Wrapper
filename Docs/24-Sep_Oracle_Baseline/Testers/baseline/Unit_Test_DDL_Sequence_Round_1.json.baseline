@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_ddl_sequence_round_1","operation":"CREATE_PROCEDURE","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 24344: ORA-24344: A compilation error occurred while creating an object.\nHelp: https://docs.oracle.com/error-help/db/ora-24344/\n"}

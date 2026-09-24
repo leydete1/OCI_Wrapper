@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_createuser_round_1","operation":"CREATE_USER","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 922: ORA-00922: missing or invalid option\nHelp: https://docs.oracle.com/error-help/db/ora-00922/\n"}
