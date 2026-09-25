@@ -4,7 +4,7 @@
 
 #include <oci.h>
 #include <stddef.h>
-#include <OCI_Connection.h>
+#include <Connection.h>
 #include <Execute_Query_Batch_Module.h>
 
 typedef struct xml_builder_t{

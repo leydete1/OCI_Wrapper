@@ -105,7 +105,7 @@
 
 #include <stdint.h>
 #include <time.h>
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "logger.h"
 
 #ifdef __cplusplus

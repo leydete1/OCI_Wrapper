@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "OCI_Clob_Utils.h"
+#include "Clob_Utils.h"
 
 void build_clob_filename(const char *col_name, unsigned int abs_rownum,
                           int clob_index, char *output, size_t out_size,

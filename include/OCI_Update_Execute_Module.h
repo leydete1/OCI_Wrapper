@@ -58,11 +58,11 @@
 #ifndef OCI_UPDATE_EXECUTE_MODULE_H
 #define OCI_UPDATE_EXECUTE_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Table_Metadata_Module.h"
 #include "XML_Helper.h"
 #include "logger.h"
-#include "OCI_Request_Response_Types.h"   /* field_value_t, where_key_t -
+#include "Request_Response_Types.h"   /* field_value_t, where_key_t -
                                             * shared with INSERT/DELETE   */
 
 /* ------------------------------------------------------------------ */

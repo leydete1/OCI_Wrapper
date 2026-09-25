@@ -15,7 +15,7 @@
  * point past which "just duplicate it again" stops being reasonable.
  * ====================================================================== */
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 
 /*
  * copy_shared_ctx_fields()

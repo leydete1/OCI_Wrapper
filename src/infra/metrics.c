@@ -21,7 +21,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>      /* pthread_self()            */
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "metrics.h"
 #include "logger.h"   /* logger_get_worker_id() - closure item 5, Stage 2 */
 

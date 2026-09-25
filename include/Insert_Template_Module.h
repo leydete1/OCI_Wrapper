@@ -17,7 +17,7 @@
 #ifndef OCI_INSERT_TEMPLATE_MODULE_H
 #define OCI_INSERT_TEMPLATE_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Table_Metadata_Module.h"
 #include "XML_Helper.h"
 #include "logger.h"

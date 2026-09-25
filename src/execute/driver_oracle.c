@@ -65,8 +65,8 @@
 #include <string.h>
 
 #include "driver_oracle.h"
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "OCI_Transaction_Manager.h"       /* oci_trans_commit_retry() -
                                               shared retry mechanics with
                                               tx_commit(), added 2026-09-23
@@ -92,7 +92,7 @@
                                             build_filename_with_timestamp() -
                                             zero OCI dependency, already
                                             proven by production code    */
-#include "OCI_Clob_Utils.h"              /* build_clob_filename(),
+#include "Clob_Utils.h"              /* build_clob_filename(),
                                             build_clob_url() - same
                                             extraction, same reasoning   */
 

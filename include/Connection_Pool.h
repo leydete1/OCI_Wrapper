@@ -44,7 +44,7 @@
 
 #include <pthread.h>
 #include <time.h>
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "ini_reader.h"
 #include "logger.h"
 

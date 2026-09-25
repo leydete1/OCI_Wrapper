@@ -22,7 +22,7 @@
 #ifndef OCI_AUTHZ_MANAGER_H
 #define OCI_AUTHZ_MANAGER_H
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 
 #ifdef __cplusplus
 extern "C" {

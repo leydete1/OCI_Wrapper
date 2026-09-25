@@ -46,7 +46,7 @@
 #ifndef SQL_DEPENDENCY_EXTRACTOR_H
 #define SQL_DEPENDENCY_EXTRACTOR_H
 
-#include "OCI_Connection.h"   /* oci_context_t - for logger pointers  */
+#include "Connection.h"   /* oci_context_t - for logger pointers  */
 
 #ifdef __cplusplus
 extern "C" {

@@ -52,10 +52,10 @@
 #include <inttypes.h>                    /* PRIu64 for row_count logging  */
 
 #include "XML_Helper.h"
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Execute_Query_Batch_Module.h"
 #include <string_utils.h>               /* trim_sql_inplace()                         */
-#include "OCI_Clob_Utils.h"              /* build_clob_filename(), build_clob_url() -
+#include "Clob_Utils.h"              /* build_clob_filename(), build_clob_url() -
                                             see OCI_Clob_Utils.h for why there's no
                                             write_clob_to_file() alongside these -
                                             write_blob_to_file() below is reused as-is */

@@ -67,9 +67,9 @@
 
 #include <microhttpd.h>
 
-#include "OCI_Connection.h"      /* oci_context_t */
+#include "Connection.h"      /* oci_context_t */
 #include "ini_reader.h"          /* app_config_t  */
-#include "OCI_Connection_Pool.h" /* OCI_Pool_get_session/_release_session */
+#include "Connection_Pool.h" /* OCI_Pool_get_session/_release_session */
 #include "ctx_utils.h"           /* copy_shared_ctx_fields */
 #include "dispatcher.h"          /* process_xml_file, validate_async_select_request */
 #include "response_object.h"     /* response_object_t */

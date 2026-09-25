@@ -53,7 +53,7 @@
  * cleanup, not a race with anything still in flight.
  * ====================================================================== */
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 #include "ini_reader.h"       /* app_config_t  */
 
 typedef struct http_consumer_runner http_consumer_runner_t;   /* opaque */

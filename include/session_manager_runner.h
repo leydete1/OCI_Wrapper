@@ -29,7 +29,7 @@
  * enqueueing, where session_touch_queue_enqueue() used to do that
  * copy internally.                                                    */
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 #include "generic_queue.h"
 
 typedef struct session_manager_runner session_manager_runner_t;   /* opaque */

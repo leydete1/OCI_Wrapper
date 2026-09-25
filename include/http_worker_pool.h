@@ -72,7 +72,7 @@
 
 #include <pthread.h>
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "ini_reader.h"
 #include "request_object.h"
 #include "response_object.h"

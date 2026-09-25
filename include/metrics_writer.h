@@ -45,7 +45,7 @@
  * silently-expensive no-op.
  * ====================================================================== */
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 #include "metrics.h"          /* metrics_record_t */
 #include "ini_reader.h"       /* app_config_t */
 #include "logger.h"           /* logger_t */

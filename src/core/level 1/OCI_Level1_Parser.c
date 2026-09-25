@@ -12,14 +12,14 @@
 #include <strings.h>
 #include <ctype.h>
 
-#include "OCI_Level1_Parser.h"
+#include "Level1_Parser.h"
 #include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
 #include "OCI_Update_Execute_Module.h"   /* update_request_t - where_key_t/
                                             field_value_t come via
                                             OCI_Request_Response_Types.h,
                                             already pulled in above       */
-#include "OCI_Delete_Execute_Module.h"   /* delete_request_t */
-#include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
+#include "Delete_Execute_Module.h"   /* delete_request_t */
+#include "Execute_Procedure_Module.h" /* execute_procedure_request_t,
                                               procedure_param_t,
                                               param_direction_t          */
 #include <Auth_Manager.h>             /* authenticate_request_t - new,

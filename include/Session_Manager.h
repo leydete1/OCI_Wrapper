@@ -124,7 +124,7 @@
 #ifndef OCI_SESSION_MANAGER_H
 #define OCI_SESSION_MANAGER_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "session_cache.h"
 #include "XML_Helper.h"
 #include "logger.h"

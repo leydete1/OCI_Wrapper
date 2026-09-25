@@ -92,7 +92,7 @@
 #ifndef OCI_EXECUTE_PROCEDURE_MODULE_H
 #define OCI_EXECUTE_PROCEDURE_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "XML_Helper.h"
 #include "logger.h"
 

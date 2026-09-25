@@ -32,7 +32,7 @@
  * dispatch activity is easy to isolate for review.
  * ====================================================================== */
 
-#include "OCI_Connection.h"    /* oci_context_t */
+#include "Connection.h"    /* oci_context_t */
 #include "response_object.h"   /* response_object_t */
 
 /*

@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 #include "OCI_Transaction_Manager.h"
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */

@@ -21,7 +21,7 @@
 #include <ctype.h>
 #include <time.h>
 
-#include "OCI_Session_Manager.h"
+#include "Session_Manager.h"
 #include "OCI_Transaction_Manager.h"     /* tx_generate_uuid()          */
 #include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"   /* execute_update_batch(), update_request_t -

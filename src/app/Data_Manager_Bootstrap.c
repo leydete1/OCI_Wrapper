@@ -74,8 +74,8 @@
                           expects, so switched rather than chase macros. */
 #include <ctype.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "db_driver.h"                   /* db_driver_get(), db_driver_t -
                                              connect()/disconnect()/
                                              get_session() now route
@@ -94,8 +94,8 @@
                                              db_driver_get().             */
 #include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
-#include "OCI_Delete_Execute_Module.h"
-#include "OCI_Execute_Procedure_Module.h"
+#include "Delete_Execute_Module.h"
+#include "Execute_Procedure_Module.h"
 #include "Insert_Template_Module.h"
 #include "Insert_Validate_Module.h"
 #include "logger.h"
@@ -109,11 +109,11 @@
 #include <sys/resource.h>
 #include <stdio.h>
 #include "session_cache.h"
-#include "OCI_Session_Manager.h"
-#include "OCI_Level1_Parser.h"
-#include "OCI_Unit_Test_Module.h"
-#include "OCI_Level2_Parser.h"
-#include "OCI_Request_Response_Types.h"
+#include "Session_Manager.h"
+#include "Level1_Parser.h"
+#include "Unit_Test_Module.h"
+#include "Level2_Parser.h"
+#include "Request_Response_Types.h"
 #include "Execute_Query_Batch_Module.h"
 #include "dispatcher.h"
 #include "response_object.h"

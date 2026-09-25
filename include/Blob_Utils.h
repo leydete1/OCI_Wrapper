@@ -15,7 +15,7 @@
 #define OCI_BLOB_UTILS_H
 
 #include <stddef.h>
-#include "OCI_Connection.h"   /* oci_context_t, lob_item_t */
+#include "Connection.h"   /* oci_context_t, lob_item_t */
 
 /* Find the index of col_name within a fixed-width [][256] column name
  * array. Returns -1 if not found. */

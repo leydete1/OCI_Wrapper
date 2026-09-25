@@ -10,7 +10,7 @@
 
 #include "http_worker_pool.h"
 #include "queue_manager.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "dispatcher.h"
 #include "logger.h"

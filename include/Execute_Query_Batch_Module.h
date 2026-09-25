@@ -16,7 +16,7 @@
 #ifndef OCI_EXECUTE_QUERY_BATCH_MODULE_H
 #define OCI_EXECUTE_QUERY_BATCH_MODULE_H
 
-#include "OCI_Connection.h"   /* oci_context_t, execute_config_t */
+#include "Connection.h"   /* oci_context_t, execute_config_t */
 
 #ifdef __cplusplus
 extern "C" {

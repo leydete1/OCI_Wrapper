@@ -34,7 +34,7 @@
  * filterable per-thread via e.g. grep '\[T3\]'.
  * ====================================================================== */
 
-#include "OCI_Connection.h"     /* oci_context_t */
+#include "Connection.h"     /* oci_context_t */
 #include "queue_manager.h"
 #include "generic_queue.h"
 

@@ -25,7 +25,7 @@
  * orchestrating).
  * ====================================================================== */
 
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 #include "ini_reader.h"       /* app_config_t  */
 #include "queue_manager.h"
 

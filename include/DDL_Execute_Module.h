@@ -57,7 +57,7 @@
 #ifndef OCI_DDL_EXECUTE_MODULE_H
 #define OCI_DDL_EXECUTE_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "XML_Helper.h"
 #include "logger.h"
 

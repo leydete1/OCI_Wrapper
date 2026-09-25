@@ -35,7 +35,7 @@
 #ifndef OCI_UNIT_TEST_MODULE_H
 #define OCI_UNIT_TEST_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "logger.h"
 
 #define UT_TEST_ID_LEN      32

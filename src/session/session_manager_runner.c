@@ -9,8 +9,8 @@
 #include <pthread.h>
 
 #include "session_manager_runner.h"
-#include "OCI_Session_Manager.h"
-#include "OCI_Connection_Pool.h"
+#include "Session_Manager.h"
+#include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "logger.h"
 

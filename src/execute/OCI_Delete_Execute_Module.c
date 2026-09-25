@@ -60,13 +60,13 @@
 #include <ctype.h>
 #include <time.h>
 
-#include "OCI_Delete_Execute_Module.h"
-#include "OCI_Connection.h"
+#include "Delete_Execute_Module.h"
+#include "Connection.h"
 #include "cache.h"
 #include "Table_Metadata_Module.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
-#include "OCI_Level2_Parser.h"          /* level2_validate_delete()      */
+#include "Level2_Parser.h"          /* level2_validate_delete()      */
 #include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
 #include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"

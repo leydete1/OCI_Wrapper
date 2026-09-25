@@ -9,7 +9,7 @@
 
 #include "http_consumer.h"
 #include "logger.h"
-#include "OCI_Session_Manager.h"
+#include "Session_Manager.h"
 
 /* No config-driven envelope size limit yet - 10 MB is a sane guard
  * against a runaway/malicious body filling memory. Revisit once

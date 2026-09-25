@@ -1,7 +1,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <string_utils.h>
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 #include "logger.h"
 
 void sanitize_sql(char *sql)

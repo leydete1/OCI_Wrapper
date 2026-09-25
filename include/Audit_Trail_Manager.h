@@ -104,7 +104,7 @@
 #ifndef OCI_AUDIT_TRAIL_MANAGER_H
 #define OCI_AUDIT_TRAIL_MANAGER_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Table_Metadata_Module.h"
 #include "Execute_Query_Batch_Module.h"
 #include "logger.h"

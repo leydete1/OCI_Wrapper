@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include "OCI_Connection.h"   /* oci_context_t, lob_item_t - needed by xml_add_blob_field_1() */
+#include "Connection.h"   /* oci_context_t, lob_item_t - needed by xml_add_blob_field_1() */
 #include "logger.h"
 
 static void ensure_capacity(xml_builder_t *xml, size_t extra)

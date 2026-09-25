@@ -69,10 +69,10 @@
 #include <ctype.h>
 #include <time.h>
 
-#include "OCI_Execute_Procedure_Module.h"
-#include "OCI_Connection.h"
+#include "Execute_Procedure_Module.h"
+#include "Connection.h"
 #include "Execute_Query_Batch_Module.h"
-#include "OCI_Level2_Parser.h"          /* level2_validate_procedure()   */
+#include "Level2_Parser.h"          /* level2_validate_procedure()   */
 #include "OCI_Response_Writer.h"        /* response_write_xml() - reused
                                             for each CURSOR OUT's own
                                             resultset fragment           */

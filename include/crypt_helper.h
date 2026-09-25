@@ -20,7 +20,7 @@
 #ifndef CRYPT_HELPER_H
 #define CRYPT_HELPER_H
 
-#include "OCI_Connection.h"   /* oci_context_t - ctx->crypt_logger, ctx->ini */
+#include "Connection.h"   /* oci_context_t - ctx->crypt_logger, ctx->ini */
 
 #ifdef __cplusplus
 extern "C" {

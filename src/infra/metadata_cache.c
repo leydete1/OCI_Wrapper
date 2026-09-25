@@ -25,7 +25,7 @@
 #include <strings.h>
 #include <ctype.h>
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Table_Metadata_Module.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"

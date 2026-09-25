@@ -39,10 +39,10 @@
 #ifndef OCI_INSERT_EXECUTE_MODULE_H
 #define OCI_INSERT_EXECUTE_MODULE_H
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "XML_Helper.h"
 #include "logger.h"
-#include "OCI_Request_Response_Types.h"   /* field_value_t - shared with UPDATE */
+#include "Request_Response_Types.h"   /* field_value_t - shared with UPDATE */
 
 /* ------------------------------------------------------------------ */
 /*  insert_request_t                                                    */

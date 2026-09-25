@@ -20,21 +20,21 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "OCI_Unit_Test_Module.h"
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Unit_Test_Module.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "file_consumer.h"      /* payload_requires_single_writer_queue() -
                                     UT-CONT-001/002, 2026-08-12 */
 #include "generic_queue.h"      /* UT-SESS-006, 2026-08-12 */
-#include "OCI_Level1_Parser.h"
-#include "OCI_Level2_Parser.h"
+#include "Level1_Parser.h"
+#include "Level2_Parser.h"
 #include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
-#include "OCI_Delete_Execute_Module.h"
-#include "OCI_Execute_Procedure_Module.h"
+#include "Delete_Execute_Module.h"
+#include "Execute_Procedure_Module.h"
 #include "Execute_Query_Batch_Module.h"
-#include "OCI_Request_Response_Types.h"
-#include "OCI_Session_Manager.h"
+#include "Request_Response_Types.h"
+#include "Session_Manager.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
 #include "Table_Metadata_Module.h"

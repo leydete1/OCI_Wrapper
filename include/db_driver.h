@@ -128,7 +128,7 @@
 #define DB_DRIVER_H
 
 #include <stdint.h>                  /* uint64_t - db_fetch_batch_stats_t */
-#include "OCI_Connection.h"        /* oci_context_t */
+#include "Connection.h"        /* oci_context_t */
 #include "Resultset_Types.h"   /* resultset_t */
 
 #ifdef __cplusplus

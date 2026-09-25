@@ -73,10 +73,10 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#include "OCI_Level1_Parser.h"
-#include "OCI_Level2_Parser.h"
+#include "Level1_Parser.h"
+#include "Level2_Parser.h"
 #include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "ini_reader.h"
 #include "logger.h"
 #include "metadata_cache.h"

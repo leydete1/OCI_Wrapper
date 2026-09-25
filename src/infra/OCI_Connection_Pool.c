@@ -42,8 +42,8 @@
 #include <errno.h>
 #include <pthread.h>
 
-#include "OCI_Connection_Pool.h"
-#include "OCI_Connection.h"
+#include "Connection_Pool.h"
+#include "Connection.h"
 #include "ini_reader.h"
 #include "ctx_utils.h"   /* copy_shared_ctx_fields() - 2026-08-07, needed
                             by OCI_Pool_reconnect_session() below */

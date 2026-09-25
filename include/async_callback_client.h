@@ -35,7 +35,7 @@
  *     that document per batch; this module only POSTs it.
  * ====================================================================== */
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 
 /*
  * async_callback_post()

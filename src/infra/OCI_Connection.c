@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "XML_Helper.h"
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "logger.h"
 #include <stdlib.h>
 #include <string.h>

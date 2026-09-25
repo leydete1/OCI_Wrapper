@@ -7,7 +7,7 @@
  * Used across OCI tester modules
  */
 
-#include "OCI_Connection.h";
+#include "Connection.h";
 
 /* Remove problematic whitespace and normalize SQL strings */
 void sanitize_sql(char *sql);

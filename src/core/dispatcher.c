@@ -61,11 +61,11 @@
 #include "dispatcher.h"
 #include "response_object.h"
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
-#include "OCI_Delete_Execute_Module.h"
-#include "OCI_Execute_Procedure_Module.h"
+#include "Delete_Execute_Module.h"
+#include "Execute_Procedure_Module.h"
 #include <Auth_Manager.h>             /* auth_authenticate() - new,
                                             * Security Module Stage 2 */
 #include "DDL_Modules.h"              /* create_user_request_t,
@@ -93,12 +93,12 @@
 #include "Authz_Manager.h"            /* authz_has_permission() - new,
                                             * Security Module Stage 5 */
 #include "logger.h"
-#include "OCI_Session_Manager.h"   /* session_validate() - Session Manager
+#include "Session_Manager.h"   /* session_validate() - Session Manager
                                       proposal, Stage 3 (2026-08-08) */
 #include "ini_reader.h"
-#include "OCI_Level1_Parser.h"
-#include "OCI_Level2_Parser.h"
-#include "OCI_Request_Response_Types.h"
+#include "Level1_Parser.h"
+#include "Level2_Parser.h"
+#include "Request_Response_Types.h"
 #include "Execute_Query_Batch_Module.h"
 #include "async_callback_client.h"   /* Stage 5 - execute_async delivery */
 #include "metrics.h"

@@ -53,8 +53,8 @@
 #ifndef OCI_LEVEL1_PARSER_H
 #define OCI_LEVEL1_PARSER_H
 
-#include "OCI_Connection.h"
-#include "OCI_Request_Response_Types.h"
+#include "Connection.h"
+#include "Request_Response_Types.h"
 
 #ifdef __cplusplus
 extern "C" {

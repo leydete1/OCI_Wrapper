@@ -13,7 +13,7 @@
 
 #include "metrics_writer.h"
 #include "generic_queue.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "logger.h"
 

@@ -12,7 +12,7 @@
 #include "dispatcher.h"
 #include "response_object.h"
 #include "response_manager.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "generic_queue.h"
 #include "logger.h"

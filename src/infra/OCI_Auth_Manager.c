@@ -21,7 +21,7 @@
 #include <strings.h>
 
 #include <Auth_Manager.h>
-#include "OCI_Session_Manager.h"
+#include "Session_Manager.h"
 #include "crypt_helper.h"                 /* crypt_verify_password() - Stage 1 */
 #include "ldap_auth_helper.h"             /* ldap_auth_bind_check() - Stage 3 */
 #include "cJSON.h"                        /* AUTH_SOURCE.CONFIGURATION parsing */

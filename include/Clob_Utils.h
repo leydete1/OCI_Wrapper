@@ -24,7 +24,7 @@
 #define OCI_CLOB_UTILS_H
 
 #include <stddef.h>
-#include "OCI_Connection.h"   /* oci_context_t */
+#include "Connection.h"   /* oci_context_t */
 
 /*
  * build_clob_filename()

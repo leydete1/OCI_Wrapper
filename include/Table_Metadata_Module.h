@@ -53,7 +53,7 @@
 
 #include "logger.h"
 #include <oci.h>
-#include <OCI_Connection.h>
+#include <Connection.h>
 #include "sql_dependency_extractor.h"
 
 /* ------------------------------------------------------------------ */
