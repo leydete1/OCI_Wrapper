@@ -18,7 +18,7 @@
 #ifndef OCI_RESULTSET_BUILDER_H
 #define OCI_RESULTSET_BUILDER_H
 
-#include "OCI_Resultset_Types.h"
+#include "Resultset_Types.h"
 
 #ifdef __cplusplus
 extern "C" {

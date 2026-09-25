@@ -37,7 +37,7 @@
 #define OCI_RESPONSE_WRITER_H
 
 #include "OCI_Connection.h"
-#include "OCI_Resultset_Types.h"
+#include "Resultset_Types.h"
 #include "resultset_cache.h"
 #include "OCI_Request_Response_Types.h"   /* dml_response_t, operation_type_t */
 #include "OCI_Execute_Procedure_Module.h" /* execute_procedure_response_t */

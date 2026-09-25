@@ -92,12 +92,12 @@
                                              only driver this project has,
                                              same as every other caller of
                                              db_driver_get().             */
-#include "OCI_Insert_Execute_Module.h"
+#include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Execute_Procedure_Module.h"
-#include "OCI_Insert_Template_Module.h"
-#include "OCI_Insert_Validate_Module.h"
+#include "Insert_Template_Module.h"
+#include "Insert_Validate_Module.h"
 #include "logger.h"
 #include "ini_reader.h"
 #include "ctx_helper.h"
@@ -114,7 +114,7 @@
 #include "OCI_Unit_Test_Module.h"
 #include "OCI_Level2_Parser.h"
 #include "OCI_Request_Response_Types.h"
-#include "OCI_Execute_Query_Batch_Module.h"
+#include "Execute_Query_Batch_Module.h"
 #include "dispatcher.h"
 #include "response_object.h"
 #include "file_consumer.h"

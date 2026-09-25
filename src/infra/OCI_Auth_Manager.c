@@ -20,13 +20,13 @@
 #include <string.h>
 #include <strings.h>
 
-#include "OCI_Auth_Manager.h"
+#include <Auth_Manager.h>
 #include "OCI_Session_Manager.h"
 #include "crypt_helper.h"                 /* crypt_verify_password() - Stage 1 */
 #include "ldap_auth_helper.h"             /* ldap_auth_bind_check() - Stage 3 */
 #include "cJSON.h"                        /* AUTH_SOURCE.CONFIGURATION parsing */
-#include "OCI_Audit_Trail_Manager.h"      /* audit_trail_insert() - Stage 4 */
-#include "OCI_Authz_Manager.h"            /* authz_build_permission_cache() -
+#include <Audit_Trail_Manager.h>      /* audit_trail_insert() - Stage 4 */
+#include <Authz_Manager.h>          /* authz_build_permission_cache() -
                                             * Stage 5 */
 #include "metrics.h"                      /* metrics_record_t, metrics_now_us() -
                                             * timing metrics, 2026-09-01 */

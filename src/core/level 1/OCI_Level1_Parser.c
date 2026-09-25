@@ -13,7 +13,7 @@
 #include <ctype.h>
 
 #include "OCI_Level1_Parser.h"
-#include "OCI_Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
+#include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
 #include "OCI_Update_Execute_Module.h"   /* update_request_t - where_key_t/
                                             field_value_t come via
                                             OCI_Request_Response_Types.h,
@@ -22,9 +22,9 @@
 #include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
                                               procedure_param_t,
                                               param_direction_t          */
-#include "OCI_Auth_Manager.h"             /* authenticate_request_t - new,
+#include <Auth_Manager.h>             /* authenticate_request_t - new,
                                             * Security Module Stage 2 */
-#include "OCI_DDL_Modules.h"              /* create_user_request_t,
+#include "DDL_Modules.h"              /* create_user_request_t,
                                               grant_request_t,
                                               create_table_request_t,
                                               drop_table_request_t,
@@ -39,7 +39,7 @@
                                               design notes, preserved there
                                               verbatim under each module's
                                               own section. */
-#include "OCI_Authz_Manager.h"            /* check_permission_request_t -
+#include "Authz_Manager.h"            /* check_permission_request_t -
                                             * new, Security Module Stage 5 */
 #include "logger.h"
 

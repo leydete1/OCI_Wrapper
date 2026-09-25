@@ -79,7 +79,7 @@
                                               header comment on that
                                               function for the full
                                               rationale.                */
-#include "OCI_Table_Metadata_Module.h"   /* get_multi_metadata() - the
+#include "Table_Metadata_Module.h"   /* get_multi_metadata() - the
                                             same OCIParamGet/OCIDefineByPos/
                                             OCIDefineArrayOfStruct work
                                             execute_query_batch already
@@ -87,7 +87,7 @@
                                             reimplemented (see below)    */
 #include "OCI_Resultset_Builder.h"       /* resultset_create/get_row/
                                             set_field/set_blob_field/free */
-#include "OCI_Blob_Utils.h"              /* lookup_blob_index(),
+#include "Blob_Utils.h"              /* lookup_blob_index(),
                                             write_blob_to_file(),
                                             build_filename_with_timestamp() -
                                             zero OCI dependency, already

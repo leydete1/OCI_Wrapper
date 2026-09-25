@@ -12,7 +12,7 @@
 #include <strings.h>
 #include <time.h>
 
-#include "OCI_Blob_Utils.h"
+#include "Blob_Utils.h"
 #include "logger.h"
 
 int lookup_blob_index(char (*col_names)[256], int col_count,

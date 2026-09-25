@@ -26,7 +26,7 @@
 #include <ctype.h>
 
 #include "OCI_Connection.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "Table_Metadata_Module.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
 #include "metrics.h"

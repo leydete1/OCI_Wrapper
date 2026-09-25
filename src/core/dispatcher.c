@@ -62,13 +62,13 @@
 #include "response_object.h"
 
 #include "OCI_Connection.h"
-#include "OCI_Insert_Execute_Module.h"
+#include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Execute_Procedure_Module.h"
-#include "OCI_Auth_Manager.h"             /* auth_authenticate() - new,
+#include <Auth_Manager.h>             /* auth_authenticate() - new,
                                             * Security Module Stage 2 */
-#include "OCI_DDL_Modules.h"              /* create_user_request_t,
+#include "DDL_Modules.h"              /* create_user_request_t,
                                               grant_request_t,
                                               create_table_request_t,
                                               drop_table_request_t,
@@ -85,12 +85,12 @@
                                               design notes, preserved there
                                               verbatim under each module's
                                               own section. */
-#include "OCI_DDL_Execute_Module.h"       /* execute_ddl_statement(),
+#include "DDL_Execute_Module.h"       /* execute_ddl_statement(),
                                               get_ddl_execution_response_xml/
                                               json() - new, shared executor
                                               for all six DDL operations,
                                               execute stage (07-Sep/08-Sep) */
-#include "OCI_Authz_Manager.h"            /* authz_has_permission() - new,
+#include "Authz_Manager.h"            /* authz_has_permission() - new,
                                             * Security Module Stage 5 */
 #include "logger.h"
 #include "OCI_Session_Manager.h"   /* session_validate() - Session Manager
@@ -99,7 +99,7 @@
 #include "OCI_Level1_Parser.h"
 #include "OCI_Level2_Parser.h"
 #include "OCI_Request_Response_Types.h"
-#include "OCI_Execute_Query_Batch_Module.h"
+#include "Execute_Query_Batch_Module.h"
 #include "async_callback_client.h"   /* Stage 5 - execute_async delivery */
 #include "metrics.h"
 #include "OCI_Transaction_Manager.h"   /* tx_begin/tx_commit/tx_rollback -

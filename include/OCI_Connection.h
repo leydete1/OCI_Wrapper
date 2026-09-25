@@ -23,7 +23,7 @@
 #include "logger.h"
 #include "ini_reader.h"
 #include <oci.h>
-#include "oci_cache.h"
+#include "cache.h"
 
 /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - forward
  * declaration only, deliberately not #include "metrics_writer.h" here:

@@ -32,7 +32,7 @@
 #include <strings.h>
 
 #include "session_cache.h"
-#include "oci_cache.h"
+#include "cache.h"
 #include "ini_reader.h"
 #include "logger.h"
 

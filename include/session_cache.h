@@ -44,7 +44,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#include "oci_cache.h"
+#include "cache.h"
 #include "ini_reader.h"
 #include "logger.h"
 

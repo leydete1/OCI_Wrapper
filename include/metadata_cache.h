@@ -50,7 +50,7 @@
 #ifndef METADATA_CACHE_H
 #define METADATA_CACHE_H
 
-#include "oci_cache.h"
+#include "cache.h"
 #include "ini_reader.h"
 #include "logger.h"
 

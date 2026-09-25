@@ -62,13 +62,13 @@
 
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Connection.h"
-#include "oci_cache.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "cache.h"
+#include "Table_Metadata_Module.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
 #include "OCI_Level2_Parser.h"          /* level2_validate_delete()      */
 #include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
-#include "OCI_Audit_Trail_Manager.h"
+#include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"
 #include "logger.h"
 #include "metrics.h"

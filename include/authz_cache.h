@@ -16,7 +16,7 @@
 #ifndef AUTHZ_CACHE_H
 #define AUTHZ_CACHE_H
 
-#include "oci_cache.h"    /* cache_t, cache_entry_t */
+#include "cache.h"    /* cache_t, cache_entry_t */
 #include "ini_reader.h"   /* app_config_t */
 #include "logger.h"       /* logger_t */
 

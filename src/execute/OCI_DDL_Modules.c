@@ -54,7 +54,7 @@
 #include <strings.h>   /* strncasecmp - only the former Create View
                          section below actually uses this           */
 
-#include "OCI_DDL_Modules.h"
+#include "DDL_Modules.h"
 #include "XML_Helper.h"
 #include "logger.h"
 

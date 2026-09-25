@@ -41,7 +41,7 @@
 #include <strings.h>
 
 #include "authz_cache.h"
-#include "oci_cache.h"
+#include "cache.h"
 #include "ini_reader.h"
 #include "logger.h"
 

@@ -67,7 +67,7 @@
 #include <sys/stat.h>
 
 #include "OCI_Level1_Parser.h"
-#include "OCI_Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
+#include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t */
 #include "logger.h"
 
 static char *read_file(const char *path, size_t *out_len)

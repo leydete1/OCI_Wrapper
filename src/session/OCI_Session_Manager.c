@@ -23,11 +23,11 @@
 
 #include "OCI_Session_Manager.h"
 #include "OCI_Transaction_Manager.h"     /* tx_generate_uuid()          */
-#include "OCI_Insert_Execute_Module.h"
+#include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"   /* execute_update_batch(), update_request_t -
                                             session_end() builds one directly now,
                                             no XML involved at all any more        */
-#include "OCI_Execute_Query_Batch_Module.h"    /* execute_query_batch()       */
+#include "Execute_Query_Batch_Module.h"    /* execute_query_batch()       */
 #include "XML_Helper.h"
 #include "logger.h"
 

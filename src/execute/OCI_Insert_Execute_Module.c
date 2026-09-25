@@ -48,11 +48,11 @@
 #include <time.h>
 
 #include "OCI_Connection.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "Table_Metadata_Module.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
-#include "OCI_Insert_Execute_Module.h"
-#include "OCI_Insert_Validate_Module.h"
+#include "Insert_Execute_Module.h"
+#include "Insert_Validate_Module.h"
 #include "OCI_Level2_Parser.h"          /* level2_validate_insert()      */
 #include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
 #include "OCI_Transaction_Manager.h"
@@ -68,7 +68,7 @@
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
-#include "OCI_Audit_Trail_Manager.h"
+#include <Audit_Trail_Manager.h>
 
 
 

@@ -59,7 +59,7 @@
 #define OCI_UPDATE_EXECUTE_MODULE_H
 
 #include "OCI_Connection.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "Table_Metadata_Module.h"
 #include "XML_Helper.h"
 #include "logger.h"
 #include "OCI_Request_Response_Types.h"   /* field_value_t, where_key_t -

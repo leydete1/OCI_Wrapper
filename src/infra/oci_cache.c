@@ -41,7 +41,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 
-#include "oci_cache.h"
+#include "cache.h"
 #include "logger.h"
 
 /* ================================================================== */

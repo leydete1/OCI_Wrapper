@@ -53,16 +53,16 @@
 
 #include "XML_Helper.h"
 #include "OCI_Connection.h"
-#include "OCI_Execute_Query_Batch_Module.h"
+#include "Execute_Query_Batch_Module.h"
 #include <string_utils.h>               /* trim_sql_inplace()                         */
 #include "OCI_Clob_Utils.h"              /* build_clob_filename(), build_clob_url() -
                                             see OCI_Clob_Utils.h for why there's no
                                             write_clob_to_file() alongside these -
                                             write_blob_to_file() below is reused as-is */
-#include "OCI_Blob_Utils.h"              /* lookup_blob_index(), write_blob_to_file(),
+#include "Blob_Utils.h"              /* lookup_blob_index(), write_blob_to_file(),
                                             build_filename_with_timestamp() - relocated
                                             from the now-removed OCI_Execute_Query_Module */
-#include "OCI_Table_Metadata_Module.h"   /* get_multi_metadata() get_select_metadata() */
+#include "Table_Metadata_Module.h"   /* get_multi_metadata() get_select_metadata() */
 #include "sql_dependency_extractor.h"    /* extract_sql_dependencies()                 */
 #include "db_driver.h"                   /* db_driver_get() - sync-path integration
                                             (Phase 2a, 2026-09-14). async path below is

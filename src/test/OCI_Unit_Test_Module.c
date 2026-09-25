@@ -28,18 +28,18 @@
 #include "generic_queue.h"      /* UT-SESS-006, 2026-08-12 */
 #include "OCI_Level1_Parser.h"
 #include "OCI_Level2_Parser.h"
-#include "OCI_Insert_Execute_Module.h"
+#include "Insert_Execute_Module.h"
 #include "OCI_Update_Execute_Module.h"
 #include "OCI_Delete_Execute_Module.h"
 #include "OCI_Execute_Procedure_Module.h"
-#include "OCI_Execute_Query_Batch_Module.h"
+#include "Execute_Query_Batch_Module.h"
 #include "OCI_Request_Response_Types.h"
 #include "OCI_Session_Manager.h"
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "Table_Metadata_Module.h"
 #include "OCI_Transaction_Manager.h"
-#include "OCI_Audit_Trail_Manager.h"
+#include <Audit_Trail_Manager.h>
 #include "ini_reader.h"
 #include "logger.h"
 

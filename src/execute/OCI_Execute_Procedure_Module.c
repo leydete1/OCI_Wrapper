@@ -71,7 +71,7 @@
 
 #include "OCI_Execute_Procedure_Module.h"
 #include "OCI_Connection.h"
-#include "OCI_Execute_Query_Batch_Module.h"
+#include "Execute_Query_Batch_Module.h"
 #include "OCI_Level2_Parser.h"          /* level2_validate_procedure()   */
 #include "OCI_Response_Writer.h"        /* response_write_xml() - reused
                                             for each CURSOR OUT's own
@@ -81,7 +81,7 @@
 #include "OCI_Transaction_Manager.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
-#include "OCI_Blob_Utils.h"
+#include "Blob_Utils.h"
 #include "db_driver.h"        /* v2 driver integration, 2026-09-21 -
                                   dml_execute_procedure()/
                                   select_open_from_cursor() - core calls

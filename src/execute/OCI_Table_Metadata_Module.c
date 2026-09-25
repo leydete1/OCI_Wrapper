@@ -52,7 +52,7 @@
 #include <strings.h>
 #include <ctype.h>
 
-#include "OCI_Table_Metadata_Module.h"
+#include "Table_Metadata_Module.h"
 #include "sql_dependency_extractor.h"
 #include "logger.h"
 

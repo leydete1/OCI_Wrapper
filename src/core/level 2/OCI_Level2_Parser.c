@@ -17,20 +17,20 @@
 #include "logger.h"
 #include "sql_dependency_extractor.h"
 
-#include "OCI_Insert_Execute_Module.h"   /* insert_request_t, insert_row_t   */
+#include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t   */
 #include "OCI_Update_Execute_Module.h"   /* update_request_t                 */
 #include "OCI_Delete_Execute_Module.h"   /* delete_request_t                 */
 #include "OCI_Execute_Procedure_Module.h" /* execute_procedure_request_t,
                                               procedure_param_t,
                                               MAX_PROC_PARAMS              */
-#include "OCI_Insert_Validate_Module.h"  /* parsed_field_t, validate_field() */
-#include "OCI_Table_Metadata_Module.h"   /* col_metadata_t, metadata_request_t,
+#include "Insert_Validate_Module.h"  /* parsed_field_t, validate_field() */
+#include "Table_Metadata_Module.h"   /* col_metadata_t, metadata_request_t,
                                             MAX_TABLE_COLUMNS                */
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"         /* metadata_cache_get_or_fetch()    */
-#include "OCI_Auth_Manager.h"            /* authenticate_request_t - new,
+#include <Auth_Manager.h>            /* authenticate_request_t - new,
                                            * Security Module Stage 2         */
-#include "OCI_DDL_Modules.h"             /* create_user_request_t,
+#include "DDL_Modules.h"             /* create_user_request_t,
                                              grant_request_t,
                                              create_table_request_t,
                                              drop_table_request_t,
@@ -46,7 +46,7 @@
                                              design notes, preserved there
                                              verbatim under each module's
                                              own section. */
-#include "OCI_Authz_Manager.h"           /* check_permission_request_t -
+#include "Authz_Manager.h"           /* check_permission_request_t -
                                            * new, Security Module Stage 5    */
 
 /* ------------------------------------------------------------------ */
