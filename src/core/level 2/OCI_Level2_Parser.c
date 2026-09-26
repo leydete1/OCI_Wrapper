@@ -18,7 +18,7 @@
 #include "sql_dependency_extractor.h"
 
 #include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t   */
-#include "OCI_Update_Execute_Module.h"   /* update_request_t                 */
+#include "Update_Execute_Module.h"   /* update_request_t                 */
 #include "Delete_Execute_Module.h"   /* delete_request_t                 */
 #include "Execute_Procedure_Module.h" /* execute_procedure_request_t,
                                               procedure_param_t,

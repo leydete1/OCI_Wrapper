@@ -67,14 +67,14 @@
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
 #include "Level2_Parser.h"          /* level2_validate_delete()      */
-#include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
+#include "Response_Writer.h"        /* response_write_dml_xml/json() */
 #include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include "db_driver.h"        /* v2 driver integration, 2026-09-16 -
                                   dml_execute()/commit()/rollback() -
                                   core calls only the vendor-neutral

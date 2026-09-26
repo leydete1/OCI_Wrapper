@@ -93,7 +93,7 @@
                                              same as every other caller of
                                              db_driver_get().             */
 #include "Insert_Execute_Module.h"
-#include "OCI_Update_Execute_Module.h"
+#include "Update_Execute_Module.h"
 #include "Delete_Execute_Module.h"
 #include "Execute_Procedure_Module.h"
 #include "Insert_Template_Module.h"
@@ -105,7 +105,7 @@
 #include "metadata_cache.h"
 #include "sql_dependency_extractor.h"
 #include "metrics.h"
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include <sys/resource.h>
 #include <stdio.h>
 #include "session_cache.h"

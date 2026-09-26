@@ -54,8 +54,8 @@
 #include "Insert_Execute_Module.h"
 #include "Insert_Validate_Module.h"
 #include "Level2_Parser.h"          /* level2_validate_insert()      */
-#include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
-#include "OCI_Transaction_Manager.h"
+#include "Response_Writer.h"        /* response_write_dml_xml/json() */
+#include "Transaction_Manager.h"
 #include "db_driver.h"        /* v2 driver integration, 2026-09-20 -
                                   dml_execute_returning_rowids()/
                                   rowid_result_free()/lob_write_by_rowid() -

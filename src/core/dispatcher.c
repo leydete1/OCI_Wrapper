@@ -63,7 +63,7 @@
 
 #include "Connection.h"
 #include "Insert_Execute_Module.h"
-#include "OCI_Update_Execute_Module.h"
+#include "Update_Execute_Module.h"
 #include "Delete_Execute_Module.h"
 #include "Execute_Procedure_Module.h"
 #include <Auth_Manager.h>             /* auth_authenticate() - new,
@@ -102,7 +102,7 @@
 #include "Execute_Query_Batch_Module.h"
 #include "async_callback_client.h"   /* Stage 5 - execute_async delivery */
 #include "metrics.h"
-#include "OCI_Transaction_Manager.h"   /* tx_begin/tx_commit/tx_rollback -
+#include "Transaction_Manager.h"   /* tx_begin/tx_commit/tx_rollback -
                                           per-request transaction scoping,
                                           File Consumer closure item
                                           2026-08-12 */

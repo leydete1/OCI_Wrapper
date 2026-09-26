@@ -32,7 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include "Connection.h"
 #include "logger.h"
 #include "metrics.h"

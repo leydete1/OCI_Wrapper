@@ -16,7 +16,7 @@
 #include <ctype.h>
 
 #include "DDL_Execute_Module.h"
-#include "OCI_Transaction_Manager.h"   /* begin_standalone_tx_if_needed()/
+#include "Transaction_Manager.h"   /* begin_standalone_tx_if_needed()/
                                         * end_standalone_tx_if_owned() -
                                         * metrics correlation only, see
                                         * their own doc comment; NOT a

@@ -29,7 +29,7 @@
 #include "Level1_Parser.h"
 #include "Level2_Parser.h"
 #include "Insert_Execute_Module.h"
-#include "OCI_Update_Execute_Module.h"
+#include "Update_Execute_Module.h"
 #include "Delete_Execute_Module.h"
 #include "Execute_Procedure_Module.h"
 #include "Execute_Query_Batch_Module.h"
@@ -38,7 +38,7 @@
 #include "metadata_cache.h"
 #include "metadata_cache_meta.h"
 #include "Table_Metadata_Module.h"
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include <Audit_Trail_Manager.h>
 #include "ini_reader.h"
 #include "logger.h"

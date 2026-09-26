@@ -44,17 +44,17 @@
 #include "metadata_cache_meta.h"
 
 
-#include "OCI_Update_Execute_Module.h"
+#include "Update_Execute_Module.h"
 #include "Insert_Validate_Module.h"
 #include "Level2_Parser.h"          /* level2_validate_update()      */
-#include "OCI_Response_Writer.h"        /* response_write_dml_xml/json() */
+#include "Response_Writer.h"        /* response_write_dml_xml/json() */
 #include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "resultset_cache.h"  /* resultset_cache_invalidate_by_table() - closure item 5 follow-up, 2026-08-12 */
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include "db_driver.h"        /* v2 driver integration, 2026-09-19 -
                                   dml_execute_returning_rowids()/
                                   rowid_result_free()/lob_write_by_rowid() -

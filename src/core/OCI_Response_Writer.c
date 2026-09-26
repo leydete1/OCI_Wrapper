@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "OCI_Response_Writer.h"
+#include "Response_Writer.h"
 #include "Execute_Procedure_Module.h" /* execute_procedure_response_t,
                                               procedure_param_t             */
 #include "XML_Helper.h"

@@ -67,7 +67,7 @@
 #include "driver_oracle.h"
 #include "Connection.h"
 #include "Connection_Pool.h"
-#include "OCI_Transaction_Manager.h"       /* oci_trans_commit_retry() -
+#include "Transaction_Manager.h"       /* oci_trans_commit_retry() -
                                               shared retry mechanics with
                                               tx_commit(), added 2026-09-23
                                               so oracle_commit() gets the
@@ -85,7 +85,7 @@
                                             execute_query_batch already
                                             uses, reused rather than
                                             reimplemented (see below)    */
-#include "OCI_Resultset_Builder.h"       /* resultset_create/get_row/
+#include "Resultset_Builder.h"       /* resultset_create/get_row/
                                             set_field/set_blob_field/free */
 #include "Blob_Utils.h"              /* lookup_blob_index(),
                                             write_blob_to_file(),

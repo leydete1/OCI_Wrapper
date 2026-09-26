@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "OCI_Resultset_Builder.h"
+#include "Resultset_Builder.h"
 
 resultset_t *resultset_create(int record_count, int fields_per_row)
 {

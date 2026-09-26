@@ -73,12 +73,12 @@
 #include "Connection.h"
 #include "Execute_Query_Batch_Module.h"
 #include "Level2_Parser.h"          /* level2_validate_procedure()   */
-#include "OCI_Response_Writer.h"        /* response_write_xml() - reused
+#include "Response_Writer.h"        /* response_write_xml() - reused
                                             for each CURSOR OUT's own
                                             resultset fragment           */
 #include "XML_Helper.h"
 #include "logger.h"
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
 #include "Blob_Utils.h"
@@ -89,7 +89,7 @@
                                   never driver_oracle.h directly, same as
                                   SELECT/DELETE/UPDATE/INSERT's own
                                   integrations.                        */
-#include "OCI_Resultset_Builder.h"  /* resultset_t/resultset_free() -
+#include "Resultset_Builder.h"  /* resultset_t/resultset_free() -
                                         Stage 6's CURSOR OUT fetch now
                                         goes through the same resultset_t
                                         pipeline execute_query_batch()

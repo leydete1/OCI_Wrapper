@@ -77,11 +77,11 @@
                                             belongs entirely to db_driver.c.           */
 #include "logger.h"
 #include "resultset_cache.h"
-#include "OCI_Transaction_Manager.h"
+#include "Transaction_Manager.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
-#include "OCI_Resultset_Builder.h"
-#include "OCI_Response_Writer.h";
+#include "Resultset_Builder.h"
+#include "Response_Writer.h";
 #include "cJSON.h"                       /* Stage 3c JSON verification only */
 
 /* ------------------------------------------------------------------ */
