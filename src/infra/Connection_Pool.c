@@ -160,8 +160,15 @@ static int open_slot(oci_pool_handle_t *pool,
      * connection shared by every slot. Not fatal if unsupported
      * (older Oracle Client) - logged as WARN, slot still opens.        */
     {
-        ub4 recv_timeout = (ub4)pool->network_read_write_timeout;
-        ub4 send_timeout = (ub4)pool->network_read_write_timeout;
+        /* OCI_ATTR_RECEIVE_TIMEOUT / OCI_ATTR_SEND_TIMEOUT take
+         * MILLISECONDS; network_read_write_timeout is configured in
+         * SECONDS. Until 2026-09-29 the raw value was passed straight
+         * through, giving every pooled session (business and metrics
+         * pools) a 60 ms timeout - any call slower than that failed with
+         * ORA-12609 and left the session dead (ORA-03114). See
+         * Oracle_dialect_extraction_proposal v1.2, Stage 0.B.          */
+        ub4 recv_timeout = (ub4)pool->network_read_write_timeout * 1000u;
+        ub4 send_timeout = (ub4)pool->network_read_write_timeout * 1000u;
 
         sword recv_rc = OCIAttrSet(slot->srvhp, OCI_HTYPE_SERVER,
                                     &recv_timeout, 0,
@@ -174,7 +181,7 @@ static int open_slot(oci_pool_handle_t *pool,
                          (int)recv_rc);
         else
             logger_write(logger, LOG_INFO, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT=%us OK for "
+                         "OCIAttrSet OCI_ATTR_RECEIVE_TIMEOUT=%ums OK for "
                          "this slot", recv_timeout);
 
         sword send_rc = OCIAttrSet(slot->srvhp, OCI_HTYPE_SERVER,
@@ -188,7 +195,7 @@ static int open_slot(oci_pool_handle_t *pool,
                          (int)send_rc);
         else
             logger_write(logger, LOG_INFO, __func__, 0,
-                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT=%us OK for "
+                         "OCIAttrSet OCI_ATTR_SEND_TIMEOUT=%ums OK for "
                          "this slot", send_timeout);
     }
 

@@ -144,9 +144,9 @@
 #include <string.h>
 #include <time.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
-#include "OCI_Transaction_Manager.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
+#include "Transaction_Manager.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"

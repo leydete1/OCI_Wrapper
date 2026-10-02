@@ -244,55 +244,10 @@ static int build_update_ctx_from_request(oci_context_t          *ctx,
 }
 
 
-/* ================================================================== */
-/*  get_upd_bind_wrapper                                                */
-/*  Returns SQL expression wrapper for date/time/LOB types.            */
-/*  BLOB/CLOB use EMPTY_BLOB()/EMPTY_CLOB() in SET clause;            */
-/*  WHERE key columns always bind as plain SQLT_STR.                   */
-/* ================================================================== */
-/*
- * get_upd_bind_wrapper()
- * Same design as OCI_Insert_Execute_Module.c's get_bind_wrapper() -
- * see that function's own doc comment for the full 2026-07-28
- * reasoning (no hardcoded date format literal any more; reads
- * ctx->ini->nls_date_format fresh on every call instead).
- */
-static int get_upd_bind_wrapper(oci_context_t *ctx, const char *dtype,
-                                 char *dest, size_t dest_max)
-{
-    if (strcmp(dtype, "DATE") == 0)
-    {
-        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-    {
-        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
-    {
-        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
-    {
-        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
-        return 1;
-    }
-    if (strcmp(dtype, "BLOB") == 0)
-    {
-        snprintf(dest, dest_max, "EMPTY_BLOB()");
-        return 1;
-    }
-    if (strcmp(dtype, "CLOB")  == 0 ||
-        strcmp(dtype, "NCLOB") == 0)
-    {
-        snprintf(dest, dest_max, "EMPTY_CLOB()");
-        return 1;
-    }
-    return 0;
-}
+/* get_upd_bind_wrapper() was removed here (Oracle dialect extraction,
+ * Stage 2, 2026-10-02) - see build_update_sql() below and db_dialect_t
+ * in db_driver.h. Same output, now from the driver's value_expr()/
+ * lob_placeholder(). */
 
 /* ================================================================== */
 /*  build_update_sql                                                    */
@@ -314,6 +269,9 @@ static int build_update_sql(oci_context_t        *ctx,
     char set_list [MAX_UPD_COLS * 256] = {0};
     int  bind_pos = 1;
 
+    /* Stage 2 - every vendor fragment comes from the driver. */
+    const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+
     /* ---- SET clause ---- */
     for (int i = 0; i < uc->col_count; i++)
     {
@@ -327,36 +285,30 @@ static int build_update_sql(oci_context_t        *ctx,
             if (strcasecmp(cols[m].col_name, uc->col_names[i]) == 0)
             { dtype = cols[m].data_type; break; }
 
-        char wrapper_buf[128] = {0};
-        int  has_wrapper = get_upd_bind_wrapper(ctx, dtype, wrapper_buf, sizeof(wrapper_buf));
-        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
-        char assignment[256] = {0};
+        char assignment[512] = {0};
+        const char *lob_literal = dl->lob_placeholder(dtype);
 
-        if (wrapper &&
-            (strcmp(wrapper, "EMPTY_BLOB()") == 0 ||
-             strcmp(wrapper, "EMPTY_CLOB()") == 0))
+        if (lob_literal)
         {
-            /* LOB: no bind placeholder - use literal directly */
+            /* LOB: the driver's placeholder literal, no bind position */
             snprintf(assignment, sizeof(assignment),
-                     "%s=%s", uc->col_names[i], wrapper);
+                     "%s=%s", uc->col_names[i], lob_literal);
         }
         else
         {
-            char bind_ph[16];
-            snprintf(bind_ph, sizeof(bind_ph), ":%d", bind_pos++);
-
-            if (wrapper)
+            char bind_ph[32];
+            char expr[256];
+            if (dl->bind_placeholder(bind_pos++, bind_ph, sizeof(bind_ph)) != 0 ||
+                dl->value_expr(dtype, bind_ph, expr, sizeof(expr)) != 0)
             {
-                char expr[128] = {0};
-                snprintf(expr, sizeof(expr), wrapper, bind_ph);
-                snprintf(assignment, sizeof(assignment),
-                         "%s=%s", uc->col_names[i], expr);
+                logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                             "dialect could not build the bind expression "
+                             "for SET column '%s' type '%s'",
+                             uc->col_names[i], dtype);
+                return -1;
             }
-            else
-            {
-                snprintf(assignment, sizeof(assignment),
-                         "%s=%s", uc->col_names[i], bind_ph);
-            }
+            snprintf(assignment, sizeof(assignment),
+                     "%s=%s", uc->col_names[i], expr);
         }
 
         strncat(set_list, assignment,
@@ -372,8 +324,13 @@ static int build_update_sql(oci_context_t        *ctx,
             strncat(where_list, " AND ",
                     sizeof(where_list) - strlen(where_list) - 1);
 
-        char bind_ph[16];
-        snprintf(bind_ph, sizeof(bind_ph), ":%d", bind_pos++);
+        char bind_ph[32];
+        if (dl->bind_placeholder(bind_pos++, bind_ph, sizeof(bind_ph)) != 0)
+        {
+            logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                         "dialect could not build a bind placeholder");
+            return -1;
+        }
 
         /* Apply date/timestamp/interval wrapper to WHERE keys too if
          * needed - resolved from cols[] by real column name lookup,
@@ -390,23 +347,24 @@ static int build_update_sql(oci_context_t        *ctx,
             if (strcasecmp(cols[m].col_name, uc->keys[k].field_name) == 0)
             { ktype = cols[m].data_type; break; }
 
-        char wrapper_buf[128] = {0};
-        int  has_wrapper = get_upd_bind_wrapper(ctx, ktype, wrapper_buf, sizeof(wrapper_buf));
-        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
+        /* Stage 2: value_expr() is the driver's conversion. WHERE keys
+         * never take a LOB placeholder - a LOB can't be compared with =
+         * (before Stage 2 a LOB-typed key would have produced
+         * "key=EMPTY_BLOB()", which Oracle rejects; now it is
+         * "key=:n", which Oracle rejects too - no fixture does this). */
+        char expr[256];
+        if (dl->value_expr(ktype, bind_ph, expr, sizeof(expr)) != 0)
+        {
+            logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                         "dialect could not build the bind expression "
+                         "for WHERE key '%s' type '%s'",
+                         uc->keys[k].field_name, ktype);
+            return -1;
+        }
 
-        char cond[256] = {0};
-        if (wrapper)
-        {
-            char expr[128] = {0};
-            snprintf(expr, sizeof(expr), wrapper, bind_ph);
-            snprintf(cond, sizeof(cond),
-                     "%s=%s", uc->keys[k].field_name, expr);
-        }
-        else
-        {
-            snprintf(cond, sizeof(cond),
-                     "%s=%s", uc->keys[k].field_name, bind_ph);
-        }
+        char cond[512] = {0};
+        snprintf(cond, sizeof(cond),
+                 "%s=%s", uc->keys[k].field_name, expr);
 
         strncat(where_list, cond,
                 sizeof(where_list) - strlen(where_list) - 1);
@@ -426,17 +384,34 @@ static int build_update_sql(oci_context_t        *ctx,
      * sql()'s bind_num which needed +1. Using bind_pos directly here. */
     int rowid_bind_pos = bind_pos;
 
+    /* Stage 2 - the row locator is the driver's (Oracle: nothing in the
+     * middle, "RETURNING ROWID INTO :n" at the end). */
+    char loc_mid[512]  = {0};
+    char loc_tail[512] = {0};
+    db_row_locator_ctx_t loc = { uc->table_name, uc->owner, NULL, 0 };
+    if (dl->row_locator_clauses(DB_DML_UPDATE, &loc, rowid_bind_pos,
+                                loc_mid, sizeof(loc_mid),
+                                loc_tail, sizeof(loc_tail)) != 0)
+    {
+        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                     "dialect could not build the row locator clauses");
+        return -1;
+    }
+
     if (strlen(uc->owner) > 0)
         n = snprintf(sql_buf, sql_max,
-                     "UPDATE %s.%s SET %s WHERE %s "
-                     "RETURNING ROWID INTO :%d",
-                     uc->owner, uc->table_name, set_list, where_list,
-                     rowid_bind_pos);
+                     "UPDATE %s.%s SET %s%s%s WHERE %s%s%s",
+                     uc->owner, uc->table_name, set_list,
+                     loc_mid[0] ? " " : "", loc_mid,
+                     where_list,
+                     loc_tail[0] ? " " : "", loc_tail);
     else
         n = snprintf(sql_buf, sql_max,
-                     "UPDATE %s SET %s WHERE %s "
-                     "RETURNING ROWID INTO :%d",
-                     uc->table_name, set_list, where_list, rowid_bind_pos);
+                     "UPDATE %s SET %s%s%s WHERE %s%s%s",
+                     uc->table_name, set_list,
+                     loc_mid[0] ? " " : "", loc_mid,
+                     where_list,
+                     loc_tail[0] ? " " : "", loc_tail);
 
     if (n < 0 || (size_t)n >= sql_max)
     {

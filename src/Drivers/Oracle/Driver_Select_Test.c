@@ -32,12 +32,12 @@
  *            every row fetched, sums the total across all batches, and
  *            checks that total against Test 1's independent count.
  *
- *   Test 3 - LOB rejection: select_open() on "SELECT * FROM OCI_LOB_TEST"
- *            (includes the real PHOTO BLOB column) must return exactly
- *            DB_SELECT_UNSUPPORTED_LOB, with *out_cursor left NULL -
- *            proves the v1 scalar-only boundary actually holds against
- *            a table that really does have a LOB column, not just an
- *            absence of one.
+ *   Test 3 - LOB column accepted (updated 2026-09-29): select_open() on
+ *            "SELECT * FROM OCI_LOB_TEST" (includes the real PHOTO BLOB
+ *            column) must succeed with a non-NULL cursor and 4 columns.
+ *            Originally the v1 "LOB rejection" check (expected
+ *            DB_SELECT_UNSUPPORTED_LOB); driver_oracle.c v2 (2026-09-14)
+ *            added BLOB/CLOB support, so that expectation was out of date.
  *
  * KNOWN GAP, not fixed by this test: select_open()'s
  * db_select_request_t.max_rows/max_memory_bytes/query_timeout are
@@ -76,7 +76,7 @@
  *     [row 1] ID=1 DESCRIPTION='Adams pizza' FILE_NAME='Adam_1.jpg'
  *     ... (6 rows printed) ...
  *   Test 2 total rows fetched           ... OK (6, matches Test 1)
- *   Test 3 (LOB rejection)              ... OK (DB_SELECT_UNSUPPORTED_LOB, cursor NULL)
+ *   Test 3 (LOB column accepted)        ... OK (4 columns, batch_size=2)
  *   PASS
  *
  * Vendor-internal leak notes: same accepted category as every previous
@@ -91,13 +91,13 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"
 #include "logger.h"
-#include "OCI_Resultset_Builder.h"
+#include "Resultset_Builder.h"
 
 /* Local OCI error macro, same shape as driver_oracle.c's own
  * ORACLE_CHECK_OCI - this file needs its own copy for Test 1's direct
@@ -203,6 +203,21 @@ int main(void)
         return 1;
     }
 
+    /* Metadata_logger (2026-09-29): select_open()'s describe path calls
+     * get_multi_metadata(), which logs through ctx->Metadata_logger.
+     * Without it every call printed "Logger is NULL" and any metadata
+     * error was silently dropped (Driver Guide 3.3).                 */
+    logger_t meta_l;
+    if (logger_init_str2(&meta_l, config.Metadata_log_file_name,
+                          config.Metadata_log_file_max_size,
+                          config.Metadata_log_file_rotation_number,
+                          config.Metadata_log_level, ctx.error_logger) != 0)
+    {
+        printf("INIT FAILED - Metadata_logger\n");
+        return 1;
+    }
+    ctx.Metadata_logger = &meta_l;
+
     const db_driver_t *driver = db_driver_get(&ctx);
     if (!driver || !driver->connect || !driver->get_session ||
         !driver->select_open || !driver->select_fetch_batch ||
@@ -226,6 +241,13 @@ int main(void)
         driver->disconnect(&ctx);
         return 1;
     }
+
+    /* get_session() copies only the connection handles and ctx->logger
+     * into worker_ctx - give the worker the loggers select_open() and
+     * its describe path actually write to (2026-09-29).              */
+    worker_ctx.error_logger    = ctx.error_logger;
+    worker_ctx.select_logger   = ctx.select_logger;
+    worker_ctx.Metadata_logger = ctx.Metadata_logger;
 
     /* ---- Test 1 ---- */
     int expected_count = -1;
@@ -308,7 +330,13 @@ int main(void)
         }
     }
 
-    /* ---- Test 3 ---- */
+    /* ---- Test 3 ----
+     * Was "LOB rejection" (expected DB_SELECT_UNSUPPORTED_LOB). Since
+     * driver_oracle.c v2 (2026-09-14) select_open() supports BLOB/CLOB
+     * columns, so that expectation was out of date. Now checks the v2
+     * contract instead: SELECT * on a table with a real BLOB column
+     * opens cleanly, reports all 4 columns, and closes. Fetching LOB
+     * content is Driver_LOB_Select_Test.c's job, not repeated here.  */
     db_select_request_t req3;
     memset(&req3, 0, sizeof(req3));
     req3.sql             = "SELECT * FROM OCI_LOB_TEST";   /* includes PHOTO BLOB */
@@ -319,20 +347,20 @@ int main(void)
     int                  col_count3 = 0;
     int                  batch_size3 = 0;
 
-    printf("Test 3 (LOB rejection)              ... ");
+    printf("Test 3 (LOB column accepted)        ... ");
     int open_rc3 = driver->select_open(&worker_ctx, &req3, &cursor3,
                                         &columns3, &col_count3, &batch_size3);
 
-    if (open_rc3 == DB_SELECT_UNSUPPORTED_LOB && cursor3 == NULL)
-        printf("OK (DB_SELECT_UNSUPPORTED_LOB, cursor NULL)\n");
+    if (open_rc3 == 0 && cursor3 != NULL && col_count3 == 4)
+        printf("OK (%d columns, batch_size=%d)\n", col_count3, batch_size3);
     else
     {
-        printf("FAILED - rc=%d cursor=%p (expected DB_SELECT_UNSUPPORTED_LOB, NULL)\n",
-               open_rc3, (void *)cursor3);
+        printf("FAILED - rc=%d cursor=%p col_count=%d (expected 0, non-NULL, 4)\n",
+               open_rc3, (void *)cursor3, col_count3);
         failed = 1;
-        if (cursor3) driver->select_close(cursor3);
-        if (columns3) free(columns3);
     }
+    if (cursor3)  driver->select_close(cursor3);
+    if (columns3) free(columns3);
 
     driver->release_session(&ctx, &worker_ctx);
     driver->disconnect(&ctx);
@@ -343,6 +371,7 @@ int main(void)
     logger_close(&conn_l);
     logger_close(&connpool_l);
     logger_close(&select_l);
+    logger_close(&meta_l);
 
     return failed ? 1 : 0;
 }

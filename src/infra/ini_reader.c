@@ -582,6 +582,39 @@ static char *trim(char *str)
     return str;
 }
 
+/*
+ * strip_inline_comment()  (2026-09-29)
+ *
+ * Removes a trailing inline comment from an already-trimmed value, then
+ * trims trailing whitespace. A comment starts at:
+ *   - '#'  at the start of the value, or preceded by whitespace
+ *   - '//' preceded by whitespace
+ * so values that legitimately contain these characters survive:
+ *   https://host/path      (was truncated to "https:")
+ *   //host/share/path      (was reduced to "")
+ *   pass#word
+ * while   fnv1a    # fnv1a | djb2 | murmur3   still yields "fnv1a".
+ * Previously ANY '#' or '//' in a value was treated as a comment - that
+ * silently broke BLOB_URL_path, CLOB_URL_path and BLOB_host_path.
+ */
+static void strip_inline_comment(char *value)
+{
+    for (char *cp = value; *cp; cp++)
+    {
+        int at_start    = (cp == value);
+        int after_space = !at_start && isspace((unsigned char)cp[-1]);
+
+        if (cp[0] == '#' && (at_start || after_space))
+        { *cp = '\0'; break; }
+        if (cp[0] == '/' && cp[1] == '/' && after_space)
+        { *cp = '\0'; break; }
+    }
+
+    int vlen = (int)strlen(value);
+    while (vlen > 0 && isspace((unsigned char)value[vlen - 1]))
+    { value[vlen - 1] = '\0'; vlen--; }
+}
+
 /* ------------------------------------------------------------------ */
 /*  INI accessors                                                       */
 /* ------------------------------------------------------------------ */
@@ -677,21 +710,7 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
          * Walk the value looking for a bare # or //.
          * We do NOT strip # inside a quoted string, but since none of
          * our values are quoted this simple scan is safe.            */
-        {
-            char *cp = value;
-            while (*cp)
-            {
-                if (*cp == '#')
-                { *cp = '\0'; break; }
-                if (*cp == '/' && *(cp + 1) == '/')
-                { *cp = '\0'; break; }
-                cp++;
-            }
-            /* Re-trim trailing whitespace left before the comment    */
-            int vlen = (int)strlen(value);
-            while (vlen > 0 && isspace((unsigned char)value[vlen - 1]))
-            { value[vlen - 1] = '\0'; vlen--; }
-        }
+        strip_inline_comment(value);   /* 2026-09-29 - see helper */
 
         if (ini.count >= capacity) {
             capacity *= 2;
@@ -1124,17 +1143,7 @@ int load_consumer_ini(const char *filename, app_config_t *config)
         char *name  = trim(p);
         char *value = trim(eq + 1);
 
-        {
-            char *cp = value;
-            while (*cp)
-            {
-                if ((cp[0] == '#') ||
-                    (cp[0] == '/' && cp[1] == '/'))
-                { *cp = '\0'; break; }
-                cp++;
-            }
-            value = trim(value);
-        }
+        strip_inline_comment(value);   /* 2026-09-29 - see helper */
 
         if (ini.count >= capacity)
         {
@@ -1291,17 +1300,7 @@ int load_http_consumer_ini(const char *filename, app_config_t *config)
         char *name  = trim(p);
         char *value = trim(eq + 1);
 
-        {
-            char *cp = value;
-            while (*cp)
-            {
-                if ((cp[0] == '#') ||
-                    (cp[0] == '/' && cp[1] == '/'))
-                { *cp = '\0'; break; }
-                cp++;
-            }
-            value = trim(value);
-        }
+        strip_inline_comment(value);   /* 2026-09-29 - see helper */
 
         if (ini.count >= capacity)
         {

@@ -285,10 +285,8 @@ static int build_proc_ctx_from_request(oci_context_t                     *ctx,
 
 /* ================================================================== */
 /*  build_plsql_block                                                   */
-/*  Generates:  BEGIN proc_name(:P1, :P2, :P3); END;                  */
-/* ================================================================== */
-/*  build_plsql_block                                                   */
-/*  Generates:  BEGIN proc_name(:P1, :P2, :P3); END;                  */
+/*  Asks the driver for the procedure call statement (Stage 2).         */
+/*  Oracle:  BEGIN proc_name(:P1, :P2, :P3); END;                     */
 /* ================================================================== */
 static int build_plsql_block(oci_context_t  *ctx,
                                const proc_ctx_t *pc,
@@ -299,45 +297,30 @@ static int build_plsql_block(oci_context_t  *ctx,
                  "Building PL/SQL block for '%s' params=%d",
                  pc->proc_name, pc->param_count);
 
-    if (pc->param_count == 0)
+    /* Stage 2 - the call statement is the driver's (Oracle:
+     * "BEGIN proc(:P1, :P2); END;", or "BEGIN proc; END;" with no
+     * parameters). Parameters are bound by name; names are passed
+     * without the leading ':'. The "PL/SQL block:" log line below stays
+     * here in core, so the logged text can be compared before/after. */
+    const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+
+    const char *names[MAX_PROC_PARAMS];
+    if (pc->param_count < 0 || pc->param_count > MAX_PROC_PARAMS)
     {
-        /* No parameters - simple call */
-        int n = snprintf(block_buf, block_max,
-                         "BEGIN %s; END;", pc->proc_name);
-        if (n < 0 || (size_t)n >= block_max)
-        {
-            logger_write(ctx->procedure_logger, LOG_ERROR, __func__, 0,
-                         "PL/SQL block truncated");
-            return -1;
-        }
+        logger_write(ctx->procedure_logger, LOG_ERROR, __func__, 0,
+                     "param_count=%d out of range (0..%d)",
+                     pc->param_count, MAX_PROC_PARAMS);
+        return -1;
     }
-    else
+    for (int i = 0; i < pc->param_count; i++)
+        names[i] = pc->params[i].param_name;
+
+    if (dl->procedure_call_sql(pc->proc_name, names, pc->param_count,
+                               block_buf, block_max) != 0)
     {
-        /* Build parameter list :P1, :P2, ... */
-        char param_list[MAX_PLSQL_BLOCK_LEN] = {0};
-
-        for (int i = 0; i < pc->param_count; i++)
-        {
-            if (i > 0)
-                strncat(param_list, ", ",
-                        sizeof(param_list) - strlen(param_list) - 1);
-
-            char bind_ref[132];
-            snprintf(bind_ref, sizeof(bind_ref),
-                     ":%s", pc->params[i].param_name);
-            strncat(param_list, bind_ref,
-                    sizeof(param_list) - strlen(param_list) - 1);
-        }
-
-        int n = snprintf(block_buf, block_max,
-                         "BEGIN %s(%s); END;",
-                         pc->proc_name, param_list);
-        if (n < 0 || (size_t)n >= block_max)
-        {
-            logger_write(ctx->procedure_logger, LOG_ERROR, __func__, 0,
-                         "PL/SQL block truncated - too many parameters");
-            return -1;
-        }
+        logger_write(ctx->procedure_logger, LOG_ERROR, __func__, 0,
+                     "PL/SQL block truncated - too many parameters");
+        return -1;
     }
 
     logger_write(ctx->procedure_logger, LOG_INFO, __func__, 0,

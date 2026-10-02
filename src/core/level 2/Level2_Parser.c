@@ -11,10 +11,12 @@
 #include <string.h>
 #include <strings.h>   /* strcasecmp() - find_column(), row_has_field() */
 
-#include <oci.h>
-
 #include "Level2_Parser.h"
 #include "logger.h"
+#include "date_normalize.h"   /* date_normalize() - Stage 1, replaces the
+                                  Oracle TO_DATE round trip            */
+#include "db_type_class.h"    /* db_type_class() - DATE/TIMESTAMP class
+                                  checks instead of type-name compares */
 #include "sql_dependency_extractor.h"
 
 #include "Insert_Execute_Module.h"   /* insert_request_t, insert_row_t   */
@@ -242,64 +244,66 @@ static int row_field_sets_match(const insert_row_t *reference, const insert_row_
  * normalize_client_date_value()
  *
  * Part of the 2026-07-27/28 date-handling design. For every DATE/
- * TIMESTAMP-typed field, validates (and where needed, converts) the
- * value via Oracle itself - by the time build_insert_ctx_from_
- * request()/build_update_ctx_from_request()/build_delete_ctx_from_
- * request() ever sees the value, it's already in the one canonical
- * shape (ctx->ini->nls_date_format, optionally with a fractional-
- * seconds suffix for TIMESTAMP columns) every TO_DATE()/TO_TIMESTAMP()
- * wrapper in this project expects.
+ * TIMESTAMP-class field, validates (and where needed, converts) the
+ * value so that by the time build_insert_ctx_from_request()/
+ * build_update_ctx_from_request()/build_delete_ctx_from_request() see
+ * it, it is already in the one canonical shape:
  *
- * If the client supplied a <client_date_format>, that's used as the
- * SOURCE format for the conversion. If not, the canonical
- * nls_date_format is used as both source AND target - i.e. the value
- * is validated against the real configured format rather than simply
- * assumed correct. This closes a real gap found 2026-07-28: this
- * function used to be a no-op whenever client_date_format was empty,
- * meaning the common case (no format hint) was never actually checked
- * against anything - only a hardcoded, disconnected sscanf pattern in
- * OCI_Insert_Validate_Module.c's validate_date()/validate_timestamp()
- * did, which is why those two functions are now removed entirely (see
- * their own removal note) - this is the one authoritative date-format
- * check now, for every date value, always.
+ *   DATE       YYYY-MM-DD HH:MM:SS
+ *   TIMESTAMP  YYYY-MM-DD HH:MM:SS.ffffff
+ *
+ * If the client supplied a <client_date_format>, that is the SOURCE
+ * format. If not, the value is validated against the canonical format
+ * itself rather than assumed correct (the 2026-07-28 gap fix - this is
+ * the one authoritative date check, for every date value, always).
+ *
+ * Stage 1 of the Oracle dialect extraction (2026-09-30): the check is
+ * now plain C (date_normalize(), date_normalize.c) instead of a
+ * SELECT TO_CHAR(TO_DATE(:1,:2),:3) FROM DUAL round trip per value per
+ * pass. The parser reproduces TO_DATE/TO_TIMESTAMP's default matching
+ * rules for the mask elements clients send; Driver_Level2Parser_Test.c
+ * runs the old Oracle path and this one side by side over the same
+ * corpus. Two client-visible differences, both intended:
+ *   - rejection text keeps the prefix "Invalid date: value='...' does
+ *     not match <fmt>='...'" but ends in a plain reason, e.g.
+ *     "(not a valid month)", instead of "(ORA-nnnnn: ...)" (proposal
+ *     decision 0.4);
+ *   - a mask element outside the supported set (DY, J, FX, ...) is
+ *     reported as "unsupported client_date_format" instead of being
+ *     passed to Oracle.
+ *
+ * Since Stage 2 (2026-10-02) the driver converts these values with a
+ * fixed ISO mask (db_dialect_t value_expr(), driver_oracle.c), so the
+ * canonical form no longer depends on nls_date_format at all. The
+ * Stage 1 guard that refused to run unless nls_date_format matched
+ * has been removed; nls_date_format is now only the Oracle session's
+ * display format for SELECT results. The rejection text still names
+ * "nls_date_format" when no client format was given, so the message
+ * prefix clients see is unchanged (proposal decision 0.4).
  *
  * client_date_format is deliberately mutable (not const) - see the
- * 2026-07-29 fix inline at the success path below: this function is
- * called twice per request (once from the dispatcher's own top-level
+ * 2026-07-29 fix at the success path below: this function is called
+ * twice per request (once from the dispatcher's own top-level
  * validation pass, again inside execute_insert_batch()/
  * execute_update_batch()/execute_delete_batch()'s own Stage 1 as
- * defense-in-depth), and mutates value in place on a successful
- * conversion. Without clearing client_date_format after that, the
- * second pass would see an already-canonical value but a still-stale
- * format label, and reject it trying to reinterpret an already-
- * converted value against a format it no longer matches - this is not
- * a hypothetical, it's exactly what a real end-to-end UPDATE test with
- * a European DD/MM/YYYY WHERE-key value hit on its first run.
- *
- * Uses Oracle itself as the authoritative converter
- * (SELECT TO_CHAR(TO_DATE(:1,:2),:3) FROM DUAL, or TO_TIMESTAMP for
- * TIMESTAMP-family columns) rather than reimplementing Oracle's format-
- * model parsing in C - same "resolve via the authoritative source"
- * principle used everywhere else in this project (metadata_cache,
- * never trusting a client-supplied column type).
+ * defense-in-depth), and rewrites value in place on success. Without
+ * clearing client_date_format after that, the second pass would see an
+ * already-canonical value but a stale format label and reject it -
+ * exactly what a real end-to-end UPDATE test with a European
+ * DD/MM/YYYY WHERE-key value hit on its first run. Unchanged in Stage 1.
  *
  * real_data_type is the REAL column type already resolved via
  * metadata_cache by the caller - never trust anything client-supplied
- * for this, same reasoning as every other type resolution here.
+ * for this. Classed with db_type_class(): DATE -> date, anything
+ * starting TIMESTAMP (including WITH [LOCAL] TIME ZONE) -> timestamp,
+ * exactly as the old strcmp/strncmp checks did. Any other class is a
+ * no-op - a format hint on a non-date column is ignored (logged).
  *
- * If real_data_type isn't DATE/TIMESTAMP-family, this is a no-op - a
- * format hint on a non-date column isn't this function's concern to
- * act on or reject, and a non-date value has nothing here to validate.
- *
- * Returns  0 - validated (and normalized, if needed) successfully, or
- *             nothing to do (real_data_type isn't a date/time type)
- *         -1 - Oracle itself rejected the conversion - either the
- *             client's declared format doesn't match their value, or
- *             (no client format supplied) the value isn't actually in
- *             nls_date_format at all. Either way a genuine, reportable
- *             validation failure (err_msg populated), not silently
- *             ignored - fail closed rather than let a bad date reach
- *             the database in some unpredictable shape.
+ * Returns  0 - validated (and normalised, if needed), or nothing to do
+ *         -1 - the value does not match the format, or the format
+ *              itself is unsupported.
+ *              err_msg is populated; fail closed rather than let a bad
+ *              date reach the database in an unpredictable shape.
  */
 static int normalize_client_date_value(oci_context_t *ctx,
                                         logger_t      *op_logger,
@@ -310,8 +314,9 @@ static int normalize_client_date_value(oci_context_t *ctx,
                                         char          *err_msg,
                                         size_t         err_msg_max)
 {
-    int is_timestamp = (strncmp(real_data_type, "TIMESTAMP", 9) == 0);
-    int is_date      = (strcmp(real_data_type, "DATE") == 0);
+    db_type_class_t cls = db_type_class(real_data_type);
+    int is_timestamp = (cls == DB_TYPE_CLASS_TIMESTAMP);
+    int is_date      = (cls == DB_TYPE_CLASS_DATE);
 
     if (!is_date && !is_timestamp)
     {
@@ -330,121 +335,61 @@ static int normalize_client_date_value(oci_context_t *ctx,
         return 0;   /* empty value - a nullable/required-ness concern
                      * handled elsewhere, not a date-format one         */
 
-    /* Canonical target format - ctx->ini->nls_date_format is the one
-     * source of truth (no hardcoded literal here at all, per the
-     * 2026-07-27 decision to remove every hardcoded date format
-     * string from this project). TIMESTAMP columns get a fractional-
-     * seconds suffix so the canonical string round-trips cleanly
-     * through the TO_TIMESTAMP()/'...FF6' wrapper every execute
-     * module already applies downstream.                              */
-    char canonical_fmt[80];
-    if (is_timestamp)
-        snprintf(canonical_fmt, sizeof(canonical_fmt), "%s.FF6",
-                 ctx->ini->nls_date_format);
-    else
-        snprintf(canonical_fmt, sizeof(canonical_fmt), "%s",
-                 ctx->ini->nls_date_format);
+    (void)ctx;   /* no longer needed here since Stage 2 - see doc comment */
 
-    /* Source format: the client's declared format if supplied,
-     * otherwise the canonical format itself - meaning an un-tagged
-     * value gets VALIDATED against the real configured
-     * nls_date_format via this same Oracle round-trip, rather than
-     * silently assumed correct (see this function's own doc comment
-     * for the gap this closes).                                       */
-    const char *source_fmt = (client_date_format && client_date_format[0])
+    int has_client_fmt = (client_date_format && client_date_format[0]);
+    const char *source_fmt = has_client_fmt
                               ? client_date_format
-                              : canonical_fmt;
+                              : (is_timestamp ? DATE_CANONICAL_MASK_TS
+                                              : DATE_CANONICAL_MASK);
 
-    char sql[256];
-    snprintf(sql, sizeof(sql),
-             "SELECT TO_CHAR(%s(:1,:2),:3) FROM DUAL",
-             is_timestamp ? "TO_TIMESTAMP" : "TO_DATE");
+    char normalized[DATE_NORMALIZE_OUT_MAX];
+    char reason[256];
 
-    OCIStmt *stmt = NULL;
-    OCIBind *bnd1 = NULL, *bnd2 = NULL, *bnd3 = NULL;
-    OCIDefine *dfn = NULL;
-    char     result_buf[128] = {0};
-    sb2      result_ind = 0;
-    int      rc = 0;
+    int rc = date_normalize(value, has_client_fmt ? client_date_format : NULL,
+                            is_timestamp, normalized, sizeof(normalized),
+                            reason, sizeof(reason));
 
-    sword status = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                                    (text *)sql, (ub4)strlen(sql),
-                                    NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
-    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO)
+    if (rc == DATE_NORM_BAD_MASK)
     {
+        /* Keeps the "Invalid date" prefix clients already match on. */
         snprintf(err_msg, err_msg_max,
-                 "Internal error preparing date normalization query");
+                 "Invalid date: unsupported client_date_format='%s' (%s)",
+                 source_fmt, reason);
         logger_write(op_logger, LOG_ERROR, __func__, 0, "%s", err_msg);
         return -1;
     }
 
-    OCIBindByPos(stmt, &bnd1, ctx->errhp, 1,
-                 (dvoid *)value, (sb4)strlen(value) + 1,
-                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
-    OCIBindByPos(stmt, &bnd2, ctx->errhp, 2,
-                 (dvoid *)source_fmt, (sb4)strlen(source_fmt) + 1,
-                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
-    OCIBindByPos(stmt, &bnd3, ctx->errhp, 3,
-                 (dvoid *)canonical_fmt, (sb4)strlen(canonical_fmt) + 1,
-                 SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
-
-    OCIDefineByPos(stmt, &dfn, ctx->errhp, 1,
-                   (dvoid *)result_buf, (sb4)sizeof(result_buf),
-                   SQLT_STR, &result_ind, NULL, NULL, OCI_DEFAULT);
-
-    status = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0,
-                             NULL, NULL, OCI_DEFAULT);
-
-    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO)
+    if (rc != DATE_NORM_OK)
     {
-        /* Oracle itself rejected the conversion - almost always means
-         * the client's declared format doesn't actually match the
-         * value they sent (ORA-01858/ORA-01861 and similar). This is
-         * the genuine, reportable validation failure this function's
-         * own doc comment describes - fail closed, per the 2026-07-27
-         * decision, rather than let a bad date through in some
-         * unpredictable shape.                                        */
-        text errbuf[512];
-        sb4  errcode = 0;
-        OCIErrorGet(ctx->errhp, 1, NULL, &errcode, errbuf, sizeof(errbuf),
-                    OCI_HTYPE_ERROR);
+        /* Same prefix as before Stage 1; plain reason instead of the
+         * old "(ORA-nnnnn: ...)" suffix (proposal decision 0.4). */
         snprintf(err_msg, err_msg_max,
                  "Invalid date: value='%.80s' does not match "
-                 "%s='%s' (ORA-%05d: %.200s)",
+                 "%s='%s' (%s)",
                  value,
-                 (client_date_format && client_date_format[0])
-                     ? "client_date_format" : "nls_date_format",
-                 source_fmt, errcode, (char *)errbuf);
+                 has_client_fmt ? "client_date_format" : "nls_date_format",
+                 source_fmt, reason);
         logger_write(op_logger, LOG_ERROR, __func__, 0, "%s", err_msg);
-        rc = -1;
-    }
-    else
-    {
-        strncpy(value, result_buf, value_max - 1);
-        value[value_max - 1] = '\0';
-
-        /* Clear client_date_format after a successful conversion - see
-         * this function's own doc comment for the 2026-07-29 bug this
-         * fixes: level2_validate_insert()/update()/delete() each run
-         * twice per request (once from the dispatcher, again inside
-         * execute_*_batch()'s own Stage 1 as defense-in-depth), and
-         * this function mutates value in place. Without this clear,
-         * the second pass would see value already sitting in canonical
-         * format but client_date_format still declaring the ORIGINAL
-         * (now stale) format, and fail trying to reinterpret an
-         * already-converted value against a format it no longer
-         * matches - found via a real UPDATE end-to-end test where a
-         * European DD/MM/YYYY WHERE-key value converted successfully
-         * on the first pass, then was rejected on the second.          */
-        if (client_date_format) client_date_format[0] = '\0';
-
-        logger_write(op_logger, LOG_DEBUG, __func__, 0,
-                     "Normalized date value to '%s' (canonical format "
-                     "'%s')", value, canonical_fmt);
+        return -1;
     }
 
-    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-    return rc;
+    strncpy(value, normalized, value_max - 1);
+    value[value_max - 1] = '\0';
+
+    /* Logged before the clear below - source_fmt may point into
+     * client_date_format. */
+    logger_write(op_logger, LOG_DEBUG, __func__, 0,
+                 "Normalized date value to '%s' (source format '%s', %s)",
+                 value, source_fmt, is_timestamp ? "TIMESTAMP" : "DATE");
+
+    /* Clear client_date_format after a successful conversion - see
+     * this function's doc comment for the 2026-07-29 bug this fixes
+     * (second validation pass re-reading an already-converted value
+     * against the original, now stale, format).                       */
+    if (client_date_format) client_date_format[0] = '\0';
+
+    return 0;
 }
 
 /* ================================================================== */
@@ -596,7 +541,8 @@ int level2_validate_insert(oci_context_t        *ctx,
              * project's one canonical format BEFORE anything else
              * reads this field's value - see normalize_client_date_
              * value()'s own doc comment for the full 2026-07-27
-             * design. A no-op unless fv->client_date_format is set.    */
+             * design. Runs for every DATE/TIMESTAMP-class value,
+             * with or without fv->client_date_format.                   */
             {
                 char date_err[512];
                 if (normalize_client_date_value(ctx, ctx->insert_logger,

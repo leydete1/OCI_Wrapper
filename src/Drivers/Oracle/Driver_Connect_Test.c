@@ -62,7 +62,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "OCI_Connection.h"
+#include "Connection.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"

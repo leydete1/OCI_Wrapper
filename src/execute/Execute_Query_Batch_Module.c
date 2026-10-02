@@ -574,8 +574,19 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     OCIDefine *defn_count   = NULL;
     char       query_count[4096];
 
-    snprintf(query_count, sizeof(query_count),
-             "SELECT COUNT(*) FROM (SELECT 1 FROM (%s))", cfg->SQL);
+    /* Stage 2 - the counting wrapper is the driver's (Oracle:
+     * "SELECT COUNT(*) FROM (SELECT 1 FROM (<sql>))" - see this
+     * block's comment above for why SELECT 1). */
+    const db_driver_t *count_driver = db_driver_get(ctx);
+    if (count_driver->dialect->count_rows_sql(cfg->SQL, query_count,
+                                              sizeof(query_count)) != 0)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "Count query does not fit in %zu bytes",
+                     sizeof(query_count));
+        rc = -1;
+        goto Cleanup;
+    }
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Count query: %s", query_count);
@@ -685,9 +696,18 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 
     if (truncated)
     {
-        snprintf(fetch_sql_buf, sizeof(fetch_sql_buf),
-                 "SELECT * FROM (%s) WHERE ROWNUM <= %d",
-                 cfg->SQL, record_count);
+        /* Stage 2 - the row-limit wrapper is the driver's (Oracle:
+         * "SELECT * FROM (<sql>) WHERE ROWNUM <= n"). */
+        if (db_driver_get(ctx)->dialect->row_limit_sql(cfg->SQL, record_count,
+                                                       fetch_sql_buf,
+                                                       sizeof(fetch_sql_buf)) != 0)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "Truncated fetch SQL does not fit in %zu bytes",
+                         sizeof(fetch_sql_buf));
+            rc = -1;
+            goto Cleanup;
+        }
         fetch_sql = fetch_sql_buf;
         logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                      "Truncated fetch SQL: %s", fetch_sql);

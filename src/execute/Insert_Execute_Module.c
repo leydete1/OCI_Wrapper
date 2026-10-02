@@ -311,65 +311,12 @@ static int build_insert_ctx_from_request(oci_context_t          *ctx,
 /* ================================================================== */
 
 
-/* Return SQL conversion wrapper for a given Oracle type.
- * %s will be replaced with the bind placeholder e.g. :1              */
-/*
- * get_bind_wrapper()
- *
- * Writes the SQL wrapper expression for this column's real data type
- * into dest, if one applies. Returns 1 if dest was populated
- * (date/timestamp/interval - still containing exactly one %s
- * placeholder for the caller's own bind-position substitution - or
- * CLOB/BLOB, which takes no placeholder at all), 0 for a plain scalar
- * type (caller uses a bare bind placeholder, no wrapper needed).
- *
- * ctx->ini->nls_date_format is read fresh on every call - no hardcoded
- * date format literal anywhere in this function any more (2026-07-28
- * decision - see OCI_Level2_Parser.c's normalize_client_date_value()
- * for the matching client-side half of this same design: by the time
- * a value reaches this wrapper, Level 2 has already normalized it into
- * whatever nls_date_format currently is, so this wrapper and that
- * normalization step always agree, even if nls_date_format is changed
- * in config.ini - neither one has its own independent, potentially
- * stale copy of the format string any more).
- */
-static int get_bind_wrapper(oci_context_t *ctx, const char *dtype,
-                             char *dest, size_t dest_max)
-{
-    if (strcmp(dtype, "DATE") == 0)
-    {
-        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-    {
-        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") != NULL && strstr(dtype, "MONTH") != NULL)
-    {
-        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") != NULL && strstr(dtype, "SECOND") != NULL)
-    {
-        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
-        return 1;
-    }
-    if (strcmp(dtype, "CLOB")  == 0 ||
-        strcmp(dtype, "NCLOB") == 0)
-    {
-        snprintf(dest, dest_max, "EMPTY_CLOB()");
-        return 1;
-    }
-    if (strcmp(dtype, "BLOB") == 0)
-    {
-        snprintf(dest, dest_max, "EMPTY_BLOB()");
-        return 1;
-    }
-
-    return 0;   /* plain bind placeholder - no wrapper needed */
-}
+/* get_bind_wrapper() was removed here (Oracle dialect extraction,
+ * Stage 2, 2026-10-02). Its TO_DATE/TO_TIMESTAMP/TO_*INTERVAL wrapping
+ * and EMPTY_BLOB()/EMPTY_CLOB() literals are now the driver's
+ * value_expr()/lob_placeholder() (db_dialect_t, db_driver.h), with
+ * identical output. The same function existed four times (here,
+ * Update, Delete, Audit Trail) - one Oracle implementation now. */
 
 static int build_insert_sql(oci_context_t        *ctx,
                               const insert_ctx_t   *ic,
@@ -396,6 +343,9 @@ static int build_insert_sql(oci_context_t        *ctx,
      */
     int bind_num = 0;
 
+    /* Stage 2 - every vendor fragment comes from the driver. */
+    const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+
     for (int i = 0; i < ic->col_count; i++)
     {
         if (i > 0)
@@ -417,39 +367,34 @@ static int build_insert_sql(oci_context_t        *ctx,
             }
         }
 
-        char wrapper_buf[128] = {0};
-        int  has_wrapper = get_bind_wrapper(ctx, dtype, wrapper_buf, sizeof(wrapper_buf));
-        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
+        const char *lob_literal = dl->lob_placeholder(dtype);
 
-        if (strcmp(dtype, "BLOB")  == 0 ||
-            strcmp(dtype, "CLOB")  == 0 ||
-            strcmp(dtype, "NCLOB") == 0)
+        if (lob_literal)
         {
-            /* LOB column: emit literal only, no bind placeholder.
+            /* LOB column: the driver's placeholder literal, no bind.
              * bind_num is NOT incremented - numbering stays continuous
              * for the scalar columns that follow.                      */
-            strncat(bind_list, wrapper,
-                    sizeof(bind_list) - strlen(bind_list) - 1);
-        }
-        else if (wrapper)
-        {
-            /* Date / Timestamp / Interval: wrap placeholder with
-             * Oracle conversion function e.g. TO_DATE(:5,...)         */
-            bind_num++;
-            char bind_ph[16];
-            snprintf(bind_ph, sizeof(bind_ph), ":%d", bind_num);
-            char wrapped[128] = {0};
-            snprintf(wrapped, sizeof(wrapped), wrapper, bind_ph);
-            strncat(bind_list, wrapped,
+            strncat(bind_list, lob_literal,
                     sizeof(bind_list) - strlen(bind_list) - 1);
         }
         else
         {
-            /* Plain scalar: emit bind placeholder directly            */
+            /* Every other column: the driver's placeholder for the
+             * next position, converted to the column's type where the
+             * driver needs to (dates, timestamps, intervals).         */
             bind_num++;
-            char bind_ph[16];
-            snprintf(bind_ph, sizeof(bind_ph), ":%d", bind_num);
-            strncat(bind_list, bind_ph,
+            char bind_ph[32];
+            char expr[256];
+            if (dl->bind_placeholder(bind_num, bind_ph, sizeof(bind_ph)) != 0 ||
+                dl->value_expr(dtype, bind_ph, expr, sizeof(expr)) != 0)
+            {
+                logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                             "dialect could not build the bind expression "
+                             "for column '%s' type '%s'",
+                             ic->col_names[i], dtype);
+                return -1;
+            }
+            strncat(bind_list, expr,
                     sizeof(bind_list) - strlen(bind_list) - 1);
         }
     }
@@ -474,17 +419,34 @@ static int build_insert_sql(oci_context_t        *ctx,
      * batch as an unfilled EMPTY_BLOB()/EMPTY_CLOB()).                 */
     int rowid_bind_pos = bind_num + 1;
 
+    /* Stage 2 - the row locator is the driver's (Oracle: nothing in the
+     * middle, "RETURNING ROWID INTO :n" at the end). */
+    char loc_mid[512]  = {0};
+    char loc_tail[512] = {0};
+    db_row_locator_ctx_t loc = { ic->table_name, ic->owner, NULL, 0 };
+    if (dl->row_locator_clauses(DB_DML_INSERT, &loc, rowid_bind_pos,
+                                loc_mid, sizeof(loc_mid),
+                                loc_tail, sizeof(loc_tail)) != 0)
+    {
+        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                     "dialect could not build the row locator clauses");
+        return -1;
+    }
+
     if (strlen(ic->owner) > 0)
         n = snprintf(sql_buf, sql_max,
-                     "INSERT INTO %s.%s (%s) VALUES (%s) "
-                     "RETURNING ROWID INTO :%d",
-                     ic->owner, ic->table_name,
-                     col_list, bind_list, rowid_bind_pos);
+                     "INSERT INTO %s.%s (%s)%s%s VALUES (%s)%s%s",
+                     ic->owner, ic->table_name, col_list,
+                     loc_mid[0] ? " " : "", loc_mid,
+                     bind_list,
+                     loc_tail[0] ? " " : "", loc_tail);
     else
         n = snprintf(sql_buf, sql_max,
-                     "INSERT INTO %s (%s) VALUES (%s) "
-                     "RETURNING ROWID INTO :%d",
-                     ic->table_name, col_list, bind_list, rowid_bind_pos);
+                     "INSERT INTO %s (%s)%s%s VALUES (%s)%s%s",
+                     ic->table_name, col_list,
+                     loc_mid[0] ? " " : "", loc_mid,
+                     bind_list,
+                     loc_tail[0] ? " " : "", loc_tail);
 
     if (n < 0 || (size_t)n >= sql_max)
     {

@@ -61,6 +61,8 @@
  * opaque to core either way.
  */
 
+#include <stdarg.h>   /* oracle_fmt() - Stage 2 dialect */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -293,6 +295,30 @@ struct db_select_cursor_t {
      * fixed before it ever shipped, not after a real failure - see
      * oracle_select_cursor_free()'s own branch on this flag below. */
     int             stmt_owned_via_handle_alloc;
+
+    /* Bug fix (2026-09-30, found via Driver_LOB_Select_Test.c Test 5 -
+     * ASan SEGV at 0x8 in kpccld2i under OCIStmtFetch2, mixed BLOB+CLOB
+     * query). get_multi_metadata() defines a CLOB column against
+     * &mmr->clob_loc - the ADDRESS of this struct's own field - and OCI
+     * only dereferences a define buffer at OCIStmtFetch2 time, not at
+     * define time. mmr used to be a stack local inside
+     * oracle_select_describe_and_define(), dead before the first fetch,
+     * so OCI read whatever had since overwritten that stack slot (NULL
+     * -> SEGV at offset 8). Earlier CLOB runs only passed because the
+     * stale slot still happened to hold the right pointer; enabling
+     * real loggers in the harness changed stack usage and exposed it.
+     * Production is affected too - execute_query_batch() goes through
+     * select_open() for every SELECT since Phase 2b.
+     *
+     * Owning mmr here gives it exactly the cursor's lifetime, so the
+     * address OCI holds stays valid for every fetch. It only holds
+     * pointers borrowed from this cursor - nothing extra to free in
+     * oracle_select_cursor_free(). BLOB/scalar defines were never
+     * affected - they point into heap arrays this cursor already owns.
+     * Stage 4 follow-up: make multi_meta_request_t.clob_loc an
+     * OCILobLocator** so the define no longer depends on mmr's own
+     * lifetime at all. */
+    multi_meta_request_t mmr;
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -444,24 +470,26 @@ static int oracle_select_describe_and_define(oci_context_t       *ctx,
                            OCI_DTYPE_LOB, 0, NULL));
     if (!cur->clob_loc) return -1;
 
-    multi_meta_request_t mmr;
-    memset(&mmr, 0, sizeof(mmr));
-    mmr.ctx           = ctx;
-    mmr.stmt          = cur->stmt;
-    mmr.col_count     = cur->col_count;
-    mmr.fetch_count   = cur->batch_size;
-    mmr.def           = cur->def;
-    mmr.buffers       = cur->buffers;
-    mmr.buf_sizes     = cur->buf_sizes;
-    mmr.indicators    = cur->indicators;
-    mmr.data_types    = cur->data_types;
-    mmr.data_sizes    = cur->data_sizes;
-    mmr.col_names     = cur->col_names;
-    mmr.col_blob_locs = cur->col_blob_locs;
-    mmr.clob_loc      = cur->clob_loc;
-    mmr.deps          = NULL;   /* get_multi_metadata() ignores this field entirely */
+    /* Cursor-owned, NOT a stack local - see the mmr field comment in
+     * struct db_select_cursor_t for why (CLOB define lifetime). */
+    multi_meta_request_t *mmr = &cur->mmr;
+    memset(mmr, 0, sizeof(*mmr));
+    mmr->ctx           = ctx;
+    mmr->stmt          = cur->stmt;
+    mmr->col_count     = cur->col_count;
+    mmr->fetch_count   = cur->batch_size;
+    mmr->def           = cur->def;
+    mmr->buffers       = cur->buffers;
+    mmr->buf_sizes     = cur->buf_sizes;
+    mmr->indicators    = cur->indicators;
+    mmr->data_types    = cur->data_types;
+    mmr->data_sizes    = cur->data_sizes;
+    mmr->col_names     = cur->col_names;
+    mmr->col_blob_locs = cur->col_blob_locs;
+    mmr->clob_loc      = cur->clob_loc;
+    mmr->deps          = NULL;   /* get_multi_metadata() ignores this field entirely */
 
-    if (get_multi_metadata(&mmr) != 0)
+    if (get_multi_metadata(mmr) != 0)
     {
         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
                      "get_multi_metadata failed in select_open");
@@ -2293,6 +2321,161 @@ static int oracle_dml_execute_procedure(oci_context_t               *ctx,
     return 0;
 }
 
+/* ================================================================
+ * DIALECT (Oracle dialect extraction, Stage 2, 2026-10-02)
+ *
+ * Every Oracle-specific SQL fragment core used to write itself - see
+ * db_dialect_t in db_driver.h for the contract of each hook. Each one
+ * reproduces the text core produced before Stage 2 byte for byte (the
+ * Stage 2 proof is that every logged statement is unchanged), with one
+ * deliberate difference: date/timestamp conversion uses a FIXED ISO
+ * mask instead of reading ctx->ini->nls_date_format. Level 2 always
+ * hands the driver canonical ISO values (date_normalize.c, Stage 1),
+ * so the mask that reads them must be fixed too; nls_date_format is
+ * now only the session's display format (ALTER SESSION in
+ * Connection_Pool.c), which decides how dates look in SELECT results.
+ * With nls_date_format at its deployed value ('YYYY-MM-DD HH24:MI:SS',
+ * Stage 0 check 0.3) the generated text is identical.
+ * ================================================================ */
+
+#define ORACLE_ISO_DATE_MASK  "YYYY-MM-DD HH24:MI:SS"
+#define ORACLE_ISO_TS_MASK    "YYYY-MM-DD HH24:MI:SS.FF6"
+
+/* snprintf into out; 0 on success, -1 on NULL/overflow. */
+static int oracle_fmt(char *out, size_t out_max, const char *fmt, ...)
+{
+    if (!out || out_max == 0) return -1;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(out, out_max, fmt, ap);
+    va_end(ap);
+    return (n < 0 || (size_t)n >= out_max) ? -1 : 0;
+}
+
+static int oracle_bind_placeholder(int pos, char *out, size_t out_max)
+{
+    if (pos < 1) return -1;
+    return oracle_fmt(out, out_max, ":%d", pos);
+}
+
+/* Same type tests, in the same order, as the four wrappers this
+ * replaces (get_bind_wrapper / get_upd_bind_wrapper /
+ * get_del_key_wrapper / audit_get_date_wrapper). */
+static int oracle_value_expr(const char *dtype, const char *operand,
+                             char *out, size_t out_max)
+{
+    if (!operand) return -1;
+    if (!dtype) dtype = "";
+
+    if (strcmp(dtype, "DATE") == 0)
+        return oracle_fmt(out, out_max, "TO_DATE(%s,'%s')",
+                          operand, ORACLE_ISO_DATE_MASK);
+    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
+        return oracle_fmt(out, out_max, "TO_TIMESTAMP(%s,'%s')",
+                          operand, ORACLE_ISO_TS_MASK);
+    if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
+        return oracle_fmt(out, out_max, "TO_YMINTERVAL(%s)", operand);
+    if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
+        return oracle_fmt(out, out_max, "TO_DSINTERVAL(%s)", operand);
+
+    return oracle_fmt(out, out_max, "%s", operand);
+}
+
+static const char *oracle_lob_placeholder(const char *dtype)
+{
+    if (!dtype) return NULL;
+    if (strcmp(dtype, "BLOB") == 0)  return "EMPTY_BLOB()";
+    if (strcmp(dtype, "CLOB") == 0 ||
+        strcmp(dtype, "NCLOB") == 0) return "EMPTY_CLOB()";
+    return NULL;
+}
+
+/* ROWID is implicit in Oracle - nothing in mid, RETURNING at the end,
+ * for both INSERT and UPDATE. loc is not needed. */
+static int oracle_row_locator_clauses(db_dml_kind_t kind,
+                                      const db_row_locator_ctx_t *loc, int pos,
+                                      char *mid, size_t mid_max,
+                                      char *tail, size_t tail_max)
+{
+    (void)loc;
+    if (kind != DB_DML_INSERT && kind != DB_DML_UPDATE) return -1;
+    if (pos < 1 || !mid || mid_max == 0) return -1;
+    mid[0] = '\0';
+    return oracle_fmt(tail, tail_max, "RETURNING ROWID INTO :%d", pos);
+}
+
+static int oracle_row_limit_sql(const char *sql, int max_rows,
+                                char *out, size_t out_max)
+{
+    if (!sql || max_rows < 0) return -1;
+    return oracle_fmt(out, out_max,
+                      "SELECT * FROM (%s) WHERE ROWNUM <= %d", sql, max_rows);
+}
+
+/* SELECT 1 strips every column type, so a CLOB in sql cannot raise
+ * ORA-00932 inside COUNT(*) - the reason this wrapper exists. */
+static int oracle_count_rows_sql(const char *sql, char *out, size_t out_max)
+{
+    if (!sql) return -1;
+    return oracle_fmt(out, out_max,
+                      "SELECT COUNT(*) FROM (SELECT 1 FROM (%s))", sql);
+}
+
+static const char *oracle_now_expr(void)
+{
+    return "SYSTIMESTAMP";
+}
+
+static int oracle_add_seconds_expr(const char *base_expr,
+                                   const char *seconds_expr,
+                                   char *out, size_t out_max)
+{
+    if (!base_expr || !seconds_expr) return -1;
+    return oracle_fmt(out, out_max, "%s + NUMTODSINTERVAL(%s, 'SECOND')",
+                      base_expr, seconds_expr);
+}
+
+static int oracle_procedure_call_sql(const char *proc_name,
+                                     const char * const *param_names,
+                                     int count, char *out, size_t out_max)
+{
+    if (!proc_name || count < 0 || (count > 0 && !param_names)) return -1;
+
+    if (count == 0)
+        return oracle_fmt(out, out_max, "BEGIN %s; END;", proc_name);
+
+    if (!out || out_max == 0) return -1;
+    size_t used = 0;
+    int n = snprintf(out, out_max, "BEGIN %s(", proc_name);
+    if (n < 0 || (size_t)n >= out_max) return -1;
+    used = (size_t)n;
+
+    for (int i = 0; i < count; i++)
+    {
+        if (!param_names[i]) return -1;
+        n = snprintf(out + used, out_max - used, "%s:%s",
+                     i > 0 ? ", " : "", param_names[i]);
+        if (n < 0 || (size_t)n >= out_max - used) return -1;
+        used += (size_t)n;
+    }
+
+    n = snprintf(out + used, out_max - used, "); END;");
+    if (n < 0 || (size_t)n >= out_max - used) return -1;
+    return 0;
+}
+
+static const db_dialect_t oracle_dialect = {
+    .bind_placeholder    = oracle_bind_placeholder,
+    .value_expr          = oracle_value_expr,
+    .lob_placeholder     = oracle_lob_placeholder,
+    .row_locator_clauses = oracle_row_locator_clauses,
+    .row_limit_sql       = oracle_row_limit_sql,
+    .count_rows_sql      = oracle_count_rows_sql,
+    .now_expr            = oracle_now_expr,
+    .add_seconds_expr    = oracle_add_seconds_expr,
+    .procedure_call_sql  = oracle_procedure_call_sql,
+};
+
 static const db_driver_t oracle_driver = {
     .driver_name          = "oracle",
     .connect              = oracle_connect,
@@ -2312,7 +2495,8 @@ static const db_driver_t oracle_driver = {
     .rowid_result_free            = oracle_rowid_result_free,
     .lob_write_by_rowid           = oracle_lob_write_by_rowid,
     .dml_execute_procedure        = oracle_dml_execute_procedure,
-    .select_open_from_cursor      = oracle_select_open_from_cursor
+    .select_open_from_cursor      = oracle_select_open_from_cursor,
+    .dialect                      = &oracle_dialect
 };
 
 

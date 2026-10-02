@@ -185,50 +185,16 @@ static int build_delete_ctx_from_request(oci_context_t          *ctx,
     return 0;
 }
 
-/* ================================================================== */
-/*  get_del_key_wrapper                                                 */
-/*  Returns a SQL conversion wrapper for date/time key types.          */
-/*  Plain scalar types return NULL (bind as SQLT_STR directly).        */
-/* ================================================================== */
-/*
- * get_del_key_wrapper()
- * Same design as OCI_Insert_Execute_Module.c's get_bind_wrapper() -
- * see that function's own doc comment for the full 2026-07-28
- * reasoning (no hardcoded date format literal any more; reads
- * ctx->ini->nls_date_format fresh on every call instead).
- */
-static int get_del_key_wrapper(oci_context_t *ctx, const char *dtype,
-                                char *dest, size_t dest_max)
-{
-    if (strcmp(dtype, "DATE") == 0)
-    {
-        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-    {
-        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
-    {
-        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
-    {
-        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
-        return 1;
-    }
-    return 0;   /* VARCHAR2, NUMBER, CHAR, RAW, etc. - no wrapper */
-}
+/* get_del_key_wrapper() was removed here (Oracle dialect extraction,
+ * Stage 2, 2026-10-02) - the driver's value_expr() now does the same
+ * conversion (db_dialect_t, db_driver.h). */
 
 /* ================================================================== */
 /*  build_delete_sql                                                    */
 /*  Produces:                                                           */
 /*    DELETE FROM [owner.]table WHERE key1=:1 AND key2=:2 ...          */
-/*  Date/timestamp keys are wrapped with the appropriate Oracle        */
-/*  conversion function so no NLS session dependency exists.           */
+/*  Date/timestamp keys are converted by the driver's value_expr()     */
+/*  (Stage 2) so no NLS session dependency exists.                     */
 /* ================================================================== */
 static int build_delete_sql(oci_context_t      *ctx,
                               const delete_ctx_t *dc,
@@ -240,33 +206,31 @@ static int build_delete_sql(oci_context_t      *ctx,
 
     char where_list[MAX_DEL_KEY_COLS * 256] = {0};
 
+    /* Stage 2 - every vendor fragment comes from the driver. */
+    const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+
     for (int k = 0; k < dc->key_count; k++)
     {
         if (k > 0)
             strncat(where_list, " AND ",
                     sizeof(where_list) - strlen(where_list) - 1);
 
-        char bind_ph[16];
-        snprintf(bind_ph, sizeof(bind_ph), ":%d", k + 1);
-
-        char wrapper_buf[128] = {0};
-        int  has_wrapper = get_del_key_wrapper(ctx, dc->keys[k].field_type,
-                                                wrapper_buf, sizeof(wrapper_buf));
-        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
-        char cond[256] = {0};
-
-        if (wrapper)
+        char bind_ph[32];
+        char expr[256];
+        if (dl->bind_placeholder(k + 1, bind_ph, sizeof(bind_ph)) != 0 ||
+            dl->value_expr(dc->keys[k].field_type, bind_ph,
+                           expr, sizeof(expr)) != 0)
         {
-            char expr[128] = {0};
-            snprintf(expr, sizeof(expr), wrapper, bind_ph);
-            snprintf(cond, sizeof(cond),
-                     "%s=%s", dc->keys[k].field_name, expr);
+            logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
+                         "dialect could not build the bind expression "
+                         "for WHERE key '%s' type '%s'",
+                         dc->keys[k].field_name, dc->keys[k].field_type);
+            return -1;
         }
-        else
-        {
-            snprintf(cond, sizeof(cond),
-                     "%s=%s", dc->keys[k].field_name, bind_ph);
-        }
+
+        char cond[512] = {0};
+        snprintf(cond, sizeof(cond),
+                 "%s=%s", dc->keys[k].field_name, expr);
 
         strncat(where_list, cond,
                 sizeof(where_list) - strlen(where_list) - 1);

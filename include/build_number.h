@@ -1,7 +1,7 @@
 #ifndef BUILD_NUMBER_H
 #define BUILD_NUMBER_H
 
-#define BUILD_NUMBER 499
+#define BUILD_NUMBER 523
 #define MAJOR_NUMBER 1
 #define MINOR_NUMBER 3
 

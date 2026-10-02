@@ -42,7 +42,6 @@ FILES=(
   Insert_Execute_Module.c Response_Writer.c resultset_cache.c
   generic_queue.c DDL_Modules.c DDL_Execute_Module.c
   sql_dependency_extractor.c Insert_Validate_Module.c
-  date_normalize.c db_type_class.c
 )
 
 PATHS=()
@@ -206,13 +205,10 @@ gcc -I$ROOT/oci/instantclient-sdk-linux.x64-23.26.1.0.0/instantclient_23_26/sdk/
 echo "Built Driver_Connect_Test"
 
 
-gcc -I$ROOT/oci/instantclient-sdk-linux.x64-23.26.1.0.0/instantclient_23_26/sdk/include \
-    -I/usr/include/cjson -I/usr/include/libxml2 -I$ROOT/include -I. \
-    -O0 -g3 -Wall -fmessage-length=0 -fsanitize=address -fno-omit-frame-pointer \
-    -o Driver_Dialect_Test \
-    Driver_Dialect_Test.c "${PATHS[@]}" \
-    -L$ROOT/oci \
-    -Wl,--start-group -lclntsh -lldap -lsodium -lmicrohttpd -lcjson -lxml2 \
-    -lclntshcore -lnnz -lcurl -lpthread -lm -Wl,--end-group
 
-echo "Built Driver_Dialect_Test"
+
+
+
+
+
+

@@ -104,9 +104,9 @@
 #include <strings.h>
 #include <stdlib.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
-#include "OCI_Resultset_Builder.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
+#include "Resultset_Builder.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"

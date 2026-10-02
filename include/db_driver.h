@@ -814,6 +814,112 @@ typedef struct {
  *   result has a LOB column this pass's driver doesn't support through
  *   this interface yet).
  */
+/* ================================================================== */
+/*  DIALECT (Oracle dialect extraction, Stage 2, 2026-10-02)           */
+/* ================================================================== */
+/*
+ * Core still builds every SQL statement itself - column lists, WHERE
+ * clauses, the order of things - but each vendor-specific FRAGMENT now
+ * comes from the driver: how a bind placeholder is written, how a value
+ * is converted to a column type, what stands in for a LOB, how a row is
+ * located after INSERT/UPDATE, how a SELECT is limited or counted, the
+ * server clock, and how a stored procedure is called.
+ *
+ * Acid test for every hook: the same signature makes sense for SQL
+ * Server. Oracle answers below; the SQL Server answer is given where it
+ * shaped the signature.
+ *
+ * Every hook writes into a caller-supplied buffer and returns 0, or -1
+ * if the buffer is too small or the arguments are invalid (callers log
+ * and fail the statement - same as a truncated snprintf today). Hooks
+ * returning const char * return static strings.
+ *
+ * Proof for Stage 2: the Oracle implementation reproduces the
+ * pre-Stage-2 SQL text byte for byte, so every logged "INSERT SQL:",
+ * "UPDATE SQL:", "DELETE SQL:", "PL/SQL block:", "Before-image SELECT:",
+ * "Count query:" and "Truncated fetch SQL:" line is unchanged.
+ */
+
+typedef enum {
+    DB_DML_INSERT = 0,
+    DB_DML_UPDATE = 1
+    /* No DELETE: build_delete_sql() needs no row locator (proposal 0.6). */
+} db_dml_kind_t;
+
+/* What a row-locator clause may need. Oracle uses none of it (ROWID is
+ * implicit); SQL Server's OUTPUT clause needs the key columns. */
+typedef struct {
+    const char         *table_name;
+    const char         *owner;          /* may be "" */
+    const char * const *key_columns;    /* may be NULL - see above */
+    int                 key_count;
+} db_row_locator_ctx_t;
+
+typedef struct db_dialect_t {
+    /* Bind placeholder for 1-based position pos.
+     *   Oracle ":5"        SQL Server (ODBC) "?"                       */
+    int (*bind_placeholder)(int pos, char *out, size_t out_max);
+
+    /* Expression converting operand to column type dtype (the type name
+     * as this driver's own metadata reports it). operand is a
+     * placeholder from bind_placeholder() or a quoted literal. Date and
+     * timestamp values are always canonical ISO (date_normalize.h) by
+     * the time they reach here. Copies operand unchanged when the type
+     * needs no conversion. Never called for LOB columns that take
+     * lob_placeholder().
+     *   Oracle DATE      "TO_DATE(:3,'YYYY-MM-DD HH24:MI:SS')"
+     *   Oracle VARCHAR2  ":3"                                          */
+    int (*value_expr)(const char *dtype, const char *operand,
+                      char *out, size_t out_max);
+
+    /* Literal written in place of a LOB value whose content is written
+     * after the statement (lob_write_by_rowid). NULL when dtype is not
+     * such a LOB - the column then binds like any other. A LOB column
+     * consumes no bind position.
+     *   Oracle BLOB "EMPTY_BLOB()", CLOB/NCLOB "EMPTY_CLOB()"          */
+    const char *(*lob_placeholder)(const char *dtype);
+
+    /* Row-locator clauses for INSERT/UPDATE, at bind position pos.
+     * mid goes after "(cols)" in an INSERT / after the SET list in an
+     * UPDATE; tail goes at the end. Either may be "". Core inserts one
+     * space before each non-empty slot.
+     *   Oracle     mid ""                     tail "RETURNING ROWID INTO :n"
+     *   SQL Server mid "OUTPUT inserted.<key>" tail ""                  */
+    int (*row_locator_clauses)(db_dml_kind_t kind,
+                               const db_row_locator_ctx_t *loc, int pos,
+                               char *mid, size_t mid_max,
+                               char *tail, size_t tail_max);
+
+    /* sql limited to at most max_rows rows.
+     *   Oracle "SELECT * FROM (<sql>) WHERE ROWNUM <= n"                */
+    int (*row_limit_sql)(const char *sql, int max_rows,
+                         char *out, size_t out_max);
+
+    /* Single-column, single-row query giving the row count of sql. Must
+     * work when sql selects LOB columns.
+     *   Oracle "SELECT COUNT(*) FROM (SELECT 1 FROM (<sql>))"
+     *   SQL Server needs derived-table aliases: "... (<sql>) a) b"      */
+    int (*count_rows_sql)(const char *sql, char *out, size_t out_max);
+
+    /* The database server's current time.
+     *   Oracle "SYSTIMESTAMP"   SQL Server "SYSDATETIMEOFFSET()"         */
+    const char *(*now_expr)(void);
+
+    /* base_expr + seconds_expr seconds (both SQL expressions).
+     *   Oracle "<base> + NUMTODSINTERVAL(<secs>, 'SECOND')"
+     *   SQL Server "DATEADD(second, <secs>, <base>)"                    */
+    int (*add_seconds_expr)(const char *base_expr, const char *seconds_expr,
+                            char *out, size_t out_max);
+
+    /* Complete call statement for a stored procedure whose parameters
+     * are bound by name (names without the leading ':').
+     *   Oracle "BEGIN proc(:P1, :P2); END;"  /  "BEGIN proc; END;"
+     *   SQL Server "{CALL proc(?, ?)}"                                  */
+    int (*procedure_call_sql)(const char *proc_name,
+                              const char * const *param_names, int count,
+                              char *out, size_t out_max);
+} db_dialect_t;
+
 typedef struct db_driver_t {
     const char *driver_name;   /* e.g. "oracle" - for logging only,
                                    not used for dispatch (db_type in
@@ -879,6 +985,10 @@ typedef struct db_driver_t {
                          db_column_meta_t          **out_columns,
                          int                         *out_column_count,
                          int                         *out_batch_size);
+
+    /* Stage 2 (2026-10-02) - SQL fragments; see db_dialect_t above.
+     * Never NULL for a real driver, and every hook in it is set. */
+    const db_dialect_t *dialect;
 } db_driver_t;
 
 /*

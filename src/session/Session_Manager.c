@@ -22,6 +22,8 @@
 #include <time.h>
 
 #include "Session_Manager.h"
+#include "db_driver.h"               /* db_driver_get()->dialect - Stage 2,
+                                        expiry expression / server clock */
 #include "Transaction_Manager.h"     /* tx_generate_uuid()          */
 #include "Insert_Execute_Module.h"
 #include "Update_Execute_Module.h"   /* execute_update_batch(), update_request_t -
@@ -938,14 +940,28 @@ int session_reconcile_orphans(oci_context_t *ctx, int *orphan_count)
      * best-effort startup nicety, not a path worth blocking the whole
      * application over, and it will simply try again next time the
      * process starts.                                                  */
+    /* Stage 2 - the expiry arithmetic and the server clock are the
+     * driver's (Oracle: "CREATED_TS + NUMTODSINTERVAL(TTL_SECONDS,
+     * 'SECOND')" and "SYSTIMESTAMP"). Same SQL text as before. */
+    const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+    char expiry_expr[160];
+    if (dl->add_seconds_expr("CREATED_TS", "TTL_SECONDS",
+                             expiry_expr, sizeof(expiry_expr)) != 0)
+    {
+        logger_write(ctx->session_logger, LOG_ERROR, __func__, 0,
+                     "session_reconcile_orphans: dialect could not build "
+                     "the expiry expression - skipping reconciliation");
+        return SESSION_OK;   /* best-effort sweep - same non-fatal stance as below */
+    }
+
     char sql[512];
     snprintf(sql, sizeof(sql),
         "SELECT SESSION_ID, TTL_SECONDS "
         "FROM OCI_SESSION "
         "WHERE STATUS = 'ACTIVE' "
         "AND CLOSED_TS IS NULL "
-        "AND CREATED_TS + NUMTODSINTERVAL(TTL_SECONDS, 'SECOND') "
-        "< SYSTIMESTAMP");
+        "AND %s "
+        "< %s", expiry_expr, dl->now_expr());
 
     execute_config_t cfg;
    memset(&cfg, 0, sizeof(cfg));

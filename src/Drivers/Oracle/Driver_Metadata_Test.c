@@ -135,9 +135,9 @@
 #include <string.h>
 #include <strings.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
-#include "OCI_Table_Metadata_Module.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
+#include "Table_Metadata_Module.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"

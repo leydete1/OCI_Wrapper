@@ -9,10 +9,11 @@
  *   OCI_LOB_TEST  (ID, DESCRIPTION, FILE_NAME, PHOTO BLOB) - 6 rows,
  *     same table Driver_Select_Test.c already validated the scalar
  *     path against.
- *   OCI_CLOB_TEST (ID, DESCRIPTION, FILE_NAME, LARGE_CLOB CLOB) - 4
- *     rows (see Create_Oracle_Test_Table.txt) - matches the
- *     LARGE_CLOB_row1..row4 files already seen in real http_consumer
- *     output during the CLOB extraction's own before/after comparison.
+ *   OCI_CLOB_TEST (ID, DESCRIPTION, FILE_NAME, LARGE_CLOB CLOB) - 5
+ *     rows. Rows 1-4 match the LARGE_CLOB_row1..row4 files already seen
+ *     in real http_consumer output during the CLOB extraction's own
+ *     before/after comparison. Row 5's LARGE_CLOB is a 0-length (empty,
+ *     not NULL) CLOB - DBMS_LOB.GETLENGTH = 0, confirmed 2026-09-29.
  *   OCI_FIELD_TEST (has both BLOB_COL and CLOB_COL) - used only for
  *     Test 5's mixed-type memory-safety check, same WHERE NUMBER_COL
  *     IN (901, 902) query already exercised by the real http_consumer
@@ -34,7 +35,7 @@
  *            Confirms total rows fetched == Test 1's count.
  *
  *   Test 3 - direct COUNT(*) on OCI_CLOB_TEST - baseline row count
- *            (expect 4).
+ *            (currently 5).
  *
  *   Test 4 - cursor select including the real LARGE_CLOB column,
  *            fetch_array_size=2. Since CLOB IS present, checks
@@ -49,6 +50,10 @@
  *            If stat() fails (config is sharing a URL, not a host
  *            path), only confirms the value is non-empty - the content
  *            check is skipped for that row rather than guessed at.
+ *            An EMPTY value is accepted only when the independent
+ *            DBMS_LOB.GETLENGTH check confirms the CLOB really is empty
+ *            or NULL - nothing is written to a file for a 0-byte CLOB,
+ *            so there is no path/URL to return (2026-09-29, row id=5).
  *            Confirms total rows fetched == Test 3's count.
  *
  *   Test 5 - mixed BLOB+CLOB in the SAME query (OCI_FIELD_TEST,
@@ -72,31 +77,11 @@
  * leaked byte/allocation count should NOT grow beyond that same
  * accepted baseline just because Test 5 ran a mixed BLOB+CLOB query -
  * if it does, the alloc_batch_size fix did not fully close the leak it
- * was meant to close.
+ * was meant to close. Accepted baseline (Stage 0, 2026-09-29):
+ * 37,017 / 83 or 37,129 / 85 - both occur, run to run.
  *
- * Build (same convention as Driver_Select_Test.c - identical file
- * list, this just replaces the compiled test .c; OCI_Blob_Utils.c/
- * OCI_Clob_Utils.c must both be present, same as the real build):
- *
- *   gcc -I/home/leyden100/eclipse-workspace/OCI_Wrapper/oci/instantclient-sdk-linux.x64-23.26.1.0.0/instantclient_23_26/sdk/include \
- *       -I/usr/include/cjson -I/usr/include/libxml2 \
- *       -I/home/leyden100/eclipse-workspace/OCI_Wrapper/include -I. \
- *       -O0 -g3 -Wall -fmessage-length=0 -fsanitize=address -fno-omit-frame-pointer \
- *       -o Driver_LOB_Select_Test \
- *       Driver_LOB_Select_Test.c db_driver.c driver_oracle.c \
- *       OCI_Connection.c OCI_Connection_Pool.c oci_cache.c string_utils.c \
- *       ini_reader.c logger.c metrics.c ctx_utils.c \
- *       OCI_Table_Metadata_Module.c OCI_Resultset_Builder.c \
- *       OCI_Blob_Utils.c OCI_Clob_Utils.c XML_Helper.c \
- *       -L/home/leyden100/eclipse-workspace/OCI_Wrapper/oci \
- *       -Wl,--start-group -lclntsh -lldap -lsodium -lmicrohttpd -lcjson \
- *       -lxml2 -lclntshcore -lnnz -lcurl -lpthread -lm -Wl,--end-group
- *
- * Note: XML_Helper.c is now needed too - driver_oracle.c forward-
- * declares get_mime_type() rather than including XML_Helper.h (see
- * driver_oracle.c's own comment on why), but the real symbol still has
- * to come from somewhere at link time, and XML_Helper.c is where it's
- * actually defined.
+ * Build: src/Drivers/Oracle/Build.sh (core sources resolved from src/,
+ * never from this folder - see Oracle dialect extraction v1.2, 0.A).
  *
  * Run (same LD_LIBRARY_PATH/LSAN_OPTIONS pattern as Run_Manually.sh):
  *   ./Driver_LOB_Select_Test
@@ -110,13 +95,13 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"
 #include "logger.h"
-#include "OCI_Resultset_Builder.h"
+#include "Resultset_Builder.h"
 
 #define TEST_CHECK_OCI(ctx, status) \
     do { \
@@ -203,7 +188,7 @@ static int direct_row_count(oci_context_t *ctx, const char *table, int *out_coun
 /* Independent, single-row lookup - "SELECT NVL(DBMS_LOB.GETLENGTH(%s),0)
  * FROM %s WHERE ID=%s" - used as the authoritative cross-check for both
  * Test 2 (BLOB) and Test 4 (CLOB). Deliberately plain OCI, nothing this
- * driver touches. */
+ * driver touches. NVL(...,0) means a NULL LOB also reports 0. */
 static int direct_lob_length(oci_context_t *ctx, const char *table,
                               const char *lob_col, const char *id_value,
                               int *out_length)
@@ -338,7 +323,30 @@ static void clob_row_cb(resultset_row_t *row, const char *id_value, void *user_d
     const char *value = row->fields[3].value;
     if (!value || value[0] == '\0')
     {
-        printf("  [row id=%s] FAILED - CLOB field value is empty\n", id_value);
+        /* An empty value is correct for an empty (0-length) or NULL CLOB:
+         * nothing is written to a file, so there is no path or URL to
+         * return. Accept it ONLY when an independent DBMS_LOB.GETLENGTH
+         * confirms the CLOB really is empty - an empty value for a CLOB
+         * that holds data is still a failure (2026-09-29; OCI_CLOB_TEST
+         * row id=5 is a 0-length CLOB).                                 */
+        int db_len = -1;
+        if (direct_lob_length(st->ctx, "OCI_CLOB_TEST", "LARGE_CLOB", id_value, &db_len) != 0)
+        {
+            printf("  [row id=%s] FAILED - empty value and direct_lob_length query failed\n",
+                   id_value);
+            st->failed = 1;
+            return;
+        }
+
+        if (db_len == 0)
+        {
+            printf("  [row id=%s] empty value, DB length=0 (empty/NULL CLOB)  OK\n", id_value);
+            st->checked++;
+            return;
+        }
+
+        printf("  [row id=%s] FAILED - CLOB field value is empty but DB length=%d\n",
+               id_value, db_len);
         st->failed = 1;
         return;
     }
@@ -381,6 +389,18 @@ int main(void)
     if (init_ctx(&ctx, &config, &err_l, &conn_l, &connpool_l, &select_l) != 0)
     { printf("INIT FAILED\n"); return 1; }
 
+    /* Metadata_logger (2026-09-29): select_open()'s describe path calls
+     * get_multi_metadata(), which logs through ctx->Metadata_logger.
+     * Without it every call printed "Logger is NULL" and any metadata
+     * error was silently dropped (Driver Guide 3.3).                 */
+    logger_t meta_l;
+    if (logger_init_str2(&meta_l, config.Metadata_log_file_name,
+                          config.Metadata_log_file_max_size,
+                          config.Metadata_log_file_rotation_number,
+                          config.Metadata_log_level, ctx.error_logger) != 0)
+    { printf("INIT FAILED - Metadata_logger\n"); return 1; }
+    ctx.Metadata_logger = &meta_l;
+
     const db_driver_t *driver = db_driver_get(&ctx);
     if (!driver || !driver->connect || !driver->get_session ||
         !driver->select_open || !driver->select_fetch_batch ||
@@ -394,6 +414,13 @@ int main(void)
     memset(&worker_ctx, 0, sizeof(worker_ctx));
     if (driver->get_session(&ctx, &worker_ctx) != 0)
     { printf("FAILED - get_session()\n"); driver->disconnect(&ctx); return 1; }
+
+    /* get_session() copies only the connection handles and ctx->logger
+     * into worker_ctx - give the worker the loggers select_open() and
+     * its describe path actually write to (2026-09-29).              */
+    worker_ctx.error_logger    = ctx.error_logger;
+    worker_ctx.select_logger   = ctx.select_logger;
+    worker_ctx.Metadata_logger = ctx.Metadata_logger;
 
     /* ---- Test 1 ---- */
     int lob_test_count = -1;
@@ -494,9 +521,9 @@ int main(void)
          * for a genuinely-NULL CLOB - matches BLOB_index/CLOB_index's
          * existing semantics in execute_query_batch()'s own code, not a
          * new rule invented here); clob_bytes is a loose sanity check
-         * only (>0), not an exact match - id=5's CLOB may legitimately
-         * be NULL, contributing 0 bytes, and this test can't assume a
-         * specific total without re-querying it independently. */
+         * only (>0), not an exact match - id=5's CLOB is empty,
+         * contributing 0 bytes, and this test can't assume a specific
+         * total without re-querying it independently. */
         printf("Test 4 out_stats                    ... ");
         if (stats4.clob_count == rows4 && stats4.clob_bytes > 0)
             printf("OK (clob_count=%d clob_bytes=%llu)\n",
@@ -544,6 +571,7 @@ int main(void)
     logger_close(&conn_l);
     logger_close(&connpool_l);
     logger_close(&select_l);
+    logger_close(&meta_l);
 
     return failed ? 1 : 0;
 }

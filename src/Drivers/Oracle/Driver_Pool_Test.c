@@ -84,8 +84,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "OCI_Connection.h"
-#include "OCI_Connection_Pool.h"
+#include "Connection.h"
+#include "Connection_Pool.h"
 #include "db_driver.h"
 #include "driver_oracle.h"
 #include "ini_reader.h"

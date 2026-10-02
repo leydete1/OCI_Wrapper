@@ -78,6 +78,8 @@
 #include "Execute_Query_Batch_Module.h"
 #include "Transaction_Manager.h"
 #include "Table_Metadata_Module.h"   /* col_metadata_t, field_value_t */
+#include "db_driver.h"               /* db_driver_get()->dialect - Stage 2,
+                                        before-image key conversion   */
 #include "logger.h"
 #include "metrics.h"
 
@@ -1052,54 +1054,10 @@ int audit_trail_insert_snapshot(oci_context_t         *ctx,
 /*  Uses execute_query_batch() to re-use all existing query           */
 /*  infrastructure: metadata cache, LOB handling, metrics.            */
 /* ================================================================== */
-/*
- * audit_get_date_wrapper()
- *
- * Local copy of the same wrapper-selection logic as
- * OCI_Delete_Execute_Module.c's get_del_key_wrapper() / OCI_Update_
- * Execute_Module.c's get_upd_key_wrapper() - kept independent rather
- * than shared, matching how every parser/builder module in this
- * project stays self-contained (same reasoning as this file's own
- * set_audit_field_value(), a local copy of OCI_Level1_Parser.c's
- * set_field_value()).
- *
- * Returns a %s-format wrapper for date/time/interval types, NULL for
- * plain scalar types (VARCHAR2, NUMBER, CHAR, RAW, etc. - embedded as
- * a bare quoted literal, unchanged from before this fix).
- */
-/*
- * audit_get_date_wrapper()
- * Same design as OCI_Insert_Execute_Module.c's get_bind_wrapper() -
- * see that function's own doc comment for the full 2026-07-28
- * reasoning (no hardcoded date format literal any more; reads
- * ctx->ini->nls_date_format fresh on every call instead).
- */
-static int audit_get_date_wrapper(oci_context_t *ctx, const char *dtype,
-                                   char *dest, size_t dest_max)
-{
-    if (!dtype) return 0;
-    if (strcmp(dtype, "DATE") == 0)
-    {
-        snprintf(dest, dest_max, "TO_DATE(%%s,'%s')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strncmp(dtype, "TIMESTAMP", 9) == 0)
-    {
-        snprintf(dest, dest_max, "TO_TIMESTAMP(%%s,'%s.FF6')", ctx->ini->nls_date_format);
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "MONTH"))
-    {
-        snprintf(dest, dest_max, "TO_YMINTERVAL(%%s)");
-        return 1;
-    }
-    if (strstr(dtype, "INTERVAL") && strstr(dtype, "SECOND"))
-    {
-        snprintf(dest, dest_max, "TO_DSINTERVAL(%%s)");
-        return 1;
-    }
-    return 0;
-}
+/* audit_get_date_wrapper() was removed here (Oracle dialect
+ * extraction, Stage 2, 2026-10-02) - the driver's value_expr() now
+ * wraps the quoted key literal (db_dialect_t, db_driver.h), with
+ * identical output. */
 
 int audit_trail_fetch_before_image(oci_context_t  *ctx,
                                     const char     *table_name,
@@ -1189,16 +1147,23 @@ int audit_trail_fetch_before_image(oci_context_t  *ctx,
         char quoted_val[65600];
         snprintf(quoted_val, sizeof(quoted_val), "'%s'", escaped_val);
 
-        char wrapper_buf[128] = {0};
-        int  has_wrapper = key_data_types
-                            ? audit_get_date_wrapper(ctx, key_data_types[k],
-                                                     wrapper_buf, sizeof(wrapper_buf))
-                            : 0;
-        const char *wrapper = has_wrapper ? wrapper_buf : NULL;
-
+        /* Stage 2 - the driver's value_expr() converts the quoted
+         * literal (dates, timestamps, intervals); an unknown key type
+         * (key_data_types NULL) keeps the bare literal, as before.     */
         char value_expr[65700];
-        if (wrapper)
-            snprintf(value_expr, sizeof(value_expr), wrapper, quoted_val);
+        if (key_data_types)
+        {
+            const db_dialect_t *dl = db_driver_get(ctx)->dialect;
+            if (dl->value_expr(key_data_types[k], quoted_val,
+                               value_expr, sizeof(value_expr)) != 0)
+            {
+                logger_write(ctx->audit_logger, LOG_ERROR, __func__, 0,
+                             "dialect could not build the key expression "
+                             "for '%s' type '%s'",
+                             key_names[k], key_data_types[k]);
+                return -1;
+            }
+        }
         else
             snprintf(value_expr, sizeof(value_expr), "%s", quoted_val);
 
