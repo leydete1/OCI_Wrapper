@@ -27,6 +27,14 @@
  *            and row_limit_sql(..., 3) returns exactly 3 rows.
  *   Test 6 - live: add_seconds_expr(now_expr(), 60) is later than
  *            now_expr() - the session-expiry arithmetic evaluates.
+ *   Test 7 - live (item 2b, 2026-10-03): db_select_int(), the helper
+ *            execute_query_batch() now runs its count query through.
+ *            The count over the BLOB-column SELECT equals Test 5's
+ *            direct COUNT(*), an empty count gives 0, and five bad
+ *            queries (missing table, no row, two rows, two columns,
+ *            text) are each rejected with -1. The rejected ones log
+ *            their reason (and, for the missing table, ORA-00942) in
+ *            select_Data_Manager.log - expected, not a fault.
  *
  * No DB writes anywhere in this file.
  *
@@ -41,6 +49,7 @@
  *   Test 4 (ISO date/timestamp round trip)   ... OK (2 of 2)
  *   Test 5 (count_rows_sql / row_limit_sql)  ... OK (count=6 direct=6, limit 3 rows)
  *   Test 6 (now_expr + add_seconds_expr)     ... OK
+ *   Test 7 (db_select_int, 7 cases)          ... OK (count=6 direct=6)
  *   PASS
  */
 
@@ -464,6 +473,56 @@ int main(void)
         else
         {
             printf("FAILED - add_seconds_expr\n");
+            failed = 1;
+        }
+    }
+
+    /* ---- Test 7: db_select_int (item 2b), live ---- */
+    {
+        char count_sql[512], direct_val[32] = "";
+        long long counted = -1, empty = -1;
+
+        printf("Test 7 (db_select_int, 7 cases)          ... ");
+
+        int ok = 0;
+        if (dl->count_rows_sql("SELECT ID, DESCRIPTION, PHOTO FROM OCI_LOB_TEST",
+                               count_sql, sizeof(count_sql)) == 0 &&
+            db_select_int(&worker, count_sql, 0, &counted) == 0 &&
+            run_query(driver, &worker, "SELECT COUNT(*) FROM OCI_LOB_TEST",
+                      direct_val, sizeof(direct_val)) == 1 &&
+            counted == atoll(direct_val))
+            ok++;
+        else
+            printf("\n  count: counted=%lld direct='%s'", counted, direct_val);
+
+        if (dl->count_rows_sql("SELECT ID FROM OCI_LOB_TEST WHERE 1 = 0",
+                               count_sql, sizeof(count_sql)) == 0 &&
+            db_select_int(&worker, count_sql, 0, &empty) == 0 && empty == 0)
+            ok++;
+        else
+            printf("\n  empty count: got %lld", empty);
+
+        static const struct { const char *what; const char *sql; } BAD[] = {
+            { "missing table", "SELECT COUNT(*) FROM DIALECT_TEST_NO_SUCH_TABLE" },
+            { "no row",        "SELECT 1 FROM DUAL WHERE 1 = 0" },
+            { "two rows",      "SELECT 1 FROM DUAL UNION ALL SELECT 2 FROM DUAL" },
+            { "two columns",   "SELECT 1, 2 FROM DUAL" },
+            { "text",          "SELECT 'abc' FROM DUAL" },
+        };
+        for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++)
+        {
+            long long v = -777;
+            if (db_select_int(&worker, BAD[i].sql, 0, &v) == -1 && v == -777)
+                ok++;
+            else
+                printf("\n  %s: not rejected (v=%lld)", BAD[i].what, v);
+        }
+
+        if (ok == 7)
+            printf("OK (count=%lld direct=%s)\n", counted, direct_val);
+        else
+        {
+            printf("\nTest 7 FAILED - %d of 7\n", ok);
             failed = 1;
         }
     }

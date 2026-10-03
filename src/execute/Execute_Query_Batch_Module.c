@@ -49,6 +49,7 @@
 #include <ctype.h>
 #include <strings.h>
 #include <stdint.h>
+#include <limits.h>                     /* INT_MAX - record_count clamp   */
 #include <inttypes.h>                    /* PRIu64 for row_count logging  */
 
 #include "XML_Helper.h"
@@ -83,18 +84,6 @@
 #include "Resultset_Builder.h"
 #include "Response_Writer.h";
 #include "cJSON.h"                       /* Stage 3c JSON verification only */
-
-/* ------------------------------------------------------------------ */
-/*  Local OCI error macro - mirrors execute_query style                */
-/* ------------------------------------------------------------------ */
-#define CHECK_OCI(errhp, status) \
-    if ((status) != OCI_SUCCESS && (status) != OCI_SUCCESS_WITH_INFO) { \
-        text errbuf[512]; sb4 errcode = 0; \
-        OCIErrorGet((errhp), 1, NULL, &errcode, errbuf, \
-                    sizeof(errbuf), OCI_HTYPE_ERROR); \
-        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0, \
-                     "OCI Error %d: %s", errcode, (char *)errbuf); \
-    }
 
 /* ------------------------------------------------------------------ */
 /*  Internal batch context - groups all per-column arrays together     */
@@ -334,9 +323,6 @@ static int verify_response_json_against_resultset(oci_context_t *ctx,
 int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
 {
     int        rc         = 0;
-    OCIStmt   *stmt       = NULL;
-    OCIStmt   *stmt_count = NULL;
-    lob_item_t *BLOB_list = NULL;
     resultset_t *rs = NULL;
     xml_builder_t *xml    = NULL;
     char parse_msg[256];
@@ -563,20 +549,28 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     /* ================================================================
      *  Stage 1 - Validate: row count guard
      *
-     *  Use SELECT COUNT(*) FROM (SELECT 1 FROM (original_sql)) to avoid
-     *  ORA-00932 which Oracle raises when a CLOB column appears in a
-     *  COUNT(*) subquery. The SELECT 1 strips all column types.
+     *  The driver supplies the counting wrapper (count_rows_sql - for
+     *  Oracle "SELECT COUNT(*) FROM (SELECT 1 FROM (<sql>))"; the
+     *  SELECT 1 strips the column types so a CLOB column in the
+     *  original query cannot break the COUNT) and the count runs
+     *  through the driver's own cursor (db_select_int).
+     *
+     *  Item 2b (2026-10-03) - this used to execute the count with raw
+     *  OCI calls (OCIStmtPrepare2/OCIDefineByPos/OCIStmtExecute), the
+     *  last vendor calls on this path. One deliberate behaviour change
+     *  came with it: the old CHECK_OCI macro only logged, so a count
+     *  query that failed left record_count at 0 and the request carried
+     *  on as "no rows matched" until the main SELECT failed too. A
+     *  failed count now fails the request here, with the reason in the
+     *  log. Every SELECT that is valid on its own also counts
+     *  successfully, so no correct request is affected.
      * ================================================================ */
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 1: Validate record count");
 
     int        record_count = 0;
-    OCIDefine *defn_count   = NULL;
     char       query_count[4096];
 
-    /* Stage 2 - the counting wrapper is the driver's (Oracle:
-     * "SELECT COUNT(*) FROM (SELECT 1 FROM (<sql>))" - see this
-     * block's comment above for why SELECT 1). */
     const db_driver_t *count_driver = db_driver_get(ctx);
     if (count_driver->dialect->count_rows_sql(cfg->SQL, query_count,
                                               sizeof(query_count)) != 0)
@@ -591,19 +585,20 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Count query: %s", query_count);
 
-    CHECK_OCI(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt_count, ctx->errhp,
-                        (text *)query_count, (ub4)strlen(query_count),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT));
+    long long counted = 0;
+    if (db_select_int(ctx, query_count, cfg->query_timeout, &counted) != 0)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "Count query failed - request rejected");
+        rc = -1;
+        goto Cleanup;
+    }
 
-    CHECK_OCI(ctx->errhp,
-        OCIDefineByPos(stmt_count, &defn_count, ctx->errhp,
-                       1, &record_count, sizeof(record_count),
-                       SQLT_INT, NULL, NULL, NULL, OCI_DEFAULT));
-
-    CHECK_OCI(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt_count, ctx->errhp,
-                       1, 0, NULL, NULL, OCI_DEFAULT));
+    /* A count beyond INT_MAX is far past any query_max_record_count,
+     * so clamping keeps the truncation decision below exact. */
+    record_count = (counted > INT_MAX) ? INT_MAX
+                 : (counted < 0)       ? 0
+                 : (int)counted;
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "record_count=%d max=%d",
@@ -1441,64 +1436,20 @@ Cleanup:
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0, "Stage 7: Cleanup");
 
-    if (stmt_count)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Calling OCIStmtRelease for stmt_count");
-        OCIStmtRelease(stmt_count, ctx->errhp, NULL, 0, OCI_DEFAULT);
-        stmt_count = NULL;
-    }
-
-    if (BLOB_list)
-    {
-        for (int i = 0; i < BLOB_index; i++)
-        {
-            if (BLOB_list[i].lob_loc)
-            {
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "OCIDescriptorFree BLOB_list[%d].lob_loc", i);
-                OCIDescriptorFree(BLOB_list[i].lob_loc, OCI_DTYPE_LOB);
-                BLOB_list[i].lob_loc = NULL;
-            }
-            if (BLOB_list[i].blob_data)
-            {
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "free(BLOB_list[%d].blob_data)", i);
-                free(BLOB_list[i].blob_data);
-                BLOB_list[i].blob_data = NULL;
-            }
-            if (BLOB_list[i].file_name)
-            {
-                logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                             "free(BLOB_list[%d].file_name)", i);
-                free(BLOB_list[i].file_name);
-                BLOB_list[i].file_name = NULL;
-            }
-        }
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "free(BLOB_list)");
-        free(BLOB_list);
-        BLOB_list = NULL;
-    }
-
     /* free_batch_ctx(ctx, &bc) removed (Phase 2b, 2026-09-15) - the
      * function itself is gone, and bc's only field anything still
      * populates is bc.fetch_count (a plain int, nothing to free).
-     * Every other bc field stays permanently NULL now, same as
-     * stmt/stmt_count/BLOB_list below - nothing left to release here. */
+     * Every other bc field stays permanently NULL now - nothing left
+     * to release here. (Item 2b, 2026-10-03: the stmt, stmt_count and
+     * BLOB_list releases that used to follow were removed with the
+     * last raw OCI call; stmt and BLOB_list had not been assigned
+     * since Phase 2b, 2026-09-15.) */
 
     if (xml)
     {
         logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0, "xml_free(xml)");
         xml_free(xml);
         xml = NULL;
-    }
-
-    if (stmt)
-    {
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "Calling OCIStmtRelease for stmt");
-        OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-        stmt = NULL;
     }
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,

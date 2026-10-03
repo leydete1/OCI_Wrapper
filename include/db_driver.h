@@ -1020,6 +1020,35 @@ typedef struct db_driver_t {
  */
 const db_driver_t *db_driver_get(const oci_context_t *ctx);
 
+/*
+ * db_select_int()
+ *
+ * Oracle dialect extraction, item 2b (2026-10-03). Core helper, not a
+ * driver hook: runs a SELECT that must return exactly one row with
+ * exactly one column holding a whole number, through the current
+ * driver's select_open()/select_fetch_batch()/select_close(), and
+ * returns that number. Works for any driver - it only uses the cursor
+ * interface every driver already implements.
+ *
+ * First caller: execute_query_batch()'s row-count guard, which runs
+ * the driver's count_rows_sql() text through this instead of raw OCI
+ * calls. Anything else that needs "one number from the database"
+ * (a COUNT, a MAX(ID), a sequence value) can use it the same way.
+ *
+ *   sql            complete SELECT text (no binds - same contract as
+ *                  db_select_request_t.sql)
+ *   query_timeout  seconds, passed through as db_select_request_t's
+ *   out_value      receives the number on success; untouched on failure
+ *
+ * Returns 0 on success, -1 on any failure: the driver could not open
+ * or fetch the query, it returned no row, more than one row, other
+ * than one column, an empty/NULL value, or text that is not a whole
+ * number. Every failure is logged on ctx->select_logger with the
+ * reason and the SQL.
+ */
+int db_select_int(oci_context_t *ctx, const char *sql, int query_timeout,
+                  long long *out_value);
+
 #ifdef __cplusplus
 }
 #endif
