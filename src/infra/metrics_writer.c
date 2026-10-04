@@ -16,6 +16,8 @@
 #include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "logger.h"
+#include "db_driver.h"            /* dml_execute(), dialect - item 3b */
+#include "Transaction_Manager.h"  /* tx_commit_with_retry() - item 3b */
 
 struct metrics_writer {
     generic_queue_t *file_queue;   /* NULL if metrics_file_enabled=0 */
@@ -153,28 +155,35 @@ typedef struct {
  * guaranteed correct by the struct itself, not raw external input that
  * needs validating. Genuinely NOT execute_insert_batch() - that would
  * unavoidably trigger a full audit_trail_insert() per field for every
- * metrics row (confirmed by reading its own source - the audit call is
- * baked into execute_insert_batch() itself, not a separate step), and
- * would run Level 1/2 validation logic that doesn't apply here at all.
+ * metrics row, and would run Level 1/2 validation logic that doesn't
+ * apply here at all.
  *
- * Also deliberately NOT a true multi-row array-bind (one OCIStmtExecute
- * with iters=batch_count) - that needs the whole batch transposed into
- * 37 parallel C arrays plus indicator/length arrays per column, real
- * complexity for genuinely marginal gain at this volume. Instead: one
- * statement, prepared once and reused for the thread's whole lifetime,
- * a plain loop that rebinds fresh values and executes once per row,
- * one commit at the end of the whole batch - that one commit-per-batch
- * (instead of per-row) is the actual performance win anyway.
+ * Oracle dialect extraction, item 3b (2026-10-04): no vendor calls left
+ * in this file.
+ *   - The INSERT text is built once, through the driver's dialect:
+ *     bind_placeholder() for every position and value_expr("TIMESTAMP")
+ *     around :19/:20. For Oracle the result is byte-identical to the
+ *     old hand-written METRICS_INSERT_SQL (proven by the 3b unit test).
+ *   - Each row runs through driver->dml_execute() - one call per row,
+ *     same as the old prepare-once/execute-per-row loop. Every value
+ *     is bound as a string (dml_execute()'s contract); numbers are
+ *     formatted with %d/%lld and Oracle converts them, so the stored
+ *     values are unchanged.
+ *   - The one commit per batch goes through tx_commit_with_retry(),
+ *     like every other commit. Before 3b it was a bare OCITransCommit
+ *     whose result was never checked, so a failed commit silently lost
+ *     the batch while the log still said "Inserted N". Now a failed
+ *     commit is logged, rolled back, and reported as 0 persisted.
  *
  * NULL/unset string fields fall back to "-", matching the exact same
  * placeholder convention already used throughout this project (CSV
  * output, dispatcher error envelopes) - no new convention introduced.
  */
-static OCIStmt *g_metrics_insert_stmt = NULL;   /* prepared once, reused
-                                                    for this thread's
-                                                    whole lifetime       */
+#define METRICS_BIND_COUNT   40
+#define METRICS_POS_START_TS 19    /* START_TIME_TS - TIMESTAMP column */
+#define METRICS_POS_END_TS   20    /* END_TIME_TS   - TIMESTAMP column */
 
-#define METRICS_INSERT_SQL \
+#define METRICS_INSERT_HEAD \
     "INSERT INTO OCI_METRICS (" \
     "CONSUMER_NAME, SESSION_ID, TRANSACTION_ID, TRANSACTION_NAME, AUDIT_ID, " \
     "CLIENT_IP, HOST_NAME, SERVER_IP, SERVER_PORT, PROCESS_ID, THREAD_ID, " \
@@ -184,25 +193,54 @@ static OCIStmt *g_metrics_insert_stmt = NULL;   /* prepared once, reused
     "ROWS_AFFECTED, OUTPUT_XML_BYTES, CLOB_BYTES, LOB_BYTES, BYTES_PROCESSED, " \
     "CACHE_HIT, STATUS_CODE, ERROR_CODE, ERROR_TEXT, CONNECTION_WAIT_US, " \
     "CONNECTION_CREATE_US, CONNECTION_ACQUIRE_US, LDAP_BIND_US, CRYPT_VERIFY_US" \
-    ") VALUES (" \
-    ":1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15, :16, " \
-    ":17, :18, TO_TIMESTAMP(:19,'YYYY-MM-DD HH24:MI:SS.FF6'), " \
-    "TO_TIMESTAMP(:20,'YYYY-MM-DD HH24:MI:SS.FF6'), :21, :22, :23, :24, :25, " \
-    ":26, :27, :28, :29, :30, :31, :32, :33, :34, :35, :36, :37, :38, :39, :40)"
+    ") VALUES ("
 
-/* Simple bind helper - matches SQLT_STR string binding already used
- * throughout this codebase's own insert modules (see
- * OCI_Insert_Execute_Module.c's own OCIBindByPos usage) - just without
- * that module's own array-batch bookkeeping, since this binds exactly
- * one row per call.                                                    */
-#define BIND_STR(pos, buf) \
-    OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, (pos), \
-                 (dvoid *)(buf), (sb4)(strlen(buf) + 1), SQLT_STR, \
-                 NULL, NULL, NULL, 0, NULL, OCI_DEFAULT)
-#define BIND_NUM(pos, val) \
-    OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, (pos), \
-                 (dvoid *)&(val), (sb4)sizeof(val), SQLT_INT, \
-                 NULL, NULL, NULL, 0, NULL, OCI_DEFAULT)
+/* Built once, on the DB writer thread's first batch - only that one
+ * thread ever touches it (same lifetime the old prepared statement had). */
+static char g_metrics_insert_sql[2048] = {0};
+
+static int build_metrics_insert_sql(oci_context_t *ctx)
+{
+    if (g_metrics_insert_sql[0]) return 0;
+
+    const db_driver_t  *driver = db_driver_get(ctx);
+    const db_dialect_t *dl     = driver ? driver->dialect : NULL;
+    if (!dl || !dl->bind_placeholder || !dl->value_expr) return -1;
+
+    char   buf[sizeof(g_metrics_insert_sql)];
+    size_t used = (size_t)snprintf(buf, sizeof(buf), "%s", METRICS_INSERT_HEAD);
+    if (used >= sizeof(buf)) return -1;
+
+    for (int pos = 1; pos <= METRICS_BIND_COUNT; pos++)
+    {
+        char ph[32], expr[128];
+        if (dl->bind_placeholder(pos, ph, sizeof(ph)) != 0) return -1;
+
+        const char *piece = ph;
+        if (pos == METRICS_POS_START_TS || pos == METRICS_POS_END_TS)
+        {
+            if (dl->value_expr("TIMESTAMP", ph, expr, sizeof(expr)) != 0) return -1;
+            piece = expr;
+        }
+
+        int n = snprintf(buf + used, sizeof(buf) - used, "%s%s",
+                         pos > 1 ? ", " : "", piece);
+        if (n < 0 || (size_t)n >= sizeof(buf) - used) return -1;
+        used += (size_t)n;
+    }
+
+    int n = snprintf(buf + used, sizeof(buf) - used, ")");
+    if (n < 0 || (size_t)n >= sizeof(buf) - used) return -1;
+
+    memcpy(g_metrics_insert_sql, buf, used + 2);
+    return 0;
+}
+
+/* Exposed for the 3b unit test only (not in metrics_writer.h). */
+const char *metrics_insert_sql_for_test(oci_context_t *ctx)
+{
+    return build_metrics_insert_sql(ctx) == 0 ? g_metrics_insert_sql : NULL;
+}
 
 static void metrics_db_bulk_insert(oci_context_t *ctx,
                                     metrics_record_t **batch,
@@ -210,19 +248,17 @@ static void metrics_db_bulk_insert(oci_context_t *ctx,
 {
     if (batch_count <= 0) { return; }
 
-    if (!g_metrics_insert_stmt)
+    const db_driver_t *driver = db_driver_get(ctx);
+
+    if (!driver || !driver->dml_execute || !driver->rollback ||
+        build_metrics_insert_sql(ctx) != 0)
     {
-        if (OCIStmtPrepare2(ctx->svchp, &g_metrics_insert_stmt, ctx->errhp,
-                             (text *)METRICS_INSERT_SQL,
-                             (ub4)strlen(METRICS_INSERT_SQL),
-                             NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT) != OCI_SUCCESS)
-        {
-            logger_write(ctx->metrics_writer_logger, LOG_ERROR, __func__, 0,
-                         "OCIStmtPrepare2 failed for metrics insert - "
-                         "dropping this batch of %d record(s)", batch_count);
-            for (int i = 0; i < batch_count; i++) metrics_record_deep_free(batch[i]);
-            return;
-        }
+        logger_write(ctx->metrics_writer_logger, LOG_ERROR, __func__, 0,
+                     "Could not build the metrics insert (driver or "
+                     "dialect unavailable) - dropping this batch of %d "
+                     "record(s)", batch_count);
+        for (int i = 0; i < batch_count; i++) metrics_record_deep_free(batch[i]);
+        return;
     }
 
     int inserted = 0;
@@ -230,7 +266,6 @@ static void metrics_db_bulk_insert(oci_context_t *ctx,
     for (int i = 0; i < batch_count; i++)
     {
         metrics_record_t *m = batch[i];
-        OCIBind *bindp = NULL;
 
         /* "-" fallback for anything unset, matching the same
          * placeholder convention already used everywhere else in this
@@ -253,134 +288,94 @@ static void metrics_db_bulk_insert(oci_context_t *ctx,
         metrics_format_timestamp_us(m->start_time_us, start_time, sizeof(start_time));
         metrics_format_timestamp_us(m->end_time_us,   end_time,   sizeof(end_time));
 
-        int server_port = (int)m->server_port, process_id = (int)m->process_id,
-            thread_id = (int)m->thread_id, connection_id = (int)m->connection_id,
-            pool_id = (int)m->pool_id, cache_hit = m->cache_hit,
-            status_code = m->status_code;
-        long long sql_hash = (long long)m->sql_hash,
-                  cache_key_hash = (long long)m->cache_key_hash,
-                  cache_lookup_us = (long long)m->cache_lookup_us,
-                  level1_parse_us = (long long)m->level1_parse_us,
-                  level2_parse_us = (long long)m->level2_parse_us,
-                  sql_parse_us = (long long)m->sql_parse_us,
-                  execution_us = (long long)m->execution_us,
-                  total_us = (long long)m->total_us,
-                  rows_affected = (long long)m->rows_affected,
-                  output_xml_bytes = (long long)m->output_xml_bytes,
-                  clob_bytes = (long long)m->clob_bytes,
-                  lob_bytes = (long long)m->lob_bytes,
-                  bytes_processed = (long long)m->bytes_processed,
-                  connection_wait_us = (long long)m->connection_wait_us,
-                  connection_create_us = (long long)m->connection_create_us,
-                  connection_acquire_us = (long long)m->connection_acquire_us,
-                  ldap_bind_us = (long long)m->ldap_bind_us,
-                  crypt_verify_us = (long long)m->crypt_verify_us;
+        /* Numbers as text - the same values the old code bound as
+         * SQLT_INT (int and 8-byte long long), same casts.             */
+        char num[METRICS_BIND_COUNT + 1][32];
+#define NUM_I(pos, v)  snprintf(num[pos], sizeof(num[pos]), "%d",   (int)(v))
+#define NUM_L(pos, v)  snprintf(num[pos], sizeof(num[pos]), "%lld", (long long)(v))
+        NUM_I(9,  m->server_port);
+        NUM_I(10, m->process_id);
+        NUM_I(11, m->thread_id);
+        NUM_I(13, m->connection_id);
+        NUM_I(14, m->pool_id);
+        NUM_L(17, m->sql_hash);
+        NUM_L(18, m->cache_key_hash);
+        NUM_L(21, m->cache_lookup_us);
+        NUM_L(22, m->level1_parse_us);
+        NUM_L(23, m->level2_parse_us);
+        NUM_L(24, m->sql_parse_us);
+        NUM_L(25, m->execution_us);
+        NUM_L(26, m->total_us);
+        NUM_L(27, m->rows_affected);
+        NUM_L(28, m->output_xml_bytes);
+        NUM_L(29, m->clob_bytes);
+        NUM_L(30, m->lob_bytes);
+        NUM_L(31, m->bytes_processed);
+        NUM_I(32, m->cache_hit);
+        NUM_I(33, m->status_code);
+        NUM_L(36, m->connection_wait_us);
+        NUM_L(37, m->connection_create_us);
+        NUM_L(38, m->connection_acquire_us);
+        NUM_L(39, m->ldap_bind_us);
+        NUM_L(40, m->crypt_verify_us);
+#undef NUM_I
+#undef NUM_L
 
-        sword rc = OCI_SUCCESS;
-        rc |= BIND_STR(1,  consumer_name);
-        rc |= BIND_STR(2,  session_id);
-        rc |= BIND_STR(3,  transaction_id);
-        rc |= BIND_STR(4,  transaction_name);
-        rc |= BIND_STR(5,  audit_id);
-        rc |= BIND_STR(6,  client_ip);
-        rc |= BIND_STR(7,  host_name);
-        rc |= BIND_STR(8,  server_ip);
-        rc |= BIND_NUM(9,  server_port);
-        rc |= BIND_NUM(10, process_id);
-        rc |= BIND_NUM(11, thread_id);
-        rc |= BIND_STR(12, datasource_name);
-        rc |= BIND_NUM(13, connection_id);
-        rc |= BIND_NUM(14, pool_id);
-        rc |= BIND_STR(15, operation);
-        rc |= BIND_STR(16, object_name);
-        rc |= BIND_NUM(17, sql_hash);
-        rc |= BIND_NUM(18, cache_key_hash);
-        rc |= BIND_STR(19, start_time);
-        rc |= BIND_STR(20, end_time);
-        rc |= BIND_NUM(21, cache_lookup_us);
-        rc |= BIND_NUM(22, level1_parse_us);
-        rc |= BIND_NUM(23, level2_parse_us);
-        rc |= BIND_NUM(24, sql_parse_us);
-        rc |= BIND_NUM(25, execution_us);
-        rc |= BIND_NUM(26, total_us);
-        rc |= BIND_NUM(27, rows_affected);
-        rc |= BIND_NUM(28, output_xml_bytes);
-        rc |= BIND_NUM(29, clob_bytes);
-        rc |= BIND_NUM(30, lob_bytes);
-        rc |= BIND_NUM(31, bytes_processed);
-        rc |= BIND_NUM(32, cache_hit);
-        rc |= BIND_NUM(33, status_code);
-        rc |= BIND_STR(34, error_code);
-        rc |= BIND_STR(35, error_text);
-        rc |= BIND_NUM(36, connection_wait_us);
-        rc |= BIND_NUM(37, connection_create_us);
+        const char *values[METRICS_BIND_COUNT] = {
+            consumer_name, session_id, transaction_id, transaction_name,  /*  1- 4 */
+            audit_id, client_ip, host_name, server_ip,                    /*  5- 8 */
+            num[9], num[10], num[11], datasource_name,                    /*  9-12 */
+            num[13], num[14], operation, object_name,                     /* 13-16 */
+            num[17], num[18], start_time, end_time,                       /* 17-20 */
+            num[21], num[22], num[23], num[24],                           /* 21-24 */
+            num[25], num[26], num[27], num[28],                           /* 25-28 */
+            num[29], num[30], num[31], num[32],                           /* 29-32 */
+            num[33], error_code, error_text, num[36],                     /* 33-36 */
+            num[37], num[38], num[39], num[40]                            /* 37-40 */
+        };
 
-        if (rc == OCI_SUCCESS)
-            rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 38,
-                               (dvoid *)&connection_acquire_us,
-                               (sb4)sizeof(connection_acquire_us), SQLT_INT,
-                               NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+        db_dml_request_t req;
+        memset(&req, 0, sizeof(req));
+        req.sql         = g_metrics_insert_sql;
+        req.bind_count  = METRICS_BIND_COUNT;
+        req.bind_values = values;
 
-        /* Security Module (2026-09-01) - appended as :39/:40, deliberately
-         * NOT inserted in the "logical" position alongside level1_parse_us
-         * etc. (which would have required renumbering every single bind
-         * position from :25 onward) - functionally identical either way,
-         * since these are positional binds matched to the VALUES(...)
-         * list above, not required to mirror the CSV column order.      */
-        if (rc == OCI_SUCCESS)
-            rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 39,
-                               (dvoid *)&ldap_bind_us,
-                               (sb4)sizeof(ldap_bind_us), SQLT_INT,
-                               NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
-        if (rc == OCI_SUCCESS)
-            rc = OCIBindByPos(g_metrics_insert_stmt, &bindp, ctx->errhp, 40,
-                               (dvoid *)&crypt_verify_us,
-                               (sb4)sizeof(crypt_verify_us), SQLT_INT,
-                               NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
-            /* Position 38, the 38th and final column - matches
-             * CONNECTION_ACQUIRE_US as the last column in both the SQL's
-             * own column list and its VALUES clause. A genuine off-by-
-             * one existed here during development (SQL's VALUES clause
-             * only went up to :37, one short of the 38-column list) -
-             * caught by scripted position-count verification before
-             * delivery, not by manual counting, which had already
-             * missed it once.                                          */
-
-        if (rc != OCI_SUCCESS)
+        int rows = 0;
+        if (driver->dml_execute(ctx, ctx->metrics_writer_logger, &req,
+                                &rows, NULL, 0) != 0)
         {
             logger_write(ctx->metrics_writer_logger, LOG_ERROR, __func__, 0,
-                         "OCIBindByPos failed for metrics row %d in this "
-                         "batch - skipping this one row, continuing with "
-                         "the rest", i);
-            continue;
-        }
-
-        rc = OCIStmtExecute(ctx->svchp, g_metrics_insert_stmt, ctx->errhp,
-                             1, 0, NULL, NULL, OCI_DEFAULT);
-        if (rc != OCI_SUCCESS && rc != OCI_SUCCESS_WITH_INFO)
-        {
-            logger_write(ctx->metrics_writer_logger, LOG_ERROR, __func__, 0,
-                         "OCIStmtExecute failed for metrics row %d in "
-                         "this batch - skipping this one row, continuing "
-                         "with the rest", i);
+                         "Insert failed for metrics row %d in this batch - "
+                         "skipping this one row, continuing with the rest", i);
             continue;
         }
 
         inserted++;
     }
 
-    OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
-
-    logger_write(ctx->metrics_writer_logger, LOG_INFO, __func__, 0,
-                 "Inserted %d of %d metrics record(s) this batch",
-                 inserted, batch_count);
+    /* One commit per batch, as before - now checked, and retried like
+     * every other commit (item 3b). */
+    if (tx_commit_with_retry(ctx, ctx->metrics_writer_logger,
+                             ctx->ini ? ctx->ini->tx_max_retries    : 0,
+                             ctx->ini ? ctx->ini->tx_retry_delay_ms : 0,
+                             NULL) != 0)
+    {
+        logger_write(ctx->metrics_writer_logger, LOG_ERROR, __func__, 0,
+                     "Commit failed - rolling back; 0 of %d metrics "
+                     "record(s) persisted this batch (%d had been inserted)",
+                     batch_count, inserted);
+        driver->rollback(ctx, ctx->metrics_writer_logger);
+    }
+    else
+    {
+        logger_write(ctx->metrics_writer_logger, LOG_INFO, __func__, 0,
+                     "Inserted %d of %d metrics record(s) this batch",
+                     inserted, batch_count);
+    }
 
     for (int i = 0; i < batch_count; i++)
         metrics_record_deep_free(batch[i]);
 }
-
-#undef BIND_STR
-#undef BIND_NUM
 
 static void *db_writer_thread_main(void *arg)
 {
@@ -415,6 +410,18 @@ static void *db_writer_thread_main(void *arg)
 
     copy_shared_ctx_fields(&thread_ctx, metrics_base_ctx);
     thread_ctx.active_tx = NULL;
+
+    /* Item 3b fix (2026-10-04): metrics_base_ctx is the metrics pool's
+     * own context, which Bootstrap memsets and fills only with ini and
+     * connectionpool_logger - so copy_shared_ctx_fields() left
+     * thread_ctx.metrics_writer_logger NULL. Every line
+     * metrics_db_bulk_insert() wrote ("Inserted N of M", row failures)
+     * went to a NULL logger ("Logger is NULL. Going to Cleanup." on the
+     * console) and never reached a log file - a pre-existing gap 3b
+     * made visible, because dml_execute() and the commit helper log on
+     * the same logger. The thread's own dedicated writer_logger
+     * (metrics_writer_app.log) is the right destination.            */
+    thread_ctx.metrics_writer_logger = writer_logger;
 
     logger_write(writer_logger, LOG_INFO, __func__, 0,
                  "Metrics DB writer thread started - session borrowed, "
