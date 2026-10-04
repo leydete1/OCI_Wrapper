@@ -7,8 +7,8 @@
  *   tx_generate_uuid()   - RFC 4122 v4 UUID generation
  *   tx_init()            - zero-initialise a tx_handle_t
  *   tx_begin()           - mark transaction ACTIVE, assign UUID, return XML
- *   tx_commit()          - OCITransCommit + result XML
- *   tx_rollback()        - OCITransRollback (client-initiated) + result XML
+ *   tx_commit()          - commit (with retry) + result XML
+ *   tx_rollback()        - rollback (client-initiated) + result XML
  *   tx_abort()           - force rollback on error path + result XML
  *   tx_check_timeout()   - idle timeout enforcement
  *   tx_touch()           - reset idle timer after a DML step
@@ -17,10 +17,11 @@
  *   tx_is_active()       - convenience active check
  *
  * All logging goes to ctx->transaction_logger.
- * All OCI work uses ctx->svchp / ctx->errhp (standard project pattern).
+ * All database work goes through the driver (db_driver.h commit()/
+ * rollback()) - this file makes no vendor calls (Stage 3, 2026-10-03).
  * All XML output is heap-allocated; caller is responsible for free().
  *
- * See OCI_Transaction_Manager.h for full design notes.
+ * See Transaction_Manager.h for full design notes.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -37,6 +38,7 @@
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
+#include "db_driver.h"        /* db_driver_get() - commit()/rollback(), Stage 3 */
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers - forward declarations                            */
@@ -46,8 +48,7 @@ static char *tx_build_result_xml  (const tx_handle_t *handle,
                                     const char        *operation,
                                     const char        *extra_element,
                                     const char        *extra_value);
-static void  tx_log_oci_error     (oci_context_t *ctx,
-                                    const char    *func_name);
+static int   tx_driver_rollback   (oci_context_t *ctx);
 
 /* ------------------------------------------------------------------ */
 /*  Microsecond wall-clock - mirrors metrics_now_us()                  */
@@ -180,7 +181,7 @@ int tx_is_active(const tx_handle_t *handle)
 
 /* ================================================================== */
 /*  begin_standalone_tx_if_needed / end_standalone_tx_if_owned          */
-/*  See doc comment in OCI_Transaction_Manager.h for the full           */
+/*  See doc comment in Transaction_Manager.h for the full               */
 /*  reasoning - fixes the 2026-07-26 GxP traceability gap.              */
 /* ================================================================== */
 int begin_standalone_tx_if_needed(oci_context_t *ctx, tx_handle_t *local_tx)
@@ -366,94 +367,51 @@ int tx_begin(tx_handle_t  *handle,
 /* ================================================================== */
 
 /*
- * ORA error codes that mean "there is nothing left to commit".
- * This happens in the test runner because each execute module
- * (execute_insert_batch, execute_update_batch, etc.) calls
- * OCITransCommit itself before returning.  By the time the outer
- * tx_commit() runs, Oracle has already ended the transaction and
- * there is no work outstanding.  These are treated as success
- * rather than an abort so the tx_handle reflects COMMITTED.
+ * tx_commit_with_retry() - see Transaction_Manager.h.
  *
- *   ORA-00000  "normal, successful completion"  (nothing to commit)
- *   ORA-01456  "may not perform insert/delete/update operation inside
- *               a READ ONLY transaction"  (autocommit edge case)
- *   ORA-25402  "transaction must roll back"  (connection-level error)
- *   ORA-25408  "can not safely replay call"  (TAF replay edge case)
- *
- * In practice on a local non-XA connection with no outstanding work,
- * OCITransCommit returns OCI_SUCCESS immediately (it is a no-op).
- * If it ever does return an error here, logging the OCI error code
- * first makes the root cause immediately visible in the log.
+ * Stage 3 (2026-10-03): replaces oci_trans_commit_retry(). Same loop
+ * shape, same attempt count (max_retries + 1 at most), same delay; the
+ * OCITransCommit call, the OCIErrorGet and the ORA-00000/ORA-01085
+ * "nothing to commit" decision moved into the driver's commit(), which
+ * now reports 0 / DB_TX_RETRYABLE / other. The old loop retried every
+ * failure that was not "nothing to commit"; the Oracle driver reports
+ * exactly those as DB_TX_RETRYABLE, so the attempt sequence is
+ * unchanged.
  */
-#define ORA_NOTHING_TO_COMMIT  0      /* OCI_SUCCESS - already clean  */
-
-int oci_trans_commit_retry(oci_context_t *ctx, logger_t *logger,
-                            int max_retries, int retry_delay_ms,
-                            int *out_attempts, sb4 *out_ora_code)
+int tx_commit_with_retry(oci_context_t *ctx, logger_t *logger,
+                         int max_retries, int retry_delay_ms,
+                         int *out_attempts)
 {
-    int   attempt    = 0;
-    sword oci_status = OCI_ERROR;
-    sb4   ora_code   = 0;          /* ORA-XXXXX from OCIErrorGet  */
+    if (out_attempts) *out_attempts = 0;
 
-    /* ---- Retry loop for transient OCI errors - extracted verbatim
-     * from tx_commit() 2026-09-23, see this function's header comment
-     * in OCI_Transaction_Manager.h for why. ---- */
-    while (attempt <= max_retries)
+    const db_driver_t *driver = ctx ? db_driver_get(ctx) : NULL;
+    if (!driver || !driver->commit)
+    {
+        logger_write(logger, LOG_ERROR, __func__, 0,
+                     "No driver commit() available - nothing committed");
+        return -1;
+    }
+
+    if (max_retries < 0) max_retries = 0;
+
+    int attempt = 0;
+    int rc      = -1;
+
+    for (;;)
     {
         logger_write(logger, LOG_INFO, __func__, 0,
-                     "OCITransCommit attempt %d/%d",
-                     attempt + 1, max_retries + 1);
+                     "Commit attempt %d/%d", attempt + 1, max_retries + 1);
 
-        oci_status = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+        rc = driver->commit(ctx, logger);
 
-        if (oci_status == OCI_SUCCESS ||
-            oci_status == OCI_SUCCESS_WITH_INFO)
-        {
-            break;   /* success                                        */
-        }
-
-        /* ---- Extract OCI error code BEFORE deciding what to do ---- */
-        text errbuf[512] = {0};
-        ora_code = 0;
-        OCIErrorGet(ctx->errhp, 1, NULL, &ora_code,
-                    errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
-
-        logger_write(logger, LOG_WARN, __func__, 0,
-                     "OCITransCommit attempt %d returned non-success  "
-                     "oci_status=%d  ORA-%05d: %s",
-                     attempt + 1, (int)oci_status, (int)ora_code,
-                     (char *)errbuf);
-
-        /*
-         * If the individual execute modules have already committed the
-         * work (which is the current behaviour - each module calls
-         * OCITransCommit internally), Oracle may return an error here
-         * because there is genuinely no open transaction to commit.
-         * On a local non-XA connection this usually comes back as
-         * OCI_SUCCESS (no-op), but if for any reason an error is
-         * returned and the ORA code indicates "nothing outstanding",
-         * treat it as success rather than failure.
-         *
-         * Codes handled as soft success:
-         *   ORA-00000  normal successful completion
-         *   ORA-01085  preceding call did not execute  (already clean)
-         */
-        if (ora_code == 0 || ora_code == 1085)
-        {
-            logger_write(logger, LOG_INFO, __func__, 0,
-                         "ORA-%05d treated as soft success "
-                         "(no outstanding work to commit)",
-                         (int)ora_code);
-            oci_status = OCI_SUCCESS;   /* rewrite so success path runs */
-            break;
-        }
+        if (rc != DB_TX_RETRYABLE)
+            break;              /* committed, or a failure not worth retrying */
 
         if (attempt >= max_retries)
-            break;   /* exhausted retries - fall through to failure     */
+            break;              /* retries exhausted                          */
 
         attempt++;
 
-        /* Delay before retry */
         if (retry_delay_ms > 0)
         {
             struct timespec delay;
@@ -464,10 +422,8 @@ int oci_trans_commit_retry(oci_context_t *ctx, logger_t *logger,
     }
 
     if (out_attempts) *out_attempts = attempt + 1;
-    if (out_ora_code) *out_ora_code = ora_code;
 
-    return (oci_status == OCI_SUCCESS || oci_status == OCI_SUCCESS_WITH_INFO)
-           ? 0 : -1;
+    return (rc == 0) ? 0 : -1;
 }
 
 int tx_commit(tx_handle_t  *handle,
@@ -493,19 +449,15 @@ int tx_commit(tx_handle_t  *handle,
 
     int rc = TX_OK;
     int attempts  = 0;
-    sb4 ora_code  = 0;
 
-    /* ---- Retry mechanics now shared with oracle_commit() (driver_
-     * oracle.c) - see oci_trans_commit_retry()'s header comment in
-     * OCI_Transaction_Manager.h. Note: the per-attempt WARN/INFO trace
-     * lines logged inside the shared helper no longer carry tx_id=
-     * (the helper is transaction-handle-agnostic) - the summary line
-     * below still does, which is the one Driver_Transaction_Test.c's
-     * Test 5 actually keys off. */
-    int commit_rc = oci_trans_commit_retry(ctx, ctx->transaction_logger,
-                                            handle->max_retries,
-                                            handle->retry_delay_ms,
-                                            &attempts, &ora_code);
+    /* ---- One retry loop for every commit path - tx_commit_with_retry()
+     * (Stage 3). The per-attempt lines it and the driver log carry no
+     * tx_id= of their own (the helper is transaction-handle-agnostic);
+     * the summary line below still does. */
+    int commit_rc = tx_commit_with_retry(ctx, ctx->transaction_logger,
+                                         handle->max_retries,
+                                         handle->retry_delay_ms,
+                                         &attempts);
 
     handle->end_time_us = tx_now_us();
     uint64_t duration   = handle->end_time_us - handle->start_time_us;
@@ -537,14 +489,14 @@ int tx_commit(tx_handle_t  *handle,
     else
     {
         logger_write(ctx->transaction_logger, LOG_ERROR, __func__, 0,
-                     "OCITransCommit FAILED after %d attempt(s) - "
+                     "Commit FAILED after %d attempt(s) - "
                      "rolling back and setting ABORTED  "
-                     "ORA-%05d  tx_id='%s'",
-                     attempts, (int)ora_code,
+                     "tx_id='%s' (database error detail logged above)",
+                     attempts,
                      handle->transaction_id);
 
         /* Best-effort rollback */
-        OCITransRollback(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+        tx_driver_rollback(ctx);
         handle->status = TX_STATUS_ABORTED;
         rc             = TX_ERR_OCI_FAILURE;
     }
@@ -619,7 +571,7 @@ int tx_rollback(tx_handle_t  *handle,
         return TX_ERR_NO_ACTIVE;
     }
 
-    sword oci_status = OCITransRollback(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+    int rb_rc = tx_driver_rollback(ctx);
 
     handle->end_time_us = tx_now_us();
     uint64_t duration   = handle->end_time_us - handle->start_time_us;
@@ -630,13 +582,12 @@ int tx_rollback(tx_handle_t  *handle,
     /* Trace context (2026-08-06) */
     logger_clear_txid();
 
-    if (oci_status != OCI_SUCCESS && oci_status != OCI_SUCCESS_WITH_INFO)
+    if (rb_rc != 0)
     {
-        tx_log_oci_error(ctx, __func__);
         logger_write(ctx->transaction_logger, LOG_WARN, __func__, 0,
-                     "OCITransRollback returned non-success status=%d "
+                     "Rollback returned non-success rc=%d "
                      "(proceeding with ROLLED_BACK state) tx_id='%s'",
-                     oci_status, handle->transaction_id);
+                     rb_rc, handle->transaction_id);
     }
 
     handle->status = TX_STATUS_ROLLED_BACK;
@@ -707,13 +658,10 @@ int tx_abort(tx_handle_t  *handle,
     /* Safe to call regardless of current status - best-effort rollback */
     if (handle->status == TX_STATUS_ACTIVE)
     {
-        sword oci_status = OCITransRollback(ctx->svchp, ctx->errhp,
-                                             OCI_DEFAULT);
-        if (oci_status != OCI_SUCCESS && oci_status != OCI_SUCCESS_WITH_INFO)
+        if (tx_driver_rollback(ctx) != 0)
         {
-            tx_log_oci_error(ctx, __func__);
             logger_write(ctx->transaction_logger, LOG_WARN, __func__, 0,
-                         "OCITransRollback in tx_abort returned non-success "
+                         "Rollback in tx_abort returned non-success "
                          "(continuing with ABORTED status) tx_id='%s'",
                          handle->transaction_id);
         }
@@ -819,22 +767,22 @@ int tx_check_timeout(tx_handle_t  *handle,
 }
 
 /* ================================================================== */
-/*  Internal: tx_log_oci_error                                          */
-/*  Extract and log the OCI error code and message.                    */
+/*  Internal: tx_driver_rollback                                        */
+/*  One driver rollback() on ctx, logged on ctx->transaction_logger.    */
+/*  Replaces the direct OCITransRollback calls and tx_log_oci_error()  */
+/*  (Stage 3) - the driver logs the same "OCI Error %d: %s" detail     */
+/*  itself on failure. Returns the driver's result (0 = success).      */
 /* ================================================================== */
-static void tx_log_oci_error(oci_context_t *ctx, const char *func_name)
+static int tx_driver_rollback(oci_context_t *ctx)
 {
-    if (!ctx || !ctx->errhp || !ctx->transaction_logger)
-        return;
-
-    text errbuf[512];
-    sb4  errcode = 0;
-
-    OCIErrorGet(ctx->errhp, 1, NULL, &errcode,
-                errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
-
-    logger_write(ctx->transaction_logger, LOG_ERROR, func_name, 0,
-                 "OCI Error %d: %s", (int)errcode, (char *)errbuf);
+    const db_driver_t *driver = db_driver_get(ctx);
+    if (!driver || !driver->rollback)
+    {
+        logger_write(ctx->transaction_logger, LOG_ERROR, __func__, 0,
+                     "No driver rollback() available - nothing rolled back");
+        return -1;
+    }
+    return driver->rollback(ctx, ctx->transaction_logger);
 }
 
 /* ================================================================== */

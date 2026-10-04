@@ -10,7 +10,7 @@
  * ---------------
  * Oracle's OCI operates in manual-commit mode by default (autocommit_mode=0
  * in config.ini).  Individual execute modules (insert/update/delete) each
- * issue their own OCITransCommit at the end of a successful operation.
+ * commit their own work at the end of a successful operation.
  * The Transaction Manager overrides that implicit per-call commit model by
  * giving the CLIENT explicit control over when a logical transaction begins,
  * what work it encompasses across multiple DML calls, and when it is
@@ -24,8 +24,8 @@
  *   1. Marks the transaction as ACTIVE and assigns it a UUID.
  *   2. Returns the transaction ID to the client in XML so it can be passed
  *      back on subsequent DML calls for correlation / audit purposes.
- *   3. On commit / rollback / abort it issues the appropriate OCI call and
- *      updates transaction state.
+ *   3. On commit / rollback / abort it asks the database driver
+ *      (db_driver.h commit()/rollback()) and updates transaction state.
  *   4. Enforces a configurable idle timeout via tx_check_timeout(); the
  *      caller (heartbeat thread or request handler) should invoke this
  *      periodically.
@@ -118,8 +118,8 @@ extern "C" {
 typedef enum {
     TX_STATUS_NONE        = 0,   /* no active transaction              */
     TX_STATUS_ACTIVE      = 1,   /* BEGIN issued, work in progress      */
-    TX_STATUS_COMMITTED   = 2,   /* OCITransCommit completed OK         */
-    TX_STATUS_ROLLED_BACK = 3,   /* OCITransRollback completed OK       */
+    TX_STATUS_COMMITTED   = 2,   /* driver commit completed OK          */
+    TX_STATUS_ROLLED_BACK = 3,   /* driver rollback completed OK        */
     TX_STATUS_ABORTED     = 4,   /* forced abort (error / timeout)      */
     TX_STATUS_TIMED_OUT   = 5    /* idle timeout exceeded               */
 } tx_status_t;
@@ -131,7 +131,8 @@ typedef enum {
 #define TX_ERR_INVALID_ARG -1
 #define TX_ERR_ALREADY_ACTIVE -2   /* tx_begin when one already active */
 #define TX_ERR_NO_ACTIVE    -3     /* commit/rollback with no active tx */
-#define TX_ERR_OCI_FAILURE  -4     /* OCI call returned an error        */
+#define TX_ERR_OCI_FAILURE  -4     /* database call returned an error -
+                                       name kept for existing callers  */
 #define TX_ERR_TIMEOUT      -5     /* operation exceeded timeout        */
 #define TX_ERR_ALLOC        -6     /* malloc / calloc failure           */
 
@@ -217,12 +218,11 @@ void tx_init(tx_handle_t *handle, oci_context_t *ctx);
  * Returns TX_OK on success, TX_ERR_ALREADY_ACTIVE if a transaction is
  * already open on this handle, TX_ERR_INVALID_ARG for NULL inputs.
  *
- * Note: this function does NOT issue an explicit OCITransStart() call.
- * Oracle begins a transaction implicitly on the first DML statement.
- * Calling OCITransStart() with OCI_TRANS_NEW would be correct only for
- * XA / distributed transactions which are not in scope here.  For the
- * local non-XA case, marking the handle ACTIVE and returning the UUID
- * is the correct and sufficient action.
+ * Note: this function does not start anything in the database. The
+ * database begins a transaction implicitly on the first DML statement
+ * (an explicit start call is only needed for XA / distributed
+ * transactions, which are not in scope here). Marking the handle
+ * ACTIVE and returning the UUID is the correct and sufficient action.
  */
 int tx_begin(tx_handle_t  *handle,
              const char   *session_id,
@@ -234,12 +234,15 @@ int tx_begin(tx_handle_t  *handle,
  *
  * Commit the active transaction.
  *
- *   - Calls OCITransCommit() on ctx->svchp / ctx->errhp.
+ *   - Commits through tx_commit_with_retry() (below), which retries
+ *     up to handle->max_retries times while the driver reports the
+ *     failure as retryable. (Before Stage 3 this comment said only
+ *     ORA-04020/04021/04031 were retried; the code has always retried
+ *     every failure except "nothing to commit" - see the proposal,
+ *     item 3c.)
  *   - On success sets status to TX_STATUS_COMMITTED.
- *   - On OCI failure rolls back automatically and sets status to
- *     TX_STATUS_ABORTED.
- *   - Retries up to handle->max_retries times on transient OCI errors
- *     (ORA-04020, ORA-04021, ORA-04031 — deadlock / resource wait).
+ *   - On failure rolls back (driver rollback(), best effort) and sets
+ *     status to TX_STATUS_ABORTED.
  *   - Logs to ctx->transaction_logger.
  *   - Populates *result_xml.  Caller must free() it.
  *
@@ -253,7 +256,7 @@ int tx_commit(tx_handle_t  *handle,
  *
  * Roll back the active transaction explicitly (client-initiated).
  *
- *   - Calls OCITransRollback() on ctx->svchp / ctx->errhp.
+ *   - Calls the driver's rollback() on ctx.
  *   - Sets status to TX_STATUS_ROLLED_BACK.
  *   - Logs to ctx->transaction_logger.
  *   - Populates *result_xml.  Caller must free() it.
@@ -268,7 +271,7 @@ int tx_rollback(tx_handle_t  *handle,
  *
  * Force-abort the active transaction (internal error path).
  *
- *   - Calls OCITransRollback() with best-effort (errors suppressed).
+ *   - Calls the driver's rollback(), best effort (errors logged only).
  *   - Sets status to TX_STATUS_ABORTED.
  *   - Logs to ctx->transaction_logger at LOG_ERROR level.
  *   - Populates *result_xml.  Caller must free() it.
@@ -337,52 +340,38 @@ const char *tx_get_id(const tx_handle_t *handle);
 int tx_is_active(const tx_handle_t *handle);
 
 /*
- * oci_trans_commit_retry()
+ * tx_commit_with_retry()
  *
- * Shared retry mechanics behind tx_commit(), extracted 2026-09-23
- * (follow-up proposal, "driver->commit()/rollback() vs Transaction
- * Manager dual-path" item) so driver_oracle.c's oracle_commit() - the
- * standalone (no managed transaction) commit path used by Insert/
- * Update/Delete when ctx->active_tx is NULL - gets the same transient-
- * error resilience tx_commit() already had, instead of a single bare
- * OCITransCommit with no retry at all.
+ * Oracle dialect extraction, Stage 3 (2026-10-03). The one commit retry
+ * loop in the project - replaces oci_trans_commit_retry(), which made
+ * the OCI calls itself. Used by tx_commit() and by every standalone
+ * commit site (Insert/Update/Delete when this call owns its own commit
+ * boundary), so both paths keep the retry the standalone path gained
+ * on 2026-09-23.
  *
- * Deliberately just the raw OCI retry loop - attempt OCITransCommit up
- * to max_retries+1 times, retry_delay_ms between attempts, ORA-00000/
- * ORA-01085 treated as soft success (nothing outstanding to commit) -
- * with none of tx_handle_t's status/metrics/XML bookkeeping, so it has
- * a single caller-agnostic shape both tx_commit() (wrapping it with
- * transaction-handle bookkeeping) and oracle_commit() (wrapping it with
- * its own much simpler logging) can use as-is.
+ * Each attempt is one driver commit() (db_driver.h). The loop retries
+ * only while the driver reports DB_TX_RETRYABLE, up to max_retries
+ * extra attempts with retry_delay_ms between them; 0 ends it as
+ * success, any other result ends it as failure. Which failures are
+ * retryable is the driver's knowledge, not core's.
  *
- * Rollback has no equivalent: tx_rollback() itself is a single-shot,
- * best-effort OCITransRollback with no retry (same fire-and-forget
- * philosophy as tx_abort()) - so oracle_rollback() staying single-shot
- * is already consistent with tx_rollback(), not a gap to fix.
+ * ctx      - a connected session.
+ * logger   - destination for the attempt trail ("Commit attempt n/m");
+ *            ctx->transaction_logger from tx_commit(), the module's own
+ *            logger (e.g. ctx->insert_logger) from a standalone caller.
+ *            The driver logs its vendor detail on the same logger.
+ * max_retries, retry_delay_ms - config.ini's tx_max_retries /
+ *            tx_retry_delay_ms (tx_handle_t's copies from tx_commit()).
+ * out_attempts - if non-NULL, set to the number of commit() calls made
+ *            (1 on first-try success).
  *
- * ctx      - must have valid svchp/errhp (a connected session).
- * logger   - destination for the attempt-by-attempt WARN/INFO trail;
- *            pass ctx->transaction_logger from tx_commit(), or
- *            whatever logger the caller normally uses (e.g.
- *            ctx->insert_logger) from a standalone caller - this
- *            function does not assume which one.
- * max_retries, retry_delay_ms - same meaning and units as
- *            tx_handle_t's own fields (config.ini's tx_max_retries /
- *            tx_retry_delay_ms) - pass those directly from ctx->ini
- *            for a standalone caller.
- * out_attempts - if non-NULL, set to the number of OCITransCommit
- *            calls actually made (1 on first-try success).
- * out_ora_code - if non-NULL, set to the last ORA-XXXXX seen (0 on a
- *            first-try or soft success).
- *
- * Returns 0 on success (including soft success), -1 if every attempt
- * failed - caller decides what "failed" means for it (tx_commit()
- * rolls back and marks ABORTED; oracle_commit() just returns -1 to its
- * own caller, same as it always has).
+ * Returns 0 on success, -1 on failure - caller decides what failure
+ * means for it (tx_commit() rolls back and marks ABORTED; a standalone
+ * caller rolls back on its own error path, as before).
  */
-int oci_trans_commit_retry(oci_context_t *ctx, logger_t *logger,
-                            int max_retries, int retry_delay_ms,
-                            int *out_attempts, sb4 *out_ora_code);
+int tx_commit_with_retry(oci_context_t *ctx, logger_t *logger,
+                         int max_retries, int retry_delay_ms,
+                         int *out_attempts);
 
 
 /*

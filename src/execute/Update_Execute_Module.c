@@ -1112,7 +1112,12 @@ int execute_update_batch(oci_context_t     *ctx,
         logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                      "Calling driver commit");
 
-        if (driver->commit(ctx, ctx->update_logger) != 0)
+        /* Stage 3 (2026-10-03): the retry loop is core's, not the
+         * driver's - see tx_commit_with_retry(), Transaction_Manager.h. */
+        if (tx_commit_with_retry(ctx, ctx->update_logger,
+                                 ctx->ini ? ctx->ini->tx_max_retries    : 0,
+                                 ctx->ini ? ctx->ini->tx_retry_delay_ms : 0,
+                                 NULL) != 0)
         {
             logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
                          "driver commit failed");

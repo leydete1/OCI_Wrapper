@@ -690,7 +690,7 @@ typedef struct {
  *   directly against ddl_execution_result_t's own real struct and
  *   get_ddl_execution_response_xml()'s own real output, not assumed.
  *   When out_error_message is non-NULL and dml_execute() returns
- *   non-zero, it holds the same OCIErrorGet() text already written to
+ *   non-zero, it holds the same vendor error text already written to
  *   the log - same source, just also handed back to the caller instead
  *   of only logged. Untouched (left as whatever the caller passed in,
  *   typically empty) when this call succeeds.
@@ -711,17 +711,31 @@ typedef struct {
  *   standalone commit boundary?) - not a vendor concern, and keeping it
  *   a separate call preserves each calling module's existing
  *   commit-or-not branching exactly as it is today. Call commit() or
- *   rollback() explicitly afterward, same as today's inline
- *   OCITransCommit/OCITransRollback calls in each execute module.
+ *   rollback() explicitly afterward (standalone callers go through
+ *   core's tx_commit_with_retry(), Transaction_Manager.h).
  *
  * commit() / rollback()
- *   Commits or rolls back ctx's current transaction. Same contract as
- *   today's direct OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT)/
- *   OCITransRollback() calls, now behind the driver boundary - every
- *   other detail (when to call which, based on ctx->active_tx) stays a
- *   core decision untouched by this move, same reasoning as dml_execute()
- *   not committing itself. Same logger reasoning as dml_execute() above.
- *   Returns 0 on success, non-zero on failure.
+ *   Commits or rolls back ctx's current transaction - every decision
+ *   about when to call which (based on ctx->active_tx) stays in core,
+ *   same reasoning as dml_execute() not committing itself. Same logger
+ *   reasoning as dml_execute() above.
+ *
+ *   commit() makes exactly ONE attempt (Oracle dialect extraction,
+ *   Stage 3, 2026-10-03). Retrying is core policy and lives in exactly
+ *   one place, tx_commit_with_retry() (Transaction_Manager.h), which
+ *   tx_commit() and every standalone commit site use. The driver's
+ *   only job is to say what kind of failure it saw:
+ *     0                 committed - including the vendor's "nothing
+ *                       outstanding to commit" outcomes, which the
+ *                       driver recognises and reports as success
+ *     DB_TX_RETRYABLE   failed, and another attempt may succeed
+ *     any other value   failed, do not retry
+ *   The driver logs the vendor detail (status, error code and text) on
+ *   the caller's logger; core logs only the attempt count and outcome.
+ *   Callers that only test "!= 0" keep working unchanged.
+ *
+ *   rollback() returns 0 on success, non-zero on failure (one attempt,
+ *   never retried - tx_rollback()/tx_abort() are best-effort by design).
  *
  * dml_execute_returning_rowids()
  *   Added 2026-09-18, UPDATE's own abstraction pass - see
@@ -1002,6 +1016,14 @@ typedef struct db_driver_t {
  * this one" apart from "something actually went wrong."
  */
 #define DB_SELECT_UNSUPPORTED_LOB (-100)
+
+/*
+ * DB_TX_RETRYABLE - commit()'s "failed, but another attempt may
+ * succeed" result (see commit() above). Positive so it can never be
+ * mistaken for success and never collides with the -1 every driver
+ * function already uses for a plain failure.
+ */
+#define DB_TX_RETRYABLE 1
 
 
 /*

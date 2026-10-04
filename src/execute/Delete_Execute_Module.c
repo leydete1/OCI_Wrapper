@@ -627,7 +627,12 @@ int execute_delete_batch(oci_context_t     *ctx,
         logger_write(ctx->delete_logger, LOG_INFO, __func__, 0,
                      "Stage 5: Calling driver commit");
 
-        if (driver->commit(ctx, ctx->delete_logger) != 0)
+        /* Stage 3 (2026-10-03): the retry loop is core's, not the
+         * driver's - see tx_commit_with_retry(), Transaction_Manager.h. */
+        if (tx_commit_with_retry(ctx, ctx->delete_logger,
+                                 ctx->ini ? ctx->ini->tx_max_retries    : 0,
+                                 ctx->ini ? ctx->ini->tx_retry_delay_ms : 0,
+                                 NULL) != 0)
         {
             logger_write(ctx->delete_logger, LOG_ERROR, __func__, 0,
                          "driver commit failed");

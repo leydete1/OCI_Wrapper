@@ -403,7 +403,7 @@ static int build_insert_sql(oci_context_t        *ctx,
     /* Bug fix (2026-08-25) - RETURNING ROWID INTO added here, at
      * bind_num+1 (the next bind position after every scalar column's
      * own placeholder). This REPLACES the old post-execute
-     * OCIAttrGet(..., OCI_ATTR_ROWID, ...) approach entirely - that
+     * OCI_ATTR_ROWID attribute-get approach entirely - that
      * attribute is only reliable for a single-row-affecting statement
      * (confirmed against real, reproducible test data: the captured
      * ROWID pointed at a completely different table block than the
@@ -1093,7 +1093,12 @@ int execute_insert_batch(oci_context_t    *ctx,
         logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
                      "Calling driver commit (no managed transaction)");
 
-        if (driver->commit(ctx, ctx->insert_logger) != 0)
+        /* Stage 3 (2026-10-03): the retry loop is core's, not the
+         * driver's - see tx_commit_with_retry(), Transaction_Manager.h. */
+        if (tx_commit_with_retry(ctx, ctx->insert_logger,
+                                 ctx->ini ? ctx->ini->tx_max_retries    : 0,
+                                 ctx->ini ? ctx->ini->tx_retry_delay_ms : 0,
+                                 NULL) != 0)
         {
             logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
                          "driver commit failed");

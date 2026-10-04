@@ -69,18 +69,9 @@
 #include "driver_oracle.h"
 #include "Connection.h"
 #include "Connection_Pool.h"
-#include "Transaction_Manager.h"       /* oci_trans_commit_retry() -
-                                              shared retry mechanics with
-                                              tx_commit(), added 2026-09-23
-                                              so oracle_commit() gets the
-                                              same transient-error
-                                              resilience instead of a
-                                              single bare OCITransCommit
-                                              with no retry at all. See
-                                              OCI_Transaction_Manager.h's
-                                              header comment on that
-                                              function for the full
-                                              rationale.                */
+/* Transaction_Manager.h is no longer included (Stage 3, 2026-10-03):
+ * oracle_commit() makes one attempt and core's tx_commit_with_retry()
+ * owns the retry loop, so the driver no longer calls back into core. */
 #include "Table_Metadata_Module.h"   /* get_multi_metadata() - the
                                             same OCIParamGet/OCIDefineByPos/
                                             OCIDefineArrayOfStruct work
@@ -1308,35 +1299,54 @@ static int oracle_dml_execute(oci_context_t            *ctx,
     return 0;
 }
 
+/*
+ * oracle_commit() - one OCITransCommit attempt (Stage 3, 2026-10-03).
+ * See db_driver.h, commit(), for the result contract. The retry loop
+ * that used to wrap this (oci_trans_commit_retry(), shared with
+ * tx_commit() since 2026-09-23) is now core's tx_commit_with_retry().
+ *
+ * Classification - exactly the decisions the old loop made, moved here
+ * unchanged because they are Oracle knowledge:
+ *   - OCI_SUCCESS / OCI_SUCCESS_WITH_INFO        -> 0
+ *   - ORA-00000 or ORA-01085 on a non-success    -> 0 ("soft success":
+ *     no outstanding work to commit)
+ *   - anything else                              -> DB_TX_RETRYABLE
+ * The old loop retried every other failure, so every other failure is
+ * reported as retryable. Whether that is safe for every ORA code is a
+ * known open question, deliberately left unchanged here (see the
+ * proposal, item 3c).
+ */
 static int oracle_commit(oci_context_t *ctx, logger_t *logger)
 {
     if (!ctx) return -1;
 
-    /* Retries via oci_trans_commit_retry() (OCI_Transaction_Manager.c)
-     * since 2026-09-23 - same tx_max_retries/tx_retry_delay_ms config
-     * fields tx_commit() uses, same ORA-00000/ORA-01085 soft-success
-     * handling. Previously this was a single bare OCITransCommit with
-     * no retry, unlike the managed-transaction path - see this
-     * function's include comment above and the header comment on
-     * oci_trans_commit_retry() itself for the full rationale. */
-    int max_retries    = ctx->ini ? ctx->ini->tx_max_retries    : 0;
-    int retry_delay_ms = ctx->ini ? ctx->ini->tx_retry_delay_ms : 0;
-    int attempts = 0;
-    sb4 ora_code = 0;
-
-    int rc = oci_trans_commit_retry(ctx, logger, max_retries, retry_delay_ms,
-                                     &attempts, &ora_code);
-    if (rc != 0)
+    sword status = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+    if (status == OCI_SUCCESS || status == OCI_SUCCESS_WITH_INFO)
     {
-        logger_write(logger, LOG_ERROR, __func__, 0,
-                     "OCITransCommit FAILED after %d attempt(s)  ORA-%05d",
-                     attempts, (int)ora_code);
-        return -1;
+        logger_write(logger, LOG_INFO, __func__, 0, "OCITransCommit OK");
+        return 0;
     }
 
-    logger_write(logger, LOG_INFO, __func__, 0,
-                 "OCITransCommit OK (attempts=%d)", attempts);
-    return 0;
+    text errbuf[512] = {0};
+    sb4  ora_code    = 0;
+    OCIErrorGet(ctx->errhp, 1, NULL, &ora_code,
+                errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
+
+    logger_write(logger, LOG_WARN, __func__, 0,
+                 "OCITransCommit returned non-success  "
+                 "oci_status=%d  ORA-%05d: %s",
+                 (int)status, (int)ora_code, (char *)errbuf);
+
+    if (ora_code == 0 || ora_code == 1085)
+    {
+        logger_write(logger, LOG_INFO, __func__, 0,
+                     "ORA-%05d treated as soft success "
+                     "(no outstanding work to commit)",
+                     (int)ora_code);
+        return 0;
+    }
+
+    return DB_TX_RETRYABLE;
 }
 
 static int oracle_rollback(oci_context_t *ctx, logger_t *logger)

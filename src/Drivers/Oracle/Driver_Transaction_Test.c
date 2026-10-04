@@ -78,6 +78,15 @@
  *             WITHOUT touching ctx->active_tx - the nested-call
  *             inheritance behaviour the header documents as the whole
  *             point of this pair.
+ *   Test 12 - (Stage 3, 2026-10-03) tx_commit_with_retry(), the one
+ *             commit retry loop, live: (a) a pending insert is committed
+ *             in exactly 1 attempt and the row is really there; (b) with
+ *             nothing pending it still succeeds in 1 attempt; (c) the
+ *             driver's single-attempt commit() returns 0 directly. The
+ *             retry branches themselves (retryable failures, retries
+ *             exhausted, non-retryable failure) cannot be provoked
+ *             safely on a live connection - they are proven by the
+ *             fake-driver unit test delivered with Stage 3.
  *
  * Uses UNIT_TEST_FIELD_TEST (NUMBER_COL PK, only NOT NULL column - see
  * Create_Unit_Test_Table.txt and Driver_Metadata_Test.c's Test 1
@@ -120,6 +129,7 @@
  *   Test 9  (tx_check_timeout, not yet due)     ... OK (TX_OK)
  *   Test 10 (tx_check_timeout, forced timeout)  ... OK (TX_ERR_TIMEOUT, row absent)
  *   Test 11 (standalone tx helpers)             ... OK (owned=1 then 0, id inherited)
+ *   Test 12 (tx_commit_with_retry)              ... OK (3 of 3, attempts=1/1)
  *   PASS
  *
  * A non-zero exit code means at least one test failed - check
@@ -139,6 +149,7 @@
 #define TEST_COMMIT_KEY     999002
 #define TEST_ABORT_KEY      999003
 #define TEST_TIMEOUT_KEY    999004
+#define TEST_RETRY_KEY      999005
 
 #include <stdio.h>
 #include <string.h>
@@ -368,6 +379,7 @@ int main(void)
     raw_delete_and_commit(&worker, TEST_COMMIT_KEY);
     raw_delete_and_commit(&worker, TEST_ABORT_KEY);
     raw_delete_and_commit(&worker, TEST_TIMEOUT_KEY);
+    raw_delete_and_commit(&worker, TEST_RETRY_KEY);
 
     tx_handle_t tx;
 
@@ -691,6 +703,48 @@ int main(void)
                 if (outer_rb_xml) free(outer_rb_xml);
                 worker.active_tx = NULL;
             }
+        }
+    }
+
+    /* ---- Test 12: tx_commit_with_retry() (Stage 3) ---- */
+    printf("Test 12 (tx_commit_with_retry) ... ");
+    {
+        int ok = 0, a1 = -1, a2 = -1, cnt = -1;
+        worker.active_tx = NULL;
+
+        /* (a) pending work committed in one attempt, row really there */
+        if (raw_insert(&worker, TEST_RETRY_KEY) == 0 &&
+            tx_commit_with_retry(&worker, worker.transaction_logger,
+                                 config.tx_max_retries, config.tx_retry_delay_ms,
+                                 &a1) == 0 &&
+            a1 == 1 &&
+            raw_count(&worker, TEST_RETRY_KEY, &cnt) == 0 && cnt == 1)
+            ok++;
+        else
+            printf("\n  (a) pending commit: attempts=%d count=%d", a1, cnt);
+
+        /* (b) nothing pending - still one attempt, still success */
+        if (tx_commit_with_retry(&worker, worker.transaction_logger,
+                                 config.tx_max_retries, config.tx_retry_delay_ms,
+                                 &a2) == 0 && a2 == 1)
+            ok++;
+        else
+            printf("\n  (b) empty commit: attempts=%d", a2);
+
+        /* (c) the driver's commit() is a single attempt returning 0 */
+        if (driver->commit && driver->commit(&worker, worker.transaction_logger) == 0)
+            ok++;
+        else
+            printf("\n  (c) driver->commit() did not return 0");
+
+        raw_delete_and_commit(&worker, TEST_RETRY_KEY);
+
+        if (ok == 3)
+            printf("OK (3 of 3, attempts=%d/%d)\n", a1, a2);
+        else
+        {
+            printf("\nTest 12 FAILED - %d of 3\n", ok);
+            failed = 1;
         }
     }
 
