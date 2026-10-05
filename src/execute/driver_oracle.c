@@ -1300,22 +1300,46 @@ static int oracle_dml_execute(oci_context_t            *ctx,
 }
 
 /*
- * oracle_commit() - one OCITransCommit attempt (Stage 3, 2026-10-03).
- * See db_driver.h, commit(), for the result contract. The retry loop
- * that used to wrap this (oci_trans_commit_retry(), shared with
- * tx_commit() since 2026-09-23) is now core's tx_commit_with_retry().
+ * oracle_commit() - one OCITransCommit attempt (Stage 3, 2026-10-03;
+ * classification narrowed in item 3c, 2026-10-05). See db_driver.h,
+ * commit(), for the result contract; core's tx_commit_with_retry()
+ * owns the retry loop.
  *
- * Classification - exactly the decisions the old loop made, moved here
- * unchanged because they are Oracle knowledge:
- *   - OCI_SUCCESS / OCI_SUCCESS_WITH_INFO        -> 0
- *   - ORA-00000 or ORA-01085 on a non-success    -> 0 ("soft success":
- *     no outstanding work to commit)
- *   - anything else                              -> DB_TX_RETRYABLE
- * The old loop retried every other failure, so every other failure is
- * reported as retryable. Whether that is safe for every ORA code is a
- * known open question, deliberately left unchanged here (see the
- * proposal, item 3c).
+ * Classification:
+ *   OCI_SUCCESS / OCI_SUCCESS_WITH_INFO      -> 0
+ *   ORA-00000 / ORA-01085 on a non-success   -> 0  ("soft success", no
+ *                                               outstanding work -
+ *                                               unchanged from Stage 3)
+ *   ORA-04020 / ORA-04021 / ORA-04031        -> DB_TX_RETRYABLE
+ *   anything else                            -> -1 (do not retry)
+ *
+ * Why so few retryable codes (3c). A failed COMMIT is only worth
+ * retrying when the transaction is certainly still pending - the
+ * commit did not happen and nothing was undone. That is true of the
+ * transient lock/memory errors above (a library-cache lock deadlock or
+ * timeout, shared-pool exhaustion), which is what the original
+ * tx_commit() header said was retried. It is NOT true of:
+ *   - ORA-02091 "transaction rolled back" (e.g. a deferred constraint
+ *     violated at commit): Oracle has already rolled the work back, so
+ *     a retry commits nothing, succeeds, and the caller was told its
+ *     work was saved when it was not. Before 3c this happened.
+ *   - a lost connection (ORA-03113/03114/03135, ORA-12xxx): the
+ *     outcome is UNKNOWN - the commit may or may not have reached the
+ *     server - and a retry on the same session cannot find out.
+ * Both now fail at once; tx_commit() then rolls back (a no-op if the
+ * server already did) and reports ABORTED.
  */
+static int oracle_commit_is_retryable(sb4 ora_code)
+{
+    return ora_code == 4020 || ora_code == 4021 || ora_code == 4031;
+}
+
+static int oracle_commit_outcome_unknown(sb4 ora_code)
+{
+    return ora_code == 3113 || ora_code == 3114 || ora_code == 3135 ||
+           (ora_code >= 12150 && ora_code <= 12699);
+}
+
 static int oracle_commit(oci_context_t *ctx, logger_t *logger)
 {
     if (!ctx) return -1;
@@ -1346,7 +1370,22 @@ static int oracle_commit(oci_context_t *ctx, logger_t *logger)
         return 0;
     }
 
-    return DB_TX_RETRYABLE;
+    if (oracle_commit_is_retryable(ora_code))
+        return DB_TX_RETRYABLE;
+
+    if (oracle_commit_outcome_unknown(ora_code))
+        logger_write(logger, LOG_ERROR, __func__, 0,
+                     "ORA-%05d: connection lost during COMMIT - the "
+                     "outcome is unknown (the commit may or may not have "
+                     "reached the server); not retried",
+                     (int)ora_code);
+    else
+        logger_write(logger, LOG_ERROR, __func__, 0,
+                     "ORA-%05d: COMMIT failed and is not retryable "
+                     "(the transaction may already have been rolled back "
+                     "by the server)", (int)ora_code);
+
+    return -1;
 }
 
 static int oracle_rollback(oci_context_t *ctx, logger_t *logger)

@@ -236,10 +236,11 @@ int tx_begin(tx_handle_t  *handle,
  *
  *   - Commits through tx_commit_with_retry() (below), which retries
  *     up to handle->max_retries times while the driver reports the
- *     failure as retryable. (Before Stage 3 this comment said only
- *     ORA-04020/04021/04031 were retried; the code has always retried
- *     every failure except "nothing to commit" - see the proposal,
- *     item 3c.)
+ *     failure as retryable. Which failures are retryable is the
+ *     driver's decision; for Oracle (item 3c, 2026-10-05) only the
+ *     transient lock/memory errors ORA-04020/04021/04031 are - a
+ *     failure after which the server has already rolled back
+ *     (ORA-02091) or the connection was lost is not retried.
  *   - On success sets status to TX_STATUS_COMMITTED.
  *   - On failure rolls back (driver rollback(), best effort) and sets
  *     status to TX_STATUS_ABORTED.

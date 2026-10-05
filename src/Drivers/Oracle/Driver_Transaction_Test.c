@@ -87,6 +87,20 @@
  *             exhausted, non-retryable failure) cannot be provoked
  *             safely on a live connection - they are proven by the
  *             fake-driver unit test delivered with Stage 3.
+ *   Test 13 - (item 3c, 2026-10-05) a COMMIT that Oracle itself rolls
+ *             back is reported as a failure, not retried into a false
+ *             success. Uses DTT_DEFERRED_TEST, a test-only table with a
+ *             DEFERRABLE INITIALLY DEFERRED check constraint (VAL > 0),
+ *             created by this harness if missing. Inserting VAL = -1
+ *             succeeds; the COMMIT then fails with ORA-02091 (transaction
+ *             rolled back) / ORA-02290. Checks:
+ *               (a) tx_commit_with_retry(): rc = -1 after exactly 1
+ *                   attempt, row absent;
+ *               (b) tx_begin + insert + tx_commit(): TX_ERR_OCI_FAILURE,
+ *                   status ABORTED, row absent.
+ *             Before 3c, (a) returned 0 after 2 attempts - the second
+ *             commit had nothing left to commit - and (b) reported
+ *             COMMITTED with the row absent.
  *
  * Uses UNIT_TEST_FIELD_TEST (NUMBER_COL PK, only NOT NULL column - see
  * Create_Unit_Test_Table.txt and Driver_Metadata_Test.c's Test 1
@@ -130,6 +144,7 @@
  *   Test 10 (tx_check_timeout, forced timeout)  ... OK (TX_ERR_TIMEOUT, row absent)
  *   Test 11 (standalone tx helpers)             ... OK (owned=1 then 0, id inherited)
  *   Test 12 (tx_commit_with_retry)              ... OK (3 of 3, attempts=1/1)
+ *   Test 13 (commit rolled back by Oracle)      ... OK (rc=-1 after 1 attempt; tx_commit ABORTED; rows absent)
  *   PASS
  *
  * A non-zero exit code means at least one test failed - check
@@ -150,6 +165,7 @@
 #define TEST_ABORT_KEY      999003
 #define TEST_TIMEOUT_KEY    999004
 #define TEST_RETRY_KEY      999005
+#define DEFERRED_TABLE      "DTT_DEFERRED_TEST"
 
 #include <stdio.h>
 #include <string.h>
@@ -329,6 +345,51 @@ static int raw_delete_and_commit(oci_context_t *ctx, int number_col)
 
     s = OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
     CHECK_OCI(ctx, s);
+    return 0;
+}
+
+/* Item 3c helpers - plain OCI, independent of the module under test. */
+
+/* Runs one statement; returns 0, or the ORA code on failure (not printed). */
+static int raw_exec_code(oci_context_t *ctx, const char *sql)
+{
+    OCIStmt *stmt = NULL;
+    sb4 code = 0;
+    sword s = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                               (const OraText *)sql, (ub4)strlen(sql),
+                               NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (s == OCI_SUCCESS || s == OCI_SUCCESS_WITH_INFO)
+        s = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL,
+                            OCI_DEFAULT);
+    if (s != OCI_SUCCESS && s != OCI_SUCCESS_WITH_INFO)
+    {
+        char buf[512] = {0};
+        OCIErrorGet(ctx->errhp, 1, NULL, &code, (unsigned char *)buf,
+                    sizeof(buf), OCI_HTYPE_ERROR);
+        if (code == 0) code = -1;
+    }
+    if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    return (int)code;
+}
+
+static int deferred_row_count(oci_context_t *ctx, int *out_count)
+{
+    const char *sql = "SELECT COUNT(*) FROM " DEFERRED_TABLE " WHERE ID = 1";
+    OCIStmt *stmt = NULL;
+    sword s = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                               (const OraText *)sql, (ub4)strlen(sql),
+                               NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    int cnt = -1;
+    OCIDefine *dfn = NULL;
+    s = OCIDefineByPos(stmt, &dfn, ctx->errhp, 1, &cnt, sizeof(cnt),
+                        SQLT_INT, NULL, NULL, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    s = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL,
+                        OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    *out_count = cnt;
     return 0;
 }
 
@@ -745,6 +806,73 @@ int main(void)
         {
             printf("\nTest 12 FAILED - %d of 3\n", ok);
             failed = 1;
+        }
+    }
+
+    /* ---- Test 13: commit rolled back by Oracle is not retried (3c) ---- */
+    printf("Test 13 (commit rolled back by Oracle) ... ");
+    {
+        worker.active_tx = NULL;
+        int create_rc = raw_exec_code(&worker,
+            "CREATE TABLE " DEFERRED_TABLE " (ID NUMBER, VAL NUMBER, "
+            "CONSTRAINT DTT_DEFERRED_CHK CHECK (VAL > 0) "
+            "DEFERRABLE INITIALLY DEFERRED)");
+        if (create_rc != 0 && create_rc != 955)   /* 955: already exists */
+        {
+            printf("FAILED - could not create %s (ORA-%05d)\n",
+                   DEFERRED_TABLE, create_rc);
+            failed = 1;
+        }
+        else
+        {
+            const char *bad_row =
+                "INSERT INTO " DEFERRED_TABLE " (ID, VAL) VALUES (1, -1)";
+            int ok = 0, attempts = -1, cnt_a = -1, cnt_b = -1;
+
+            raw_exec_code(&worker, "DELETE FROM " DEFERRED_TABLE);
+            raw_exec_code(&worker, "COMMIT");
+
+            /* (a) the retry loop on its own */
+            int ins_a = raw_exec_code(&worker, bad_row);
+            int rc_a  = tx_commit_with_retry(&worker, worker.transaction_logger,
+                                             config.tx_max_retries,
+                                             config.tx_retry_delay_ms,
+                                             &attempts);
+            deferred_row_count(&worker, &cnt_a);
+            if (ins_a == 0 && rc_a == -1 && attempts == 1 && cnt_a == 0)
+                ok++;
+            else
+                printf("\n  (a) insert=%d rc=%d attempts=%d rows=%d "
+                       "(expected 0, -1, 1, 0)", ins_a, rc_a, attempts, cnt_a);
+
+            /* (b) a managed transaction */
+            tx_init(&tx, &worker);
+            char *bx = NULL;
+            tx_begin(&tx, "test-session", "deferred constraint", &bx);
+            if (bx) free(bx);
+            int ins_b = raw_exec_code(&worker, bad_row);
+            char *cx = NULL;
+            int rc_b = tx_commit(&tx, &cx);
+            if (cx) free(cx);
+            deferred_row_count(&worker, &cnt_b);
+            if (ins_b == 0 && rc_b == TX_ERR_OCI_FAILURE &&
+                tx.status == TX_STATUS_ABORTED && cnt_b == 0)
+                ok++;
+            else
+                printf("\n  (b) insert=%d rc=%d status=%s rows=%d "
+                       "(expected 0, %d, ABORTED, 0)", ins_b, rc_b,
+                       tx_status_str(tx.status), cnt_b, TX_ERR_OCI_FAILURE);
+
+            raw_exec_code(&worker, "ROLLBACK");
+            worker.active_tx = NULL;
+
+            if (ok == 2)
+                printf("OK (rc=-1 after 1 attempt; tx_commit ABORTED; rows absent)\n");
+            else
+            {
+                printf("\nTest 13 FAILED - %d of 2\n", ok);
+                failed = 1;
+            }
         }
     }
 
