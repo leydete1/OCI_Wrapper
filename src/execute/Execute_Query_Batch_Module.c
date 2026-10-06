@@ -9,9 +9,8 @@
  * Structure
  * ---------
  *   allocate_batch_buffers()     - heap allocate column buffers & indicators
- *   get_multi_metadata()         - OCIParamGet metadata + OCIDefineByPos
- *                                  + OCIDefineArrayOfStruct per column
- *                                  NOW IN OCI_Table_Metadata_Module.c
+ *   (column describe/define)     - in the driver since Stage 4a
+ *                                  (driver_oracle.c, oracle_define_columns)
  *   handle_clob_column_batch()   - read one CLOB cell, write to disk, emit XML
  *   handle_blob_column_batch()   - read one BLOB cell, write to disk, emit XML
  *   build_row_xml_batch()        - iterate columns for one logical row
@@ -20,14 +19,10 @@
  *
  * Metadata change
  * ---------------
- * define_columns_batch() has been removed from this file.  Its logic
- * now lives in get_multi_metadata() inside OCI_Table_Metadata_Module.c.
- * This means all metadata code for the project lives in one place.
- * When the metadata cache is introduced, single-table SELECTs can be
- * served from cache via get_request_metadata() with no changes here.
- * Multi-table JOINs and views continue to use OCI descriptor metadata
- * via get_multi_metadata() - the correct approach for those cases.
- * See OCI_Table_Metadata_Module.h for the full design rationale.
+ * define_columns_batch() was removed from this file long ago; its logic
+ * became get_multi_metadata() in Table_Metadata_Module.c and, in Stage
+ * 4a (2026-10-06), oracle_define_columns() inside driver_oracle.c. This
+ * file reaches it only through driver->select_open().
  *
  * Changes from previous version
  * ------------------------------
@@ -63,7 +58,6 @@
 #include "Blob_Utils.h"              /* lookup_blob_index(), write_blob_to_file(),
                                             build_filename_with_timestamp() - relocated
                                             from the now-removed OCI_Execute_Query_Module */
-#include "Table_Metadata_Module.h"   /* get_multi_metadata() get_select_metadata() */
 #include "sql_dependency_extractor.h"    /* extract_sql_dependencies()                 */
 #include "db_driver.h"                   /* db_driver_get() - sync-path integration
                                             (Phase 2a, 2026-09-14). async path below is
@@ -397,9 +391,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
      *  Extract every table/view and field reference from the cleaned
      *  SQL.  On failure return -1 immediately with a descriptive error
      *  already written to sql_parser_logger by the extractor.
-     *  On success deps is fully populated and passed to
-     *  get_select_metadata() later so it can call get_table_metadata()
-     *  per source table before delegating to get_multi_metadata().
+     *  On success deps is fully populated; it supplies the metrics
+     *  object_name and the table tags used for cache invalidation below.
      * ================================================================ */
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Stage 0: Parsing SQL dependencies");

@@ -65,6 +65,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>    /* oracle_describe_table() - Stage 4a */
 
 #include "driver_oracle.h"
 #include "Connection.h"
@@ -72,12 +73,10 @@
 /* Transaction_Manager.h is no longer included (Stage 3, 2026-10-03):
  * oracle_commit() makes one attempt and core's tx_commit_with_retry()
  * owns the retry loop, so the driver no longer calls back into core. */
-#include "Table_Metadata_Module.h"   /* get_multi_metadata() - the
-                                            same OCIParamGet/OCIDefineByPos/
-                                            OCIDefineArrayOfStruct work
-                                            execute_query_batch already
-                                            uses, reused rather than
-                                            reimplemented (see below)    */
+/* Table_Metadata_Module.h is no longer included (Stage 4a, 2026-10-06):
+ * the column describe/define work (oracle_define_columns) and the table
+ * describe (oracle_describe_table) now live in this file. col_metadata_t
+ * and metadata_request_t come from db_metadata.h via db_driver.h. */
 #include "Resultset_Builder.h"       /* resultset_create/get_row/
                                             set_field/set_blob_field/free */
 #include "Blob_Utils.h"              /* lookup_blob_index(),
@@ -153,15 +152,13 @@ static int oracle_health_check(oci_context_t *ctx)
 /*  select_close (db_driver.h). Scalars only in this pass.             */
 /*                                                                      */
 /*  What's reused vs new:                                              */
-/*    - get_multi_metadata() (OCI_Table_Metadata_Module.c) does the     */
-/*      real OCIParamGet/OCIDefineByPos/OCIDefineArrayOfStruct work,    */
-/*      identical to what execute_query_batch() already calls today -  */
-/*      not reimplemented here. It still requires col_blob_locs/        */
-/*      clob_loc slots to be allocated even for a scalar-only cursor    */
-/*      (multi_meta_request_t's own contract - it has no way to know   */
-/*      in advance that none of them will be BLOB/CLOB), so those are  */
-/*      allocated below and simply never populated for a pure-scalar    */
-/*      result set.                                                     */
+/*    - oracle_define_columns() (below; was get_multi_metadata() in    */
+/*      Table_Metadata_Module.c until Stage 4a) does the real           */
+/*      OCIParamGet/OCIDefineByPos/OCIDefineArrayOfStruct work. It      */
+/*      still needs the col_blob_locs/clob_loc slots allocated even     */
+/*      for a scalar-only cursor (it has no way to know in advance that */
+/*      none of the columns will be BLOB/CLOB), so those are allocated  */
+/*      below and simply never populated for a pure-scalar result set.  */
 /*    - The prepare/describe/execute/fetch OCI calls themselves         */
 /*      (OCIStmtPrepare2, OCIStmtExecute x2 - describe-only then a      */
 /*      real execute, OCIStmtFetch2) are the same calls                 */
@@ -176,15 +173,15 @@ static int oracle_health_check(oci_context_t *ctx)
 /*      matching against db_column_meta_t.field_type sees the same      */
 /*      strings it already does today.                                  */
 /*                                                                      */
-/*  CLOB/BLOB (v2, 2026-09-14): get_multi_metadata() has no way to know   */
+/*  CLOB/BLOB (v2, 2026-09-14): oracle_define_columns() can't know        */
 /*  in advance that a column will be BLOB/CLOB - it discovers each        */
 /*  column's type via OCIParamGet as it goes, and its BLOB/CLOB branches  */
-/*  already allocate everything a fetch needs (see OCI_Table_Metadata_    */
-/*  Module.c: a per-row OCILobLocator array for each BLOB column, a       */
+/*  already allocate everything a fetch needs (a per-row                 */
+/*  OCILobLocator array for each BLOB column, a                           */
 /*  single shared locator for CLOB). select_open() no longer rejects      */
 /*  these columns - oracle_fetch_blob_field()/oracle_fetch_clob_field()   */
 /*  below (called from select_fetch_batch()) read straight from what      */
-/*  get_multi_metadata() already set up, the same way handle_blob_        */
+/*  oracle_define_columns() already set up, the same way handle_blob_     */
 /*  column_batch()/handle_clob_column_batch() do in execute_query_batch() */
 /*  today - not reimplemented, just called from a different fetch loop.   */
 /*                                                                        */
@@ -221,7 +218,7 @@ struct db_select_cursor_t {
                                        smaller than alloc_batch_size (see
                                        below) if a CLOB column forced it
                                        down to 1 after allocation.        */
-    ub4             alloc_batch_size; /* batch size get_multi_metadata()
+    ub4             alloc_batch_size; /* batch size oracle_define_columns()
                                        actually sized every array to
                                        (req->fetch_array_size, before any
                                        CLOB downgrade). Cleanup MUST loop
@@ -287,29 +284,16 @@ struct db_select_cursor_t {
      * oracle_select_cursor_free()'s own branch on this flag below. */
     int             stmt_owned_via_handle_alloc;
 
-    /* Bug fix (2026-09-30, found via Driver_LOB_Select_Test.c Test 5 -
-     * ASan SEGV at 0x8 in kpccld2i under OCIStmtFetch2, mixed BLOB+CLOB
-     * query). get_multi_metadata() defines a CLOB column against
-     * &mmr->clob_loc - the ADDRESS of this struct's own field - and OCI
-     * only dereferences a define buffer at OCIStmtFetch2 time, not at
-     * define time. mmr used to be a stack local inside
-     * oracle_select_describe_and_define(), dead before the first fetch,
-     * so OCI read whatever had since overwritten that stack slot (NULL
-     * -> SEGV at offset 8). Earlier CLOB runs only passed because the
-     * stale slot still happened to hold the right pointer; enabling
-     * real loggers in the harness changed stack usage and exposed it.
-     * Production is affected too - execute_query_batch() goes through
-     * select_open() for every SELECT since Phase 2b.
-     *
-     * Owning mmr here gives it exactly the cursor's lifetime, so the
-     * address OCI holds stays valid for every fetch. It only holds
-     * pointers borrowed from this cursor - nothing extra to free in
-     * oracle_select_cursor_free(). BLOB/scalar defines were never
-     * affected - they point into heap arrays this cursor already owns.
-     * Stage 4 follow-up: make multi_meta_request_t.clob_loc an
-     * OCILobLocator** so the define no longer depends on mmr's own
-     * lifetime at all. */
-    multi_meta_request_t mmr;
+    /* The cursor-owned multi_meta_request_t that used to sit here (bug
+     * fix 2026-09-30 - Driver_LOB_Select_Test.c Test 5, ASan SEGV in
+     * kpccld2i under OCIStmtFetch2) is gone as of Stage 4a. The CLOB
+     * column used to be defined against the address of a field in that
+     * request struct, and OCI reads a define address at OCIStmtFetch2
+     * time, so the struct had to live as long as the cursor.
+     * oracle_define_columns() now defines it against &cur->clob_loc - a
+     * field of this heap-allocated struct - so the address OCI holds is
+     * valid for exactly the cursor's lifetime by construction, with no
+     * separate request struct to keep alive. */
 };
 
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
@@ -394,6 +378,290 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
     free(cur);
 }
 
+/* ==================================================================
+ *  COLUMN DESCRIBE/DEFINE (Stage 4a, 2026-10-06)
+ *
+ *  oracle_define_columns() was get_multi_metadata() in
+ *  Table_Metadata_Module.c. Moved here verbatim; the only changes are
+ *  mechanical: it reads and fills the cursor's own arrays directly
+ *  (cur->X where it used to take mmr->X, cur->alloc_batch_size where it
+ *  took mmr->fetch_count - the same value at this point), and the CLOB
+ *  column is defined against &cur->clob_loc. Log messages are unchanged
+ *  apart from the function name the logger stamps, so the Stage 4a
+ *  log comparison can match them line for line.
+ *
+ *  CHECK_OCI_META is the same macro the module used: it logs to
+ *  ctx->Metadata_logger, sets rc = -1 and jumps to the label.
+ * ================================================================== */
+#define CHECK_OCI_META(errhp, status, ctx, label)                       \
+    do {                                                                 \
+        if ((status) != OCI_SUCCESS &&                                  \
+            (status) != OCI_SUCCESS_WITH_INFO)                          \
+        {                                                                \
+            text   _errbuf[512];                                         \
+            sb4    _errcode = 0;                                         \
+            OCIErrorGet((errhp), 1, NULL, &_errcode,                    \
+                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);     \
+            logger_write((ctx)->Metadata_logger, LOG_ERROR, __func__, 0,         \
+                         "OCI Error %d: %s", _errcode,                  \
+                         (char *)_errbuf);                               \
+            rc = -1;                                                     \
+            goto label;                                                  \
+        }                                                                \
+    } while (0)
+
+static int oracle_define_columns(oci_context_t *ctx, db_select_cursor_t *cur)
+{
+    int rc = 0;
+
+    if (!ctx || !cur || !cur->stmt)
+    {
+        if (ctx)
+            logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                         "Invalid arguments: ctx, cursor or stmt is NULL");
+        return -1;
+    }
+
+    /* Validate all required output pointers are present */
+    if (!cur->def        || !cur->buffers    || !cur->buf_sizes  ||
+        !cur->indicators || !cur->data_types || !cur->data_sizes ||
+        !cur->col_names  || !cur->col_blob_locs)
+    {
+        logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                     "One or more required array pointers are NULL - "
+                     "call allocate_batch_buffers first");
+        return -1;
+    }
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "Entering get_multi_metadata col_count=%u "
+                 "fetch_count=%u",
+                 cur->col_count, cur->alloc_batch_size);
+
+    OCIParam *param = NULL;
+
+    for (ub4 i = 1; i <= cur->col_count; i++)
+    {
+        ub4 ci = i - 1;   /* 0-based column index */
+
+        logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                     "Processing column %u", i);
+
+        /* ---- Column name ---- */
+        logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                     "Calling OCIParamGet col=%u", i);
+        CHECK_OCI_META(ctx->errhp,
+            OCIParamGet(cur->stmt, OCI_HTYPE_STMT,
+                        ctx->errhp, (void **)&param, i),
+            ctx, Cleanup);
+
+        text *tmp_name = NULL;
+        ub4   tmp_len  = 0;
+
+        logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                     "Calling OCIAttrGet OCI_ATTR_NAME col=%u", i);
+        CHECK_OCI_META(ctx->errhp,
+            OCIAttrGet(param, OCI_DTYPE_PARAM,
+                       &tmp_name, &tmp_len,
+                       OCI_ATTR_NAME, ctx->errhp),
+            ctx, Cleanup);
+
+        if (tmp_len > 255) tmp_len = 255;
+        memcpy(cur->col_names[ci], tmp_name, tmp_len);
+        cur->col_names[ci][tmp_len] = '\0';
+
+        /* ---- Data type ---- */
+        logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                     "Calling OCIAttrGet OCI_ATTR_DATA_TYPE col=%u", i);
+        CHECK_OCI_META(ctx->errhp,
+            OCIAttrGet(param, OCI_DTYPE_PARAM,
+                       &cur->data_types[ci], 0,
+                       OCI_ATTR_DATA_TYPE, ctx->errhp),
+            ctx, Cleanup);
+
+        /* ---- Data size ---- */
+        logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                     "Calling OCIAttrGet OCI_ATTR_DATA_SIZE col=%u", i);
+        CHECK_OCI_META(ctx->errhp,
+            OCIAttrGet(param, OCI_DTYPE_PARAM,
+                       &cur->data_sizes[ci], 0,
+                       OCI_ATTR_DATA_SIZE, ctx->errhp),
+            ctx, Cleanup);
+
+        ub4 buf_size = cur->data_sizes[ci] + 32;
+        if (buf_size < 64) buf_size = 64;
+        cur->buf_sizes[ci] = buf_size;
+
+        logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                     "Column %u name=%s type=%u size=%u buf_size=%u",
+                     i, cur->col_names[ci],
+                     cur->data_types[ci], cur->data_sizes[ci],
+                     buf_size);
+
+        /* ---- Allocate per-column storage and register define ---- */
+
+        if (cur->data_types[ci] == SQLT_BLOB)
+        {
+            /* BLOB: one locator per row in the fetch batch.
+             * OCIDefineArrayOfStruct strides through the locator array
+             * using sizeof(OCILobLocator*) as value_skip.             */
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "Allocating BLOB locator array col=%u rows=%u",
+                         ci, cur->alloc_batch_size);
+
+            cur->col_blob_locs[ci] = calloc(cur->alloc_batch_size,
+                                            sizeof(OCILobLocator *));
+            if (!cur->col_blob_locs[ci])
+            {
+                logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for col_blob_locs[%u]", ci);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            for (ub4 r = 0; r < cur->alloc_batch_size; r++)
+            {
+                logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                             "OCIDescriptorAlloc BLOB locator "
+                             "col=%u row=%u", ci, r);
+                CHECK_OCI_META(ctx->errhp,
+                    OCIDescriptorAlloc(ctx->envhp,
+                                       (void **)&cur->col_blob_locs[ci][r],
+                                       OCI_DTYPE_LOB, 0, NULL),
+                    ctx, Cleanup);
+            }
+
+            cur->indicators[ci] = calloc(cur->alloc_batch_size, sizeof(sb2));
+            if (!cur->indicators[ci])
+            {
+                logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for indicators[%u]", ci);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDefineByPos BLOB col=%u", i);
+            CHECK_OCI_META(ctx->errhp,
+                OCIDefineByPos(cur->stmt, &cur->def[ci], ctx->errhp,
+                               i,
+                               (dvoid *)&cur->col_blob_locs[ci][0],
+                               -1,
+                               SQLT_BLOB,
+                               &cur->indicators[ci][0],
+                               NULL, NULL, OCI_DEFAULT),
+                ctx, Cleanup);
+
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDefineArrayOfStruct BLOB col=%u "
+                         "value_skip=%zu ind_skip=%zu",
+                         i, sizeof(OCILobLocator *), sizeof(sb2));
+            CHECK_OCI_META(ctx->errhp,
+                OCIDefineArrayOfStruct(cur->def[ci], ctx->errhp,
+                                       (ub4)sizeof(OCILobLocator *),
+                                       (ub4)sizeof(sb2),
+                                       0, 0),
+                ctx, Cleanup);
+        }
+        else if (cur->data_types[ci] == SQLT_CLOB)
+        {
+            /*
+             * CLOB ARRAY FETCH RESTRICTION - OCI QUIRK - DO NOT REMOVE
+             * ----------------------------------------------------------
+             * OCI does not support array fetch of CLOB locators via
+             * OCIDefineArrayOfStruct.  A single shared locator is used
+             * and the caller must force fetch_count=1 whenever any CLOB
+             * column is present (enforced in execute_query_batch after
+             * this function returns, exactly as before).
+             */
+            cur->indicators[ci] = calloc(cur->alloc_batch_size, sizeof(sb2));
+            if (!cur->indicators[ci])
+            {
+                logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for indicators[%u]", ci);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDefineByPos CLOB col=%u (single locator)",
+                         i);
+            CHECK_OCI_META(ctx->errhp,
+                OCIDefineByPos(cur->stmt, &cur->def[ci], ctx->errhp,
+                               i,
+                               (dvoid *)&cur->clob_loc,
+                               -1,
+                               SQLT_CLOB,
+                               &cur->indicators[ci][0],
+                               NULL, NULL, OCI_DEFAULT),
+                ctx, Cleanup);
+            /* No OCIDefineArrayOfStruct for CLOB - OCI restriction   */
+        }
+        else
+        {
+            /*
+             * Scalar column.
+             * buffers[ci] is a flat block: fetch_count rows x buf_size.
+             * Row r starts at buffers[ci] + (r * buf_size).
+             * OCIDefineArrayOfStruct strides through it with buf_size.
+             */
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "Allocating scalar buffer col=%u "
+                         "fetch_count=%u buf_size=%u",
+                         ci, cur->alloc_batch_size, buf_size);
+
+            cur->buffers[ci] = calloc(cur->alloc_batch_size, buf_size);
+            if (!cur->buffers[ci])
+            {
+                logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for buffers[%u]", ci);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            cur->indicators[ci] = calloc(cur->alloc_batch_size, sizeof(sb2));
+            if (!cur->indicators[ci])
+            {
+                logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                             "calloc failed for indicators[%u]", ci);
+                rc = -1;
+                goto Cleanup;
+            }
+
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDefineByPos scalar col=%u buf_size=%u",
+                         i, buf_size);
+            CHECK_OCI_META(ctx->errhp,
+                OCIDefineByPos(cur->stmt, &cur->def[ci], ctx->errhp,
+                               i,
+                               cur->buffers[ci],
+                               (sb4)buf_size,
+                               SQLT_STR,
+                               &cur->indicators[ci][0],
+                               NULL, NULL, OCI_DEFAULT),
+                ctx, Cleanup);
+
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDefineArrayOfStruct scalar col=%u "
+                         "value_skip=%u ind_skip=%zu",
+                         i, buf_size, sizeof(sb2));
+            CHECK_OCI_META(ctx->errhp,
+                OCIDefineArrayOfStruct(cur->def[ci], ctx->errhp,
+                                       buf_size,
+                                       (ub4)sizeof(sb2),
+                                       0, 0),
+                ctx, Cleanup);
+        }
+    }
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "get_multi_metadata complete col_count=%u",
+                 cur->col_count);
+
+Cleanup:
+    return rc;
+}
+
 /* Shared describe/define logic between oracle_select_open() (a freshly
  * prepared+described statement) and oracle_select_open_from_cursor()
  * (an already-open REFCURSOR from a procedure call) - factored out
@@ -454,36 +722,17 @@ static int oracle_select_describe_and_define(oci_context_t       *ctx,
         !cur->data_types || !cur->data_sizes || !cur->col_names || !cur->col_blob_locs)
         return -1;
 
-    /* Required by get_multi_metadata()'s contract even for a scalar-
-     * only cursor - see block comment above oracle_select_open(). */
+    /* Required by oracle_define_columns() even for a scalar-only
+     * cursor - see block comment above oracle_select_open(). */
     ORACLE_CHECK_OCI(ctx,
         OCIDescriptorAlloc(ctx->envhp, (void **)&cur->clob_loc,
                            OCI_DTYPE_LOB, 0, NULL));
     if (!cur->clob_loc) return -1;
 
-    /* Cursor-owned, NOT a stack local - see the mmr field comment in
-     * struct db_select_cursor_t for why (CLOB define lifetime). */
-    multi_meta_request_t *mmr = &cur->mmr;
-    memset(mmr, 0, sizeof(*mmr));
-    mmr->ctx           = ctx;
-    mmr->stmt          = cur->stmt;
-    mmr->col_count     = cur->col_count;
-    mmr->fetch_count   = cur->batch_size;
-    mmr->def           = cur->def;
-    mmr->buffers       = cur->buffers;
-    mmr->buf_sizes     = cur->buf_sizes;
-    mmr->indicators    = cur->indicators;
-    mmr->data_types    = cur->data_types;
-    mmr->data_sizes    = cur->data_sizes;
-    mmr->col_names     = cur->col_names;
-    mmr->col_blob_locs = cur->col_blob_locs;
-    mmr->clob_loc      = cur->clob_loc;
-    mmr->deps          = NULL;   /* get_multi_metadata() ignores this field entirely */
-
-    if (get_multi_metadata(mmr) != 0)
+    if (oracle_define_columns(ctx, cur) != 0)
     {
         logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
-                     "get_multi_metadata failed in select_open");
+                     "oracle_define_columns failed in select_open");
         return -1;
     }
 
@@ -649,7 +898,7 @@ static int oracle_select_open_from_cursor(oci_context_t        *ctx,
  * check, chunked OCILobRead, filename/mime-type resolution via the
  * existing OCI_Blob_Utils.h functions, write_blob_to_file(),
  * resultset_set_blob_field()) - not reimplemented, just called from a
- * different fetch loop, reading straight from what get_multi_metadata()
+ * different fetch loop, reading straight from what oracle_define_columns()
  * already set up in cur->col_blob_locs[col_idx][row].
  *
  * One deliberate improvement over the original: applies the same
@@ -2371,6 +2620,467 @@ static int oracle_dml_execute_procedure(oci_context_t               *ctx,
 }
 
 /* ================================================================
+ * TABLE DESCRIBE (Stage 4a, 2026-10-06) - db_driver_t.describe_table.
+ *
+ * oracle_describe_table() was get_request_metadata() in
+ * Table_Metadata_Module.c, moved here verbatim (only the name changed).
+ * The three statements it runs are byte-for-byte the same:
+ *   - SELECT OWNER FROM ALL_TABLES ... ROWNUM = 1   (owner not given)
+ *   - SELECT DATA_DEFAULT FROM ALL_TAB_COLUMNS ...  (per column; LONG)
+ *   - SELECT COLUMN_NAME, DATA_TYPE, ... ORDER BY COLUMN_ID
+ * Log messages keep their old text (including "get_request_metadata
+ * OK") so the Stage 4a log comparison matches them line for line; only
+ * the function name the logger stamps differs.
+ *
+ * Known, deliberately unchanged in 4a (open items):
+ *   - the owner lookup takes ROWNUM = 1 from ALL_TABLES, so a table
+ *     name that exists in several visible schemas resolves to an
+ *     arbitrary one;
+ *   - DATA_DEFAULT costs one round trip per column on a cache miss.
+ * ================================================================ */
+
+static void trim_inplace(char *s)
+{
+    if (!s) return;
+    char *p = s;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    int len = (int)strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1]))
+    { s[len - 1] = '\0'; len--; }
+}
+
+static void uppercase_inplace(char *s)
+{
+    if (!s) return;
+    for (; *s; s++) *s = (char)toupper((unsigned char)*s);
+}
+
+static int oracle_describe_table(oci_context_t      *ctx,
+                                 metadata_request_t *req,
+                                 col_metadata_t     *cols,
+                                 int                *col_count,
+                                 int                 max_cols)
+{
+    int      rc          = 0;
+    OCIStmt *stmt_owner  = NULL;
+    OCIStmt *stmt_dflt   = NULL;
+    OCIStmt *stmt_main   = NULL;
+
+    /* ---- Validate arguments ---- */
+    if (!ctx || !req || !cols || !col_count || max_cols <= 0)
+    {
+        if (ctx)
+            logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                         "Invalid arguments: one or more NULLs or "
+                         "max_cols <= 0");
+        return -1;
+    }
+
+    *col_count = 0;
+    uppercase_inplace(req->table_name);
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "Entering get_request_metadata table='%s'",
+                 req->table_name);
+
+    /* ================================================================
+     *  Step 1: Resolve owner
+     *  Use supplied owner if provided, otherwise query ALL_TABLES.
+     *  Result is written back into req->owner for the caller.
+     * ================================================================ */
+    if (strlen(req->owner) > 0)
+    {
+        uppercase_inplace(req->owner);
+        logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                     "Using supplied owner='%s'", req->owner);
+    }
+    else
+    {
+        logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                     "No owner supplied - resolving from ALL_TABLES");
+
+        const char *sql_owner =
+            "SELECT OWNER FROM ALL_TABLES "
+            "WHERE  TABLE_NAME = :tname "
+            "AND    ROWNUM     = 1";
+
+        CHECK_OCI_META(ctx->errhp,
+            OCIStmtPrepare2(ctx->svchp, &stmt_owner, ctx->errhp,
+                            (text *)sql_owner, (ub4)strlen(sql_owner),
+                            NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
+            ctx, Cleanup);
+
+        OCIBind  *bind_own_tname = NULL;
+        OCIDefine *def_owner     = NULL;
+        ub2       rlen_owner     = 0;
+
+        CHECK_OCI_META(ctx->errhp,
+            OCIBindByName(stmt_owner, &bind_own_tname, ctx->errhp,
+                          (text *)":tname", -1,
+                          (dvoid *)req->table_name,
+                          (sb4)(strlen(req->table_name) + 1),
+                          SQLT_STR, NULL, NULL, NULL, 0, NULL,
+                          OCI_DEFAULT),
+            ctx, Cleanup);
+
+        CHECK_OCI_META(ctx->errhp,
+            OCIDefineByPos(stmt_owner, &def_owner, ctx->errhp, 1,
+                           req->owner, sizeof(req->owner),
+                           SQLT_STR, NULL, &rlen_owner, NULL,
+                           OCI_DEFAULT),
+            ctx, Cleanup);
+
+        CHECK_OCI_META(ctx->errhp,
+            OCIStmtExecute(ctx->svchp, stmt_owner, ctx->errhp,
+                           0, 0, NULL, NULL, OCI_DEFAULT),
+            ctx, Cleanup);
+
+        sword owner_fetch = OCIStmtFetch2(stmt_owner, ctx->errhp,
+                                           1, OCI_FETCH_NEXT,
+                                           0, OCI_DEFAULT);
+        if (owner_fetch == OCI_NO_DATA)
+        {
+            logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                         "Table '%s' not found in ALL_TABLES",
+                         req->table_name);
+            rc = -1;
+            goto Cleanup;
+        }
+        CHECK_OCI_META(ctx->errhp, owner_fetch, ctx, Cleanup);
+
+        req->owner[sizeof(req->owner) - 1] = '\0';
+        trim_inplace(req->owner);
+        logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                     "Resolved owner='%s'", req->owner);
+
+        OCIStmtRelease(stmt_owner, ctx->errhp, NULL, 0, OCI_DEFAULT);
+        stmt_owner = NULL;
+    }
+
+    /* ================================================================
+     *  Step 2: Prepare DATA_DEFAULT secondary query (SQLT_LNG)
+     *  Prepared once, re-executed per column in the fetch loop.
+     *  ROWNUM=1 handles duplicate rows from multi-schema visibility.
+     * ================================================================ */
+    const char *sql_dflt =
+        "SELECT DATA_DEFAULT "
+        "FROM   ALL_TAB_COLUMNS "
+        "WHERE  TABLE_NAME  = :tname "
+        "AND    COLUMN_NAME = :cname "
+        "AND    OWNER       = :owner "
+        "AND    ROWNUM      = 1";
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "Preparing DATA_DEFAULT secondary query (SQLT_LNG)");
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIStmtPrepare2(ctx->svchp, &stmt_dflt, ctx->errhp,
+                        (text *)sql_dflt, (ub4)strlen(sql_dflt),
+                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    /* Bind buffers for the secondary query */
+    OCIBind *bind_dflt_tname = NULL;
+    OCIBind *bind_dflt_cname = NULL;
+    OCIBind *bind_dflt_owner = NULL;
+    char     bind_cname[128] = {0};   /* updated each iteration        */
+
+    char  data_default[32768] = {0};  /* 32KB covers any column default */
+    ub2   long_len            = 0;
+    sb2   ind_dflt            = 0;
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIBindByName(stmt_dflt, &bind_dflt_tname, ctx->errhp,
+                      (text *)":tname", -1,
+                      (dvoid *)req->table_name,
+                      (sb4)(strlen(req->table_name) + 1),
+                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIBindByName(stmt_dflt, &bind_dflt_cname, ctx->errhp,
+                      (text *)":cname", -1,
+                      (dvoid *)bind_cname, (sb4)sizeof(bind_cname),
+                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIBindByName(stmt_dflt, &bind_dflt_owner, ctx->errhp,
+                      (text *)":owner", -1,
+                      (dvoid *)req->owner,
+                      (sb4)(strlen(req->owner) + 1),
+                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    /* Define DATA_DEFAULT as SQLT_LNG - correct OCI type for LONG     */
+    OCIDefine *def_dflt = NULL;
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_dflt, &def_dflt, ctx->errhp, 1,
+                       data_default, sizeof(data_default),
+                       SQLT_LNG, &ind_dflt, &long_len, NULL,
+                       OCI_DEFAULT),
+        ctx, Cleanup);
+
+    /* ================================================================
+     *  Step 3: Main query - all columns except DATA_DEFAULT
+     * ================================================================ */
+    const char *sql_main =
+        "SELECT COLUMN_NAME, "
+        "       DATA_TYPE, "
+        "       DATA_LENGTH, "
+        "       NVL(DATA_PRECISION, -1), "
+        "       NVL(DATA_SCALE, -1), "
+        "       NULLABLE "
+        "FROM   ALL_TAB_COLUMNS "
+        "WHERE  TABLE_NAME = :tname "
+        "AND    OWNER      = :owner "
+        "ORDER  BY COLUMN_ID";
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "Preparing main ALL_TAB_COLUMNS query "
+                 "table='%s' owner='%s'",
+                 req->table_name, req->owner);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIStmtPrepare2(ctx->svchp, &stmt_main, ctx->errhp,
+                        (text *)sql_main, (ub4)strlen(sql_main),
+                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    OCIBind *bind_main_tname = NULL;
+    OCIBind *bind_main_owner = NULL;
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIBindByName(stmt_main, &bind_main_tname, ctx->errhp,
+                      (text *)":tname", -1,
+                      (dvoid *)req->table_name,
+                      (sb4)(strlen(req->table_name) + 1),
+                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIBindByName(stmt_main, &bind_main_owner, ctx->errhp,
+                      (text *)":owner", -1,
+                      (dvoid *)req->owner,
+                      (sb4)(strlen(req->owner) + 1),
+                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    /* Define output columns */
+    OCIDefine *def_name  = NULL;
+    OCIDefine *def_type  = NULL;
+    OCIDefine *def_len   = NULL;
+    OCIDefine *def_prec  = NULL;
+    OCIDefine *def_scale = NULL;
+    OCIDefine *def_null  = NULL;
+
+    /* Per-row fetch buffers */
+    char col_name  [128] = {0};
+    char data_type [128] = {0};
+    char nullable  [4]   = {0};
+    int  data_length     = 0;
+    int  data_precision  = 0;
+    int  data_scale      = 0;
+    ub2  rlen_name       = 0;
+    ub2  rlen_type       = 0;
+    ub2  rlen_null       = 0;
+    sb2  ind_prec        = 0;
+    sb2  ind_scale       = 0;
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_name, ctx->errhp, 1,
+                       col_name, sizeof(col_name),
+                       SQLT_STR, NULL, &rlen_name, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_type, ctx->errhp, 2,
+                       data_type, sizeof(data_type),
+                       SQLT_STR, NULL, &rlen_type, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_len, ctx->errhp, 3,
+                       &data_length, sizeof(data_length),
+                       SQLT_INT, NULL, NULL, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_prec, ctx->errhp, 4,
+                       &data_precision, sizeof(data_precision),
+                       SQLT_INT, &ind_prec, NULL, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_scale, ctx->errhp, 5,
+                       &data_scale, sizeof(data_scale),
+                       SQLT_INT, &ind_scale, NULL, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIDefineByPos(stmt_main, &def_null, ctx->errhp, 6,
+                       nullable, sizeof(nullable),
+                       SQLT_STR, NULL, &rlen_null, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "Executing main ALL_TAB_COLUMNS query");
+
+    CHECK_OCI_META(ctx->errhp,
+        OCIStmtExecute(ctx->svchp, stmt_main, ctx->errhp,
+                       0, 0, NULL, NULL, OCI_DEFAULT),
+        ctx, Cleanup);
+
+    /* ================================================================
+     *  Step 4: Fetch loop
+     *  For each column fetch main metadata then DATA_DEFAULT via
+     *  the SQLT_LNG secondary query.
+     * ================================================================ */
+    sword fetch_status;
+    while ((fetch_status = OCIStmtFetch2(stmt_main, ctx->errhp,
+                                          1, OCI_FETCH_NEXT,
+                                          0, OCI_DEFAULT))
+           == OCI_SUCCESS)
+    {
+        if (*col_count >= max_cols)
+        {
+            logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                         "Column count exceeds max_cols=%d - "
+                         "truncating", max_cols);
+            break;
+        }
+
+        col_name [sizeof(col_name)  - 1] = '\0';
+        data_type[sizeof(data_type) - 1] = '\0';
+        nullable [sizeof(nullable)  - 1] = '\0';
+
+        /* ---- Fetch DATA_DEFAULT for this column via SQLT_LNG ---- */
+        memset(data_default, 0, sizeof(data_default));
+        memset(bind_cname,   0, sizeof(bind_cname));
+        strncpy(bind_cname, col_name, sizeof(bind_cname) - 1);
+        long_len = 0;
+        ind_dflt = 0;
+
+        /* Re-bind :cname and :owner with current values              */
+        CHECK_OCI_META(ctx->errhp,
+            OCIBindByName(stmt_dflt, &bind_dflt_cname, ctx->errhp,
+                          (text *)":cname", -1,
+                          (dvoid *)bind_cname,
+                          (sb4)(strlen(bind_cname) + 1),
+                          SQLT_STR, NULL, NULL, NULL, 0, NULL,
+                          OCI_DEFAULT),
+            ctx, Cleanup);
+
+        CHECK_OCI_META(ctx->errhp,
+            OCIBindByName(stmt_dflt, &bind_dflt_owner, ctx->errhp,
+                          (text *)":owner", -1,
+                          (dvoid *)req->owner,
+                          (sb4)(strlen(req->owner) + 1),
+                          SQLT_STR, NULL, NULL, NULL, 0, NULL,
+                          OCI_DEFAULT),
+            ctx, Cleanup);
+
+        sword dflt_exec = OCIStmtExecute(ctx->svchp, stmt_dflt,
+                                          ctx->errhp,
+                                          0, 0, NULL, NULL, OCI_DEFAULT);
+        if (dflt_exec != OCI_SUCCESS &&
+            dflt_exec != OCI_SUCCESS_WITH_INFO)
+        {
+            logger_write(ctx->Metadata_logger, LOG_WARN, __func__, 0,
+                         "DATA_DEFAULT fetch failed for column '%s' "
+                         "- treating as empty", col_name);
+            data_default[0] = '\0';
+        }
+        else
+        {
+            sword dflt_fetch = OCIStmtFetch2(stmt_dflt, ctx->errhp,
+                                              1, OCI_FETCH_NEXT,
+                                              0, OCI_DEFAULT);
+            if (dflt_fetch == OCI_NO_DATA || ind_dflt < 0)
+                data_default[0] = '\0';
+            else
+            {
+                data_default[sizeof(data_default) - 1] = '\0';
+                trim_inplace(data_default);
+            }
+        }
+
+        /* ---- Populate the col_metadata_t entry ---- */
+        col_metadata_t *col = &cols[*col_count];
+        memset(col, 0, sizeof(*col));
+
+        strncpy(col->col_name,     col_name,     sizeof(col->col_name)     - 1);
+        strncpy(col->data_type,    data_type,    sizeof(col->data_type)    - 1);
+        col->data_length    = data_length;
+        col->data_precision = (ind_prec  < 0) ? -1 : data_precision;
+        col->data_scale     = (ind_scale < 0) ? -1 : data_scale;
+        strncpy(col->nullable,     nullable,     sizeof(col->nullable)     - 1);
+        strncpy(col->data_default, data_default, sizeof(col->data_default) - 1);
+        /* source_table left empty for single-table path              */
+
+        logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                     "Column %d: name='%s' type='%s' len=%d "
+                     "prec=%d scale=%d null='%s' default='%s'",
+                     *col_count + 1,
+                     col->col_name, col->data_type,
+                     col->data_length,
+                     col->data_precision, col->data_scale,
+                     col->nullable,
+                     col->data_default[0] ? col->data_default : "(none)");
+
+        (*col_count)++;
+
+        /* Reset fetch buffers */
+        memset(col_name,  0, sizeof(col_name));
+        memset(data_type, 0, sizeof(data_type));
+        memset(nullable,  0, sizeof(nullable));
+        data_length    = 0;
+        data_precision = 0;
+        data_scale     = 0;
+        ind_prec       = 0;
+        ind_scale      = 0;
+    }
+
+    if (fetch_status != OCI_NO_DATA)
+    {
+        text  errbuf[512];
+        sb4   errcode = 0;
+        OCIErrorGet(ctx->errhp, 1, NULL, &errcode,
+                    errbuf, sizeof(errbuf), OCI_HTYPE_ERROR);
+        logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                     "Unexpected fetch status %d  OCI Error %d: %s",
+                     fetch_status, errcode, (char *)errbuf);
+        rc = -1;
+        goto Cleanup;
+    }
+
+    if (*col_count == 0)
+    {
+        logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
+                     "Table '%s' owner '%s' not found or has no "
+                     "accessible columns",
+                     req->table_name, req->owner);
+        rc = -1;
+        goto Cleanup;
+    }
+
+    logger_write(ctx->Metadata_logger, LOG_INFO, __func__, 0,
+                 "get_request_metadata OK: table='%s' owner='%s' "
+                 "columns=%d",
+                 req->table_name, req->owner, *col_count);
+
+Cleanup:
+    if (stmt_owner) OCIStmtRelease(stmt_owner, ctx->errhp,
+                                    NULL, 0, OCI_DEFAULT);
+    if (stmt_dflt)  OCIStmtRelease(stmt_dflt,  ctx->errhp,
+                                    NULL, 0, OCI_DEFAULT);
+    if (stmt_main)  OCIStmtRelease(stmt_main,  ctx->errhp,
+                                    NULL, 0, OCI_DEFAULT);
+    return rc;
+}
+
+/* ================================================================
  * DIALECT (Oracle dialect extraction, Stage 2, 2026-10-02)
  *
  * Every Oracle-specific SQL fragment core used to write itself - see
@@ -2545,6 +3255,7 @@ static const db_driver_t oracle_driver = {
     .lob_write_by_rowid           = oracle_lob_write_by_rowid,
     .dml_execute_procedure        = oracle_dml_execute_procedure,
     .select_open_from_cursor      = oracle_select_open_from_cursor,
+    .describe_table               = oracle_describe_table,
     .dialect                      = &oracle_dialect
 };
 

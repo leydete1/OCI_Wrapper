@@ -130,6 +130,8 @@
 #include <stdint.h>                  /* uint64_t - db_fetch_batch_stats_t */
 #include "Connection.h"        /* oci_context_t */
 #include "Resultset_Types.h"   /* resultset_t */
+#include "db_metadata.h"       /* col_metadata_t, metadata_request_t -
+                                   describe_table (Stage 4a)          */
 
 #ifdef __cplusplus
 extern "C" {
@@ -827,6 +829,29 @@ typedef struct {
  *   same meaning as select_open()'s own use of it, if the cursor's
  *   result has a LOB column this pass's driver doesn't support through
  *   this interface yet).
+ *
+ * describe_table()
+ *   Added in Stage 4a (Oracle dialect extraction, 2026-10-06). Describes
+ *   one table for core: its columns in column order, each with type
+ *   name, length, precision, scale, nullability and default, written
+ *   into the caller's cols[] (see db_metadata.h for the field
+ *   meanings). If req->owner is empty the driver resolves the owning
+ *   schema itself and writes it back into req->owner; both req fields
+ *   are upper-cased in place. Logs to ctx->Metadata_logger. Returns 0
+ *   on success, -1 on any error - including a table that does not exist
+ *   or has no columns visible to this session.
+ *
+ *   Core reaches this through get_request_metadata()
+ *   (Table_Metadata_Module.c), normally via the metadata cache - never
+ *   directly. data_type is the vendor's own type name; it is not
+ *   translated here.
+ *
+ *   Oracle: ALL_TABLES for the owner (when not given), ALL_TAB_COLUMNS
+ *   for the columns, and a second single-column query per column for
+ *   DATA_DEFAULT, which is a LONG and cannot be fetched alongside the
+ *   other columns. SQL Server would read INFORMATION_SCHEMA.COLUMNS (or
+ *   sys.columns) the same way; the signature carries nothing
+ *   Oracle-specific.
  */
 /* ================================================================== */
 /*  DIALECT (Oracle dialect extraction, Stage 2, 2026-10-02)           */
@@ -999,6 +1024,14 @@ typedef struct db_driver_t {
                          db_column_meta_t          **out_columns,
                          int                         *out_column_count,
                          int                         *out_batch_size);
+
+    /* Stage 4a (2026-10-06) - see describe_table() above. */
+    int  (*describe_table)(
+                         oci_context_t               *ctx,
+                         metadata_request_t          *req,
+                         col_metadata_t              *cols,
+                         int                         *col_count,
+                         int                          max_cols);
 
     /* Stage 2 (2026-10-02) - SQL fragments; see db_dialect_t above.
      * Never NULL for a real driver, and every hook in it is set. */

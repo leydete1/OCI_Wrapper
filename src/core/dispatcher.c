@@ -371,38 +371,12 @@ static int dispatch_select(oci_context_t      *ctx,
     logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
                    "***********Finished Test_sql_dependency_extractor ***********************");
 
-    logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                  "****** Calling get_table_metadata OCI_FIELD_TEST ******");
-
-    table_metadata_alltabs_t *tm = get_table_metadata(ctx,
-                                                "DATA_MANAGER",
-                                                "OCI_FIELD_TEST");
-     if (tm)
-     {
-         logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                      "get_table_metadata OK: owner='%s' table='%s' "
-                      "status='%s' num_rows=%.0f compression='%s' "
-                      "partitioned='%s' last_analyzed='%s'",
-                      tm->owner,
-                      tm->table_name,
-                      tm->status,
-                      tm->num_rows,
-                      tm->compression,
-                      tm->partitioned,
-                      tm->last_analyzed);
-
-         free_table_metadata(tm);
-         tm = NULL;
-     }
-     else
-     {
-         logger_write(ctx->dispatcher_logger, LOG_ERROR, __func__, 0,
-                      "get_table_metadata FAILED for OCI_FIELD_TEST "
-                      "- check Metadata_Data_Manager.log");
-     }
-
-     logger_write(ctx->dispatcher_logger, LOG_INFO, __func__, 0,
-                  "****** Finished get_table_metadata ******");
+    /* Stage 4a (Oracle dialect extraction, 2026-10-06): a leftover
+     * debug call to get_table_metadata(ctx, "DATA_MANAGER",
+     * "OCI_FIELD_TEST") used to run here on every legacy SELECT: one
+     * ALL_TABLES query, three dispatcher log lines and a full ALL_TABLES
+     * dump in the Metadata log. get_table_metadata() has been deleted
+     * (no production use); the call went with it. */
 
     char sql_buf[8192] = {0};
     if (!extract_tag(xml, "sql", sql_buf, sizeof(sql_buf)))

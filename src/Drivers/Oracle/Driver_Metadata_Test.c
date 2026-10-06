@@ -1,6 +1,15 @@
 /*
  * Driver_Metadata_Test.c
  *
+ * Stage 4a update (Oracle dialect extraction, 2026-10-06). The table
+ * describe now lives in the driver (db_driver_t.describe_table,
+ * driver_oracle.c oracle_describe_table) and get_request_metadata() is
+ * a thin wrapper over it. get_table_metadata()/get_object_metadata()
+ * were deleted (no production caller), so the old Tests 3-5 that called
+ * them are replaced by Tests 3-6 below. Tests 1-2 are unchanged. The
+ * original 2026-09-20 notes follow; where they describe the module's
+ * layout they are history.
+ *
  * Follow-up proposal item 2 (2026-09-20) - dedicated standalone-harness
  * pass for OCI_Table_Metadata_Module.c before any further decisions are
  * made about it. Chosen first because every CRUD/select module in this
@@ -56,30 +65,27 @@
  *            that req->owner comes back populated and non-empty, and
  *            that the result matches Test 1's column list exactly.
  *
- *   Test 3 - get_table_metadata() on the same table: independent
- *            baseline is a direct "SELECT OWNER FROM ALL_TABLES WHERE
- *            TABLE_NAME=.." - checks the returned table_metadata_alltabs_t
- *            ->owner and ->table_name match, then free_table_metadata().
+ *   Test 3 - driver->describe_table() called directly, explicit
+ *            owner: must return exactly what get_request_metadata()
+ *            returned in Test 1, every field of every column (the
+ *            wrapper adds nothing).
  *
- *   Test 4 - get_object_metadata() on the same table: checks
- *            ->object_type comes back "TABLE" and ->object_name matches,
- *            then free_object_metadata().
+ *   Test 4 - get_request_metadata() on a table that does not exist,
+ *            explicit owner: must return -1 (logged, not a crash).
  *
- *   Test 5 - get_table_metadata() on a name that does not exist: must
- *            return NULL (error already logged to Metadata_logger, not
- *            a crash) - the not-found path matters as much as the
- *            happy path given how many callers treat a NULL return as
- *            "stop, do not proceed."
+ *   Test 5 - the same with the owner left empty: the owner lookup
+ *            finds nothing, so -1, and req.owner stays empty.
+ *
+ *   Test 6 - column detail against an independent baseline: a direct
+ *            ALL_TAB_COLUMNS query (plain OCI, not through the driver)
+ *            for COLUMN_NAME, DATA_TYPE and NULLABLE in COLUMN_ID order
+ *            must match Test 1's columns one for one.
  *
  * NOT covered here (deliberately, see header above):
  *   - get_multi_metadata()/get_select_metadata() - already exercised by
  *     Driver_Select_Test.c and by OCI_Execute_Query_Batch_Module.c in
  *     production; re-proving the OCIParamGet/OCIDefineByPos path here
  *     would just duplicate that coverage.
- *   - get_object_metadata() against a VIEW/SYNONYM - no view fixture
- *     exists in this project's test DDL today (see Create_Unit_Test_Table.txt,
- *     Create_Oracle_Test_Table.txt); flagging as a follow-up rather than
- *     inventing a fixture inside this harness.
  *
  * Build (same convention as Driver_Select_Test.c - adds
  * OCI_Table_Metadata_Module.c itself plus its own dependencies,
@@ -105,9 +111,10 @@
  * Expected output on success:
  *   Test 1 (get_request_metadata, explicit owner) ... OK (4 columns)
  *   Test 2 (get_request_metadata, owner auto-resolve) ... OK (owner=DATA_MANAGER, matches Test 1)
- *   Test 3 (get_table_metadata)                    ... OK (owner=DATA_MANAGER, table=UNIT_TEST_FIELD_TEST)
- *   Test 4 (get_object_metadata)                   ... OK (object_type=TABLE)
- *   Test 5 (get_table_metadata, not-found)          ... OK (NULL returned, no crash)
+ *   Test 3 (describe_table direct = Test 1)           ... OK (4 columns identical)
+ *   Test 4 (not-found, explicit owner)               ... OK (rc=-1)
+ *   Test 5 (not-found, owner auto-resolve)           ... OK (rc=-1, owner not set)
+ *   Test 6 (column detail vs ALL_TAB_COLUMNS)         ... OK (4 of 4 match)
  *   PASS
  *
  * A non-zero exit code means at least one test failed - check
@@ -126,7 +133,7 @@
 
 /* Adjust if the harness is pointed at a different schema than
  * DATA_MANAGER - kept as one constant rather than repeated literals so
- * Test 1's expected owner and Test 3/4's checks can't drift apart. */
+ * the tests' expected owner can't drift apart. */
 #define TEST_OWNER "DATA_MANAGER"
 #define TEST_TABLE "UNIT_TEST_FIELD_TEST"
 #define MISSING_TABLE "UNIT_TEST_FIELD_TEST_DOES_NOT_EXIST"
@@ -287,6 +294,69 @@ static int baseline_column_count(oci_context_t *ctx, int *out_count)
     return 0;
 }
 
+/* Test 1's result, kept for Tests 3 and 6. */
+static col_metadata_t g_t1_cols[MAX_TABLE_COLUMNS];
+static int            g_t1_count = -1;
+
+/* Independent baseline for Test 6: COLUMN_NAME, DATA_TYPE, NULLABLE in
+ * COLUMN_ID order, via plain OCI calls - not through the driver. */
+#define BASELINE_MAX_COLS 64
+static int baseline_column_types(oci_context_t *ctx,
+                                 char names[][128], char types[][128],
+                                 char nulls[][4], int *out_n)
+{
+    const char *sql =
+        "SELECT COLUMN_NAME, DATA_TYPE, NULLABLE FROM ALL_TAB_COLUMNS "
+        "WHERE TABLE_NAME = :tname AND OWNER = :towner ORDER BY COLUMN_ID";
+
+    OCIStmt *stmt = NULL;
+    sword s = OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
+                               (const OraText *)sql, (ub4)strlen(sql),
+                               NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+
+    OCIBind *b1 = NULL, *b2 = NULL;
+    s = OCIBindByName(stmt, &b1, ctx->errhp, (OraText *)":tname",
+                       -1, (void *)TEST_TABLE, (sb4)strlen(TEST_TABLE) + 1,
+                       SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    s = OCIBindByName(stmt, &b2, ctx->errhp, (OraText *)":towner",
+                       -1, (void *)TEST_OWNER, (sb4)strlen(TEST_OWNER) + 1,
+                       SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+
+    char name[128], type[128], nul[4];
+    OCIDefine *d1 = NULL, *d2 = NULL, *d3 = NULL;
+    s = OCIDefineByPos(stmt, &d1, ctx->errhp, 1, name, sizeof(name),
+                        SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    s = OCIDefineByPos(stmt, &d2, ctx->errhp, 2, type, sizeof(type),
+                        SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+    s = OCIDefineByPos(stmt, &d3, ctx->errhp, 3, nul, sizeof(nul),
+                        SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+
+    s = OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 0, 0, NULL, NULL,
+                        OCI_DEFAULT);
+    CHECK_OCI(ctx, s);
+
+    int n = 0;
+    while (n < BASELINE_MAX_COLS &&
+           OCIStmtFetch2(stmt, ctx->errhp, 1, OCI_FETCH_NEXT, 0,
+                         OCI_DEFAULT) == OCI_SUCCESS)
+    {
+        snprintf(names[n], 128, "%s", name);
+        snprintf(types[n], 128, "%s", type);
+        snprintf(nulls[n], 4,   "%s", nul);
+        n++;
+    }
+
+    OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
+    *out_n = n;
+    return 0;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -370,6 +440,8 @@ int main(void)
         else
         {
             printf("OK (%d columns)\n", col_count);
+            memcpy(g_t1_cols, cols, (size_t)col_count * sizeof(cols[0]));
+            g_t1_count = col_count;
             for (int i = 0; i < col_count; i++)
                 printf("  [%d] %-16s %-12s len=%d prec=%d scale=%d null=%s\n",
                        i, cols[i].col_name, cols[i].data_type,
@@ -412,75 +484,131 @@ int main(void)
         }
     }
 
-    /* ---- Test 3: get_table_metadata() ---- */
-    printf("Test 3 (get_table_metadata) ... ");
+    /* ---- Test 3: driver->describe_table() directly ----
+     * get_request_metadata() is now a wrapper over the driver hook;
+     * calling the hook directly must give exactly Test 1's result. */
+    printf("Test 3 (describe_table direct = Test 1) ... ");
+    if (g_t1_count < 0)
     {
-        table_metadata_alltabs_t *tm =
-            get_table_metadata(&worker, TEST_OWNER, TEST_TABLE);
+        printf("SKIPPED - Test 1 failed\n");
+        failed = 1;
+    }
+    else if (!driver->describe_table)
+    {
+        printf("FAILED - driver has no describe_table\n");
+        failed = 1;
+    }
+    else
+    {
+        metadata_request_t req; memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, TEST_TABLE, sizeof(req.table_name) - 1);
+        strncpy(req.owner,      TEST_OWNER, sizeof(req.owner) - 1);
 
-        if (!tm)
-        {
-            printf("FAILED - see %s\n", config.Metadata_log_file_name);
-            failed = 1;
-        }
-        else if (strcasecmp(tm->table_name, TEST_TABLE) != 0)
-        {
-            printf("FAILED - table_name mismatch: got '%s'\n", tm->table_name);
-            failed = 1;
-            free_table_metadata(tm);
-        }
+        static col_metadata_t cols[MAX_TABLE_COLUMNS];
+        int col_count = 0;
+        int rc = driver->describe_table(&worker, &req, cols, &col_count,
+                                         MAX_TABLE_COLUMNS);
+        int same = (rc == 0 && col_count == g_t1_count);
+        for (int i = 0; same && i < col_count; i++)
+            same = (memcmp(&cols[i], &g_t1_cols[i], sizeof(cols[i])) == 0);
+
+        if (same)
+            printf("OK (%d columns identical)\n", col_count);
         else
         {
-            printf("OK (owner=%s, table=%s)\n", TEST_OWNER, tm->table_name);
-            free_table_metadata(tm);
+            printf("FAILED - rc=%d columns=%d, Test 1 had %d\n",
+                   rc, col_count, g_t1_count);
+            failed = 1;
         }
     }
 
-    /* ---- Test 4: get_object_metadata() ---- */
-    printf("Test 4 (get_object_metadata) ... ");
+    /* ---- Test 4: not-found, explicit owner ---- */
+    printf("Test 4 (not-found, explicit owner) ... ");
     {
-        object_metadata_allobjs_t *om =
-            get_object_metadata(&worker, TEST_OWNER, TEST_TABLE);
+        metadata_request_t req; memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, MISSING_TABLE, sizeof(req.table_name) - 1);
+        strncpy(req.owner,      TEST_OWNER,    sizeof(req.owner) - 1);
 
-        if (!om)
-        {
-            printf("FAILED - see %s\n", config.Metadata_log_file_name);
-            failed = 1;
-        }
-        else if (strcasecmp(om->object_type, "TABLE") != 0)
-        {
-            printf("FAILED - expected object_type=TABLE, got '%s'\n", om->object_type);
-            failed = 1;
-            free_object_metadata(om);
-        }
+        static col_metadata_t cols[MAX_TABLE_COLUMNS];
+        int col_count = 0;
+        int rc = get_request_metadata(&worker, &req, cols, &col_count,
+                                       MAX_TABLE_COLUMNS);
+        if (rc == -1 && col_count == 0)
+            printf("OK (rc=-1)\n");
         else
         {
-            printf("OK (object_type=%s)\n", om->object_type);
-            free_object_metadata(om);
+            printf("FAILED - expected rc=-1 and 0 columns, got rc=%d "
+                   "columns=%d\n", rc, col_count);
+            failed = 1;
         }
     }
 
-    /* ---- Test 5: get_table_metadata(), not-found path ----
-     * Run 1 caveat: a NULL return here is only meaningful proof of the
-     * "not found, logged, no crash" path if Tests 2-4 above actually
-     * succeeded - in Run 1 every call after Test 1 failed with
-     * ORA-03114 (not connected), so this test's NULL "passed" for the
-     * wrong reason. Read Test 5's result together with Tests 2-4, not
-     * in isolation. */
-    printf("Test 5 (get_table_metadata, not-found) ... ");
+    /* ---- Test 5: not-found, owner auto-resolve ---- */
+    printf("Test 5 (not-found, owner auto-resolve) ... ");
     {
-        table_metadata_alltabs_t *tm =
-            get_table_metadata(&worker, TEST_OWNER, MISSING_TABLE);
+        metadata_request_t req; memset(&req, 0, sizeof(req));
+        strncpy(req.table_name, MISSING_TABLE, sizeof(req.table_name) - 1);
 
-        if (tm != NULL)
+        static col_metadata_t cols[MAX_TABLE_COLUMNS];
+        int col_count = 0;
+        int rc = get_request_metadata(&worker, &req, cols, &col_count,
+                                       MAX_TABLE_COLUMNS);
+        if (rc == -1 && col_count == 0 && req.owner[0] == '\0')
+            printf("OK (rc=-1, owner not set)\n");
+        else
         {
-            printf("FAILED - expected NULL for a nonexistent table, got a result\n");
+            printf("FAILED - expected rc=-1, 0 columns, empty owner; got "
+                   "rc=%d columns=%d owner='%s'\n", rc, col_count, req.owner);
             failed = 1;
-            free_table_metadata(tm);
+        }
+    }
+
+    /* ---- Test 6: column detail against an independent baseline ---- */
+    printf("Test 6 (column detail vs ALL_TAB_COLUMNS) ... ");
+    {
+        static char names[BASELINE_MAX_COLS][128];
+        static char types[BASELINE_MAX_COLS][128];
+        static char nulls[BASELINE_MAX_COLS][4];
+        int n = 0;
+
+        if (g_t1_count < 0)
+        {
+            printf("SKIPPED - Test 1 failed\n");
+            failed = 1;
+        }
+        else if (baseline_column_types(&worker, names, types, nulls, &n) != 0)
+        {
+            printf("FAILED - baseline query failed\n");
+            failed = 1;
+        }
+        else if (n != g_t1_count)
+        {
+            printf("FAILED - baseline has %d columns, Test 1 had %d\n",
+                   n, g_t1_count);
+            failed = 1;
         }
         else
         {
-            printf("OK (NULL returned, no crash)\n");
+            int match = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (strcmp(names[i], g_t1_cols[i].col_name)  == 0 &&
+                    strcmp(types[i], g_t1_cols[i].data_type) == 0 &&
+                    strcmp(nulls[i], g_t1_cols[i].nullable)  == 0)
+                    match++;
+                else
+                    printf("\n  column %d: baseline %s %s %s, describe %s %s %s",
+                           i, names[i], types[i], nulls[i],
+                           g_t1_cols[i].col_name, g_t1_cols[i].data_type,
+                           g_t1_cols[i].nullable);
+            }
+            if (match == n)
+                printf("OK (%d of %d match)\n", match, n);
+            else
+            {
+                printf("\nFAILED - %d of %d match\n", match, n);
+                failed = 1;
+            }
         }
     }
 
