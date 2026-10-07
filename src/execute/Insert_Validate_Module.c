@@ -23,6 +23,7 @@
 #include <errno.h>
 
 #include "Insert_Validate_Module.h"
+#include "db_type_class.h"   /* Stage 4b - type classes, not type names */
 #include "logger.h"
 
 /* parsed_field_t is now declared in OCI_Insert_Validate_Module.h -
@@ -77,70 +78,66 @@ static int extract_tag_int(const char *src, const char *tag, int *out)
 
 /* ------------------------------------------------------------------ */
 /*  Type-family helpers                                                 */
+/*                                                                      */
+/*  Stage 4b (Oracle dialect extraction, 2026-10-06): these used to     */
+/*  compare Oracle type names directly (strcmp(t, "VARCHAR2") ...).     */
+/*  They now ask db_type_class() / db_type_lob_kind(), so the same      */
+/*  rules apply to any driver's type names. Names and call sites are    */
+/*  unchanged; for every type name Oracle reports, each helper gives    */
+/*  the same answer as before (proved by the Stage 4b differential      */
+/*  test, proof/validate_diff.c).                                       */
+/*                                                                      */
+/*  Two deliberate details:                                             */
+/*   - is_string_type() no longer matches ROWID/UROWID by accident:     */
+/*     they have their own class (ROWID) and is_rowid_type() catches    */
+/*     them, exactly as before.                                         */
+/*   - is_lob_type() uses db_type_lob_kind(), not the LOB class, so     */
+/*     BFILE stays out of it (BLOB, CLOB, NCLOB only - as before).      */
 /* ------------------------------------------------------------------ */
 
-/* Is the type a numeric family? */
 static int is_numeric_type(const char *t)
 {
-    return (strncmp(t, "NUMBER",        6)  == 0 ||
-            strncmp(t, "FLOAT",         5)  == 0 ||
-            strcmp (t, "BINARY_FLOAT")      == 0 ||
-            strcmp (t, "BINARY_DOUBLE")     == 0 ||
-            strcmp (t, "INTEGER")           == 0 ||
-            strcmp (t, "INT")               == 0 ||
-            strcmp (t, "SMALLINT")          == 0 ||
-            strcmp (t, "DECIMAL")           == 0 ||
-            strcmp (t, "NUMERIC")           == 0 ||
-            strcmp (t, "REAL")              == 0 ||
-            strcmp (t, "DOUBLE PRECISION")  == 0);
+    return db_type_class(t) == DB_TYPE_CLASS_NUMERIC;
 }
 
 static int is_string_type(const char *t)
 {
-    return (strcmp(t, "CHAR")      == 0 ||
-            strcmp(t, "VARCHAR2")  == 0 ||
-            strcmp(t, "NCHAR")     == 0 ||
-            strcmp(t, "NVARCHAR2") == 0);
+    return db_type_class(t) == DB_TYPE_CLASS_STRING;
 }
 
 static int is_lob_type(const char *t)
 {
-    return (strcmp(t, "CLOB")  == 0 ||
-            strcmp(t, "NCLOB") == 0 ||
-            strcmp(t, "BLOB")  == 0);
+    return db_type_lob_kind(t) != DB_LOB_NONE;
 }
 
 static int is_date_type(const char *t)
 {
-    return strcmp(t, "DATE") == 0;
+    return db_type_class(t) == DB_TYPE_CLASS_DATE;
 }
 
 static int is_timestamp_type(const char *t)
 {
-    return (strncmp(t, "TIMESTAMP", 9) == 0);
+    return db_type_class(t) == DB_TYPE_CLASS_TIMESTAMP;
 }
 
 static int is_interval_ym_type(const char *t)
 {
-    return (strstr(t, "INTERVAL") != NULL &&
-            strstr(t, "MONTH")    != NULL);
+    return db_type_class(t) == DB_TYPE_CLASS_INTERVAL_YM;
 }
 
 static int is_interval_ds_type(const char *t)
 {
-    return (strstr(t, "INTERVAL") != NULL &&
-            strstr(t, "SECOND")   != NULL);
+    return db_type_class(t) == DB_TYPE_CLASS_INTERVAL_DS;
 }
 
 static int is_raw_type(const char *t)
 {
-    return strcmp(t, "RAW") == 0;
+    return db_type_class(t) == DB_TYPE_CLASS_BINARY;
 }
 
 static int is_rowid_type(const char *t)
 {
-    return (strcmp(t, "ROWID")  == 0 ||
-            strcmp(t, "UROWID") == 0);
+    return db_type_class(t) == DB_TYPE_CLASS_ROWID;
 }
 
 /* ------------------------------------------------------------------ */
@@ -386,7 +383,10 @@ validate_rowid(const parsed_field_t *f, char *msg, size_t msg_max)
     int         len = (int)strlen(v);
 
     /* Extended ROWID is exactly 18 chars; UROWID may vary but must
-     * consist only of valid Oracle base-64 characters               */
+     * consist only of valid Oracle base-64 characters.
+     * Stage 4b note: the "ROWID" name test below stays - it separates
+     * Oracle's two row-address types inside the ROWID class, and this
+     * function is only reached for that class.                       */
     if (strcmp(f->field_type, "ROWID") == 0 && len != 18)
     {
         snprintf(msg, msg_max,

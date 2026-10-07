@@ -64,6 +64,7 @@
                                   directly, same as SELECT/DELETE/UPDATE's
                                   own integrations.                    */
 #include "XML_Helper.h"
+#include "db_type_class.h"   /* db_type_lob_kind() - Stage 4b */
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
@@ -356,8 +357,12 @@ static int build_insert_sql(oci_context_t        *ctx,
         strncat(col_list, ic->col_names[i],
                 sizeof(col_list) - strlen(col_list) - 1);
 
-        /* Find data type for this column in metadata */
-        const char *dtype = "VARCHAR2";
+        /* Find data type for this column in metadata. Stage 4b: the
+         * fallback is "" (no vendor type name in core). Level 2 has
+         * already checked every column exists, so it is never used;
+         * if it were, the dialect gives "" exactly what it gave
+         * "VARCHAR2" - a plain bind, no conversion, no LOB literal. */
+        const char *dtype = "";
         for (int m = 0; m < col_meta_count; m++)
         {
             if (strcasecmp(cols[m].col_name, ic->col_names[i]) == 0)
@@ -754,13 +759,14 @@ int execute_insert_batch(oci_context_t    *ctx,
     int scalar_col_count = 0;
     for (int c = 0; c < ic->col_count; c++)
     {
-        const char *dtype = "VARCHAR2";
+        const char *dtype = "";
         for (int m = 0; m < col_meta_count; m++)
             if (strcasecmp(cols[m].col_name, ic->col_names[c]) == 0)
             { dtype = cols[m].data_type; break; }
-        if (strcmp(dtype, "BLOB")  != 0 &&
-            strcmp(dtype, "CLOB")  != 0 &&
-            strcmp(dtype, "NCLOB") != 0)
+        /* Stage 4b: a LOB written after the statement has no bind -
+         * db_type_lob_kind() agrees with the dialect's
+         * lob_placeholder() used by build_insert_sql(). */
+        if (db_type_lob_kind(dtype) == DB_LOB_NONE)
             scalar_col_count++;
     }
 
@@ -779,14 +785,12 @@ int execute_insert_batch(oci_context_t    *ctx,
         int bind_pos = 0;
         for (int c = 0; c < ic->col_count; c++)
         {
-            const char *dtype = "VARCHAR2";
+            const char *dtype = "";
             for (int m = 0; m < col_meta_count; m++)
                 if (strcasecmp(cols[m].col_name, ic->col_names[c]) == 0)
                 { dtype = cols[m].data_type; break; }
 
-            if (strcmp(dtype, "BLOB")  == 0 ||
-                strcmp(dtype, "CLOB")  == 0 ||
-                strcmp(dtype, "NCLOB") == 0)
+            if (db_type_lob_kind(dtype) != DB_LOB_NONE)
                 continue;
 
             const insert_col_value_t *fv =
@@ -882,9 +886,7 @@ int execute_insert_batch(oci_context_t    *ctx,
         for (int bc = 0; bc < ic->col_count && !has_blob_column; bc++)
             for (int m = 0; m < col_meta_count; m++)
                 if (strcasecmp(cols[m].col_name, ic->col_names[bc]) == 0 &&
-                    (strcmp(cols[m].data_type, "BLOB")  == 0 ||
-                     strcmp(cols[m].data_type, "CLOB")  == 0 ||
-                     strcmp(cols[m].data_type, "NCLOB") == 0))
+                    db_type_lob_kind(cols[m].data_type) != DB_LOB_NONE)
                 { has_blob_column = 1; break; }
 
         if (has_blob_column)
@@ -903,7 +905,7 @@ int execute_insert_batch(oci_context_t    *ctx,
 
                 for (int bc = 0; bc < ic->col_count; bc++)
                 {
-                    const char *btype = "VARCHAR2";
+                    const char *btype = "";
                     for (int m = 0; m < col_meta_count; m++)
                         if (strcasecmp(cols[m].col_name,
                                        ic->col_names[bc]) == 0)
@@ -913,9 +915,9 @@ int execute_insert_batch(oci_context_t    *ctx,
                         &ic->values[r * ic->col_count + bc];
                     if (fv->is_empty) continue;
 
-                    int is_blob = (strcmp(btype, "BLOB") == 0);
-                    int is_clob = (strcmp(btype, "CLOB")  == 0 ||
-                                   strcmp(btype, "NCLOB") == 0);
+                    db_lob_kind_t lob_kind = db_type_lob_kind(btype);
+                    int is_blob = (lob_kind == DB_LOB_BINARY);
+                    int is_clob = (lob_kind == DB_LOB_TEXT);
                     if (!is_blob && !is_clob) continue;
 
                     db_lob_write_request_t lob_req;

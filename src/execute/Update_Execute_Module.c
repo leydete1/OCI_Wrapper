@@ -50,6 +50,7 @@
 #include "Response_Writer.h"        /* response_write_dml_xml/json() */
 #include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"
+#include "db_type_class.h"   /* db_type_lob_kind() - Stage 4b */
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
@@ -279,8 +280,9 @@ static int build_update_sql(oci_context_t        *ctx,
             strncat(set_list, ", ",
                     sizeof(set_list) - strlen(set_list) - 1);
 
-        /* Find type */
-        const char *dtype = "VARCHAR2";
+        /* Find type. Stage 4b: fallback "" - see build_insert_sql()'s
+         * note; the dialect output is the same as for "VARCHAR2". */
+        const char *dtype = "";
         for (int m = 0; m < col_meta_count; m++)
             if (strcasecmp(cols[m].col_name, uc->col_names[i]) == 0)
             { dtype = cols[m].data_type; break; }
@@ -342,7 +344,7 @@ static int build_update_sql(oci_context_t        *ctx,
          * for any WHERE key, ever. Isolated to just this one section;
          * the SET clause loop above it, and every other type
          * resolution in this project, already does the real lookup.  */
-        const char *ktype = "VARCHAR2";
+        const char *ktype = "";
         for (int m = 0; m < col_meta_count; m++)
             if (strcasecmp(cols[m].col_name, uc->keys[k].field_name) == 0)
             { ktype = cols[m].data_type; break; }
@@ -681,16 +683,14 @@ int execute_update_batch(oci_context_t     *ctx,
 
     for (int c = 0; c < uc->col_count; c++)
     {
-        const char *dtype = "VARCHAR2";
+        const char *dtype = "";
         for (int m = 0; m < col_meta_count; m++)
             if (strcasecmp(cols[m].col_name, uc->col_names[c]) == 0)
             { dtype = cols[m].data_type; break; }
 
-        /* LOB: EMPTY_BLOB/CLOB in SQL - no placeholder, skip bind,
-         * same as the original scalar_bind_pos skip logic. */
-        if (strcmp(dtype, "BLOB")  == 0 ||
-            strcmp(dtype, "CLOB")  == 0 ||
-            strcmp(dtype, "NCLOB") == 0)
+        /* LOB: the dialect's LOB placeholder in SQL - no bind, skip.
+         * Stage 4b: db_type_lob_kind() agrees with lob_placeholder(). */
+        if (db_type_lob_kind(dtype) != DB_LOB_NONE)
             continue;
 
         const upd_field_value_t *fv = &uc->values[c];
@@ -756,6 +756,11 @@ int execute_update_batch(oci_context_t     *ctx,
                  * supplied type (there isn't one here anyway; see the
                  * 2026-07-26 fix in OCI_Audit_Trail_Manager.c/.h for
                  * why this parameter exists at all now).               */
+                /* Stage 4b: this fallback is left as "VARCHAR2" for
+                 * now - it is handed to audit_trail_fetch_before_image()
+                 * (Audit_Trail_Manager.c), which 4b does not cover.
+                 * Never used in practice: Level 2 has already checked
+                 * every WHERE key exists in cols[]. */
                 strncpy(key_types[k], "VARCHAR2", sizeof(key_types[k]) - 1);
                 for (int m = 0; m < col_meta_count; m++)
                     if (strcasecmp(cols[m].col_name, uc->keys[k].field_name) == 0)
@@ -867,9 +872,7 @@ int execute_update_batch(oci_context_t     *ctx,
         for (int bc = 0; bc < uc->col_count && !has_lob_column; bc++)
             for (int m = 0; m < col_meta_count; m++)
                 if (strcasecmp(cols[m].col_name, uc->col_names[bc]) == 0 &&
-                    (strcmp(cols[m].data_type, "BLOB")  == 0 ||
-                     strcmp(cols[m].data_type, "CLOB")  == 0 ||
-                     strcmp(cols[m].data_type, "NCLOB") == 0))
+                    db_type_lob_kind(cols[m].data_type) != DB_LOB_NONE)
                 { has_lob_column = 1; break; }
 
         if (has_lob_column)
@@ -898,7 +901,7 @@ int execute_update_batch(oci_context_t     *ctx,
              * once here instead. */
             for (int bc = 0; bc < uc->col_count; bc++)
             {
-                const char *btype = "VARCHAR2";
+                const char *btype = "";
                 for (int m = 0; m < col_meta_count; m++)
                     if (strcasecmp(cols[m].col_name, uc->col_names[bc]) == 0)
                     { btype = cols[m].data_type; break; }
@@ -906,9 +909,9 @@ int execute_update_batch(oci_context_t     *ctx,
                 const upd_field_value_t *fv = &uc->values[bc];
                 if (fv->is_empty) continue;
 
-                int is_blob = (strcmp(btype, "BLOB") == 0);
-                int is_clob = (strcmp(btype, "CLOB")  == 0 ||
-                               strcmp(btype, "NCLOB") == 0);
+                db_lob_kind_t lob_kind = db_type_lob_kind(btype);
+                int is_blob = (lob_kind == DB_LOB_BINARY);
+                int is_clob = (lob_kind == DB_LOB_TEXT);
                 if (!is_blob && !is_clob) continue;
 
                 const char *resolved_text = NULL;
