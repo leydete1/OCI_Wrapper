@@ -66,6 +66,9 @@ int db_select_int(oci_context_t *ctx, const char *sql, int query_timeout,
     req.max_rows         = 2;
     req.fetch_array_size = 2;
     req.query_timeout    = query_timeout;
+    req.bind_count       = 0;      /* Stage 5 - no binds         */
+    req.bind_values      = NULL;
+    req.text_lobs_inline = 0;
 
     db_select_cursor_t *cursor     = NULL;
     db_column_meta_t   *columns    = NULL;

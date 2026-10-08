@@ -35,6 +35,21 @@
  *            text) are each rejected with -1. The rejected ones log
  *            their reason (and, for the missing table, ORA-00942) in
  *            select_Data_Manager.log - expected, not a fault.
+ *   Test 8 - live (Stage 5, 2026-10-08): select_open() with bind
+ *            values. A bound filter gives the same count as the same
+ *            filter written as a literal; a NULL bind matches nothing;
+ *            a value containing a quote and "--" comes back exactly as
+ *            sent (it was bound, not pasted into the SQL); two binds
+ *            in one statement; and a bind value Oracle cannot convert
+ *            (ORA-01722 at execute) now fails select_open() itself
+ *            instead of the first fetch. The ORA-01722 line in
+ *            select_Data_Manager.log is expected, not a fault.
+ *   Test 9 - live (Stage 5): text_lobs_inline. A 3,000-character
+ *            CLOB comes back in the field exactly; a NULL CLOB comes
+ *            back as ""; a 4,200-character CLOB does not fit the
+ *            4,096-byte field and fails the fetch (logged in
+ *            select_Data_Manager.log - expected) instead of being cut
+ *            short. No CLOB file is written by this test.
  *
  * No DB writes anywhere in this file.
  *
@@ -50,6 +65,8 @@
  *   Test 5 (count_rows_sql / row_limit_sql)  ... OK (count=6 direct=6, limit 3 rows)
  *   Test 6 (now_expr + add_seconds_expr)     ... OK
  *   Test 7 (db_select_int, 7 cases)          ... OK (count=6 direct=6)
+ *   Test 8 (select_open with binds, 5 cases) ... OK (bound=6 literal=6)
+ *   Test 9 (CLOB returned inline, 3 cases)   ... OK (3000 chars exact)
  *   PASS
  */
 
@@ -125,14 +142,23 @@ static int init_ctx(oci_context_t *ctx, app_config_t *config,
 
 /* Runs sql through select_open/select_fetch_batch and returns how many
  * rows came back; the first row's first field is copied to first_value
- * (if non-NULL). -1 on any driver failure. */
-static int run_query(const db_driver_t *driver, oci_context_t *ctx,
-                     const char *sql, char *first_value, size_t first_max)
+ * (if non-NULL). -1 on any driver failure; *open_failed (if non-NULL)
+ * says whether it was select_open() that failed. Stage 5: optional
+ * bind values and text_lobs_inline. */
+static int run_query_ex(const db_driver_t *driver, oci_context_t *ctx,
+                        const char *sql, const char **binds, int bind_count,
+                        int text_lobs_inline, int *open_failed,
+                        char *first_value, size_t first_max)
 {
     db_select_request_t req;
     memset(&req, 0, sizeof(req));
     req.sql              = sql;
     req.fetch_array_size = 5;
+    req.bind_count       = bind_count;
+    req.bind_values      = binds;
+    req.text_lobs_inline = text_lobs_inline;
+
+    if (open_failed) *open_failed = 0;
 
     db_select_cursor_t *cursor  = NULL;
     db_column_meta_t   *columns = NULL;
@@ -142,7 +168,10 @@ static int run_query(const db_driver_t *driver, oci_context_t *ctx,
 
     if (driver->select_open(ctx, &req, &cursor, &columns,
                             &col_count, &batch_size) != 0)
+    {
+        if (open_failed) *open_failed = 1;
         return -1;
+    }
 
     int total = 0, rc = 0;
     for (;;)
@@ -167,6 +196,13 @@ static int run_query(const db_driver_t *driver, oci_context_t *ctx,
     driver->select_close(cursor);
     free(columns);
     return rc == 0 ? total : -1;
+}
+
+static int run_query(const db_driver_t *driver, oci_context_t *ctx,
+                     const char *sql, char *first_value, size_t first_max)
+{
+    return run_query_ex(driver, ctx, sql, NULL, 0, 0, NULL,
+                        first_value, first_max);
 }
 
 typedef struct {
@@ -523,6 +559,121 @@ int main(void)
         else
         {
             printf("\nTest 7 FAILED - %d of 7\n", ok);
+            failed = 1;
+        }
+    }
+
+    /* ---- Test 8: select_open with binds (Stage 5), live ---- */
+    {
+        char ph1[16], ph2[16], sql[256];
+        char bound[32] = "", literal[32] = "", got[256] = "";
+        int  ok = 0, open_failed = 0;
+
+        printf("Test 8 (select_open with binds, 5 cases) ... ");
+
+        dl->bind_placeholder(1, ph1, sizeof(ph1));
+        dl->bind_placeholder(2, ph2, sizeof(ph2));
+
+        /* 1. bound filter == literal filter */
+        const char *zero[1] = { "0" };
+        snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM OCI_LOB_TEST WHERE ID >= %s", ph1);
+        if (run_query_ex(driver, &worker, sql, zero, 1, 0, NULL, bound, sizeof(bound)) == 1 &&
+            run_query(driver, &worker, "SELECT COUNT(*) FROM OCI_LOB_TEST WHERE ID >= 0",
+                      literal, sizeof(literal)) == 1 &&
+            strcmp(bound, literal) == 0 && atoi(bound) > 0)
+            ok++;
+        else
+            printf("\n  bound='%s' literal='%s'", bound, literal);
+
+        /* 2. NULL bind matches nothing */
+        const char *null_bind[1] = { NULL };
+        char nulls[32] = "";
+        snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM OCI_LOB_TEST WHERE ID = %s", ph1);
+        if (run_query_ex(driver, &worker, sql, null_bind, 1, 0, NULL, nulls, sizeof(nulls)) == 1 &&
+            strcmp(nulls, "0") == 0)
+            ok++;
+        else
+            printf("\n  NULL bind count='%s'", nulls);
+
+        /* 3. quote and comment characters come back verbatim */
+        const char *tricky[1] = { "O'Brien' OR '1'='1 --" };
+        snprintf(sql, sizeof(sql), "SELECT %s FROM DUAL", ph1);
+        if (run_query_ex(driver, &worker, sql, tricky, 1, 0, NULL, got, sizeof(got)) == 1 &&
+            strcmp(got, tricky[0]) == 0)
+            ok++;
+        else
+            printf("\n  tricky value came back as '%s'", got);
+
+        /* 4. two binds */
+        const char *two[2] = { "alpha", "beta" };
+        snprintf(sql, sizeof(sql), "SELECT %s || '-' || %s FROM DUAL", ph1, ph2);
+        if (run_query_ex(driver, &worker, sql, two, 2, 0, NULL, got, sizeof(got)) == 1 &&
+            strcmp(got, "alpha-beta") == 0)
+            ok++;
+        else
+            printf("\n  two binds gave '%s'", got);
+
+        /* 5. execute failure (ORA-01722) now fails select_open() */
+        const char *bad[1] = { "abc" };
+        snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM DUAL WHERE 1 = TO_NUMBER(%s)", ph1);
+        if (run_query_ex(driver, &worker, sql, bad, 1, 0, &open_failed, NULL, 0) == -1 &&
+            open_failed)
+            ok++;
+        else
+            printf("\n  ORA-01722 case: open_failed=%d", open_failed);
+
+        if (ok == 5)
+            printf("OK (bound=%s literal=%s)\n", bound, literal);
+        else
+        {
+            printf("\nTest 8 FAILED - %d of 5\n", ok);
+            failed = 1;
+        }
+    }
+
+    /* ---- Test 9: text_lobs_inline (Stage 5), live ---- */
+    {
+        static char text[3001], got[4096];
+        char ph1[16], sql[256];
+        int  ok = 0;
+
+        printf("Test 9 (CLOB returned inline, 3 cases)   ... ");
+
+        memset(text, 0, sizeof(text));
+        for (int i = 0; i < 3000; i++) text[i] = (char)('a' + i % 26);
+        dl->bind_placeholder(1, ph1, sizeof(ph1));
+
+        /* 1. 3,000 characters back exactly */
+        const char *b[1] = { text };
+        snprintf(sql, sizeof(sql), "SELECT TO_CLOB(%s) FROM DUAL", ph1);
+        if (run_query_ex(driver, &worker, sql, b, 1, 1, NULL, got, sizeof(got)) == 1 &&
+            strcmp(got, text) == 0)
+            ok++;
+        else
+            printf("\n  3000-char CLOB came back as %zu chars", strlen(got));
+
+        /* 2. NULL CLOB -> "" */
+        strcpy(got, "not-empty");
+        if (run_query_ex(driver, &worker, "SELECT TO_CLOB(NULL) FROM DUAL",
+                         NULL, 0, 1, NULL, got, sizeof(got)) == 1 && got[0] == '\0')
+            ok++;
+        else
+            printf("\n  NULL CLOB came back as '%s'", got);
+
+        /* 3. 4,200 characters do not fit: the fetch fails */
+        if (run_query_ex(driver, &worker,
+                         "SELECT TO_CLOB(RPAD('x', 4000, 'x')) || "
+                         "TO_CLOB(RPAD('y', 200, 'y')) FROM DUAL",
+                         NULL, 0, 1, NULL, got, sizeof(got)) == -1)
+            ok++;
+        else
+            printf("\n  4200-char CLOB was not rejected");
+
+        if (ok == 3)
+            printf("OK (3000 chars exact)\n");
+        else
+        {
+            printf("\nTest 9 FAILED - %d of 3\n", ok);
             failed = 1;
         }
     }

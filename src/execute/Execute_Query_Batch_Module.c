@@ -748,6 +748,9 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     req.fetch_array_size     = (int)bc.fetch_count;
     req.query_timeout        = cfg->query_timeout;
     req.include_column_names = cfg->include_column_names;
+    req.bind_count           = 0;      /* Stage 5: SQL is fully substituted */
+    req.bind_values          = NULL;
+    req.text_lobs_inline     = 0;      /* CLOBs to files, as before       */
 
     db_select_cursor_t *cursor  = NULL;
     db_column_meta_t   *columns = NULL;

@@ -197,9 +197,15 @@ static int oracle_health_check(oci_context_t *ctx)
 /* Local OCI error macro - same shape as execute_query_batch()'s own
  * CHECK_OCI, logging via ctx->select_logger (same destination this
  * fetch path already logs to today). */
+/* Stage 5 (2026-10-08): status is evaluated ONCE. These macros are
+ * often passed the OCI call itself, e.g. ORACLE_CHECK_OCI(ctx,
+ * OCIStmtPrepare2(...)); the old "(status) != OCI_SUCCESS &&
+ * (status) != OCI_SUCCESS_WITH_INFO" text ran that call a second time
+ * whenever the first one failed. Success paths are unchanged. */
 #define ORACLE_CHECK_OCI(ctx, status) \
     do { \
-        if ((status) != OCI_SUCCESS && (status) != OCI_SUCCESS_WITH_INFO) { \
+        sword _chk_st = (status); \
+        if (_chk_st != OCI_SUCCESS && _chk_st != OCI_SUCCESS_WITH_INFO) { \
             text errbuf[512]; sb4 errcode = 0; \
             OCIErrorGet((ctx)->errhp, 1, NULL, &errcode, errbuf, \
                         sizeof(errbuf), OCI_HTYPE_ERROR); \
@@ -283,6 +289,15 @@ struct db_select_cursor_t {
      * fixed before it ever shipped, not after a real failure - see
      * oracle_select_cursor_free()'s own branch on this flag below. */
     int             stmt_owned_via_handle_alloc;
+
+    /* Stage 5 (2026-10-08). text_lobs_inline is copied from the
+     * request (db_select_request_t) - see oracle_fetch_clob_field().
+     * bind_inds holds one NULL indicator per bind position; OCI keeps
+     * a pointer to it from OCIBindByPos until the statement is
+     * released, so it lives as long as the cursor and is freed after
+     * the statement in oracle_select_cursor_free(). */
+    int             text_lobs_inline;
+    sb2            *bind_inds;
 
     /* The cursor-owned multi_meta_request_t that used to sit here (bug
      * fix 2026-09-30 - Driver_LOB_Select_Test.c Test 5, ASan SEGV in
@@ -375,6 +390,7 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
             OCIStmtRelease(cur->stmt, cur->ctx->errhp, NULL, 0, OCI_DEFAULT);
     }
 
+    free(cur->bind_inds);   /* Stage 5 - after the statement, see struct */
     free(cur);
 }
 
@@ -393,10 +409,12 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
  *  CHECK_OCI_META is the same macro the module used: it logs to
  *  ctx->Metadata_logger, sets rc = -1 and jumps to the label.
  * ================================================================== */
+/* Evaluates status once - see ORACLE_CHECK_OCI (Stage 5). */
 #define CHECK_OCI_META(errhp, status, ctx, label)                       \
     do {                                                                 \
-        if ((status) != OCI_SUCCESS &&                                  \
-            (status) != OCI_SUCCESS_WITH_INFO)                          \
+        sword _chk_st = (status);                                       \
+        if (_chk_st != OCI_SUCCESS &&                                   \
+            _chk_st != OCI_SUCCESS_WITH_INFO)                           \
         {                                                                \
             text   _errbuf[512];                                         \
             sb4    _errcode = 0;                                         \
@@ -756,9 +774,15 @@ static int oracle_select_describe_and_define(oci_context_t       *ctx,
          * a REFCURSOR is already open and fetch-ready from the
          * procedure's own OPEN statement, executing it again would be
          * wrong, not just redundant. */
-        ORACLE_CHECK_OCI(ctx,
-            OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
-                           0, 0, NULL, NULL, OCI_DEFAULT));
+        /* Stage 5 (2026-10-08): a failed execute now fails
+         * select_open(). It used to be logged only, select_open()
+         * returned 0, and the failure surfaced at the first fetch
+         * as a second, misleading error. */
+        sword exec_rc = OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
+                                       0, 0, NULL, NULL, OCI_DEFAULT);
+        ORACLE_CHECK_OCI(ctx, exec_rc);
+        if (exec_rc != OCI_SUCCESS && exec_rc != OCI_SUCCESS_WITH_INFO)
+            return -1;
     }
 
     db_column_meta_t *columns = calloc(cur->col_count, sizeof(db_column_meta_t));
@@ -806,15 +830,72 @@ static int oracle_select_open(oci_context_t              *ctx,
                                                    this) may be downgraded
                                                    below.                  */
 
+    cur->text_lobs_inline = req->text_lobs_inline ? 1 : 0;   /* Stage 5 */
+
+    if (req->bind_count < 0 || (req->bind_count > 0 && !req->bind_values))
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "Invalid binds: bind_count=%d bind_values=%s",
+                     req->bind_count, req->bind_values ? "set" : "NULL");
+        free(cur);
+        return -1;
+    }
+
     ORACLE_CHECK_OCI(ctx,
         OCIStmtPrepare2(ctx->svchp, &cur->stmt, ctx->errhp,
                         (text *)req->sql, (ub4)strlen(req->sql),
                         NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT));
     if (!cur->stmt) { oracle_select_cursor_free(cur); return -1; }
 
-    ORACLE_CHECK_OCI(ctx,
-        OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
-                       0, 0, NULL, NULL, OCI_DESCRIBE_ONLY));
+    /* Stage 5 (2026-10-08) - bind values by position, same rules as
+     * oracle_dml_execute(): always SQLT_STR, a NULL entry binds SQL
+     * NULL. Bound before the execute below, which reads them; the
+     * caller's strings only need to outlive this call. */
+    if (req->bind_count > 0)
+    {
+        cur->bind_inds = calloc((size_t)req->bind_count, sizeof(sb2));
+        if (!cur->bind_inds)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "calloc failed for bind indicators (bind_count=%d)",
+                         req->bind_count);
+            oracle_select_cursor_free(cur);
+            return -1;
+        }
+
+        for (int k = 0; k < req->bind_count; k++)
+        {
+            const char *value = req->bind_values[k];
+            OCIBind    *bind  = NULL;   /* owned by the statement */
+
+            if (!value) cur->bind_inds[k] = -1;
+
+            sword bind_rc = OCIBindByPos(cur->stmt, &bind, ctx->errhp,
+                                         (ub4)(k + 1),
+                                         value ? (void *)value : NULL,
+                                         value ? (sb4)(strlen(value) + 1) : 0,
+                                         SQLT_STR,
+                                         &cur->bind_inds[k],
+                                         NULL, NULL, 0, NULL, OCI_DEFAULT);
+            ORACLE_CHECK_OCI(ctx, bind_rc);
+            if (bind_rc != OCI_SUCCESS && bind_rc != OCI_SUCCESS_WITH_INFO)
+            {
+                oracle_select_cursor_free(cur);
+                return -1;
+            }
+        }
+    }
+
+    sword desc_rc = OCIStmtExecute(ctx->svchp, cur->stmt, ctx->errhp,
+                                   0, 0, NULL, NULL, OCI_DESCRIBE_ONLY);
+    ORACLE_CHECK_OCI(ctx, desc_rc);
+    if (desc_rc != OCI_SUCCESS && desc_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        /* Stage 5 - was logged only; see the execute in
+         * oracle_select_describe_and_define(). */
+        oracle_select_cursor_free(cur);
+        return -1;
+    }
 
     db_column_meta_t *columns      = NULL;
     int                column_count = 0;
@@ -1170,6 +1251,30 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
 
     clob_buf[lob_len] = '\0';
 
+    /* Stage 5 (2026-10-08) - db_select_request_t.text_lobs_inline: the
+     * text goes in the field and no file is written. A value the field
+     * cannot hold fails the fetch rather than being cut short. */
+    if (cur->text_lobs_inline)
+    {
+        size_t field_max = sizeof(rs_row->fields[0].value) - 1;
+        if ((size_t)lob_len > field_max)
+        {
+            logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                         "CLOB col=%s length=%u does not fit the %zu-byte "
+                         "field (text_lobs_inline) - fetch failed, value "
+                         "not truncated", cur->col_names[col_idx], lob_len,
+                         field_max);
+            free(clob_buf);
+            return -1;
+        }
+        resultset_set_field(rs_row, (int)col_idx, cur->col_names[col_idx],
+                            "CLOB", clob_buf);
+        *out_bytes = lob_len;
+        free(clob_buf);
+        cur->clob_index++;
+        return 0;
+    }
+
     char clob_filename[512];
     build_clob_filename(cur->col_names[col_idx], cur->abs_rownum, clob_index,
                          clob_filename, sizeof(clob_filename), ctx);
@@ -1370,9 +1475,11 @@ static void oracle_select_close(db_select_cursor_t *cursor)
  * instead of assuming ctx->select_logger - see dml_execute()'s doc
  * comment in db_driver.h for why that assumption doesn't hold for a
  * function with more than one eventual caller. */
+/* Evaluates status once - see ORACLE_CHECK_OCI (Stage 5). */
 #define ORACLE_CHECK_OCI_LOG(ctx, logger, status) \
     do { \
-        if ((status) != OCI_SUCCESS && (status) != OCI_SUCCESS_WITH_INFO) { \
+        sword _chk_st = (status); \
+        if (_chk_st != OCI_SUCCESS && _chk_st != OCI_SUCCESS_WITH_INFO) { \
             text errbuf[512]; sb4 errcode = 0; \
             OCIErrorGet((ctx)->errhp, 1, NULL, &errcode, errbuf, \
                         sizeof(errbuf), OCI_HTYPE_ERROR); \

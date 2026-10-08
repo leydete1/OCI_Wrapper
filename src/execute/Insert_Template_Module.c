@@ -1,33 +1,31 @@
 /*
- * OCI_Insert_Template_Module.c
+ * Insert_Template_Module.c
  *
  * Stage 1 - Insert Template Builder
  * ----------------------------------
- * Queries ALL_TAB_COLUMNS for the requested table and returns a
- * fully-formed <Insert Template> XML with one <field> block per
- * column.  The <insert_value> element for each column is left empty
- * for the caller / Stage-2 to populate.
+ * Returns a fully-formed <Insert_Template> XML for the requested table,
+ * with one <field> block per column in column order. The
+ * <insert_value> element for each column is left empty (or filled from
+ * the insert_default_* ini settings) for the caller to populate.
  *
- * Design notes
- * ------------
- *  - Green-field module; does NOT touch execute_query_batch().
- *  - Uses the same oci_context_t / logger_t / xml_builder_t types as
- *    the rest of the project.
- *  - ALL_TAB_COLUMNS is used (accessible for own-schema tables and any
- *    table on which SELECT privilege exists).  Switch to DBA_TAB_COLUMNS
- *    for DBA-level callers if needed.
- *  - Column rows are returned in COLUMN_ID order so the template
- *    matches the physical column order of the table.
- *  - DATA_DEFAULT can be NULL; we convert that to an empty string.
- *  - Precision / scale of -1 means "not applicable for this type".
+ * Column metadata comes from metadata_cache_get_or_fetch(), which on a
+ * miss calls get_request_metadata() -> the driver's describe_table
+ * (Stage 4a). This module makes no database calls of its own.
+ *
+ * NOTE (2026-10-08): get_insert_template() and the rest of this
+ * feature currently have no callers - see the dialect extraction
+ * proposal, Open items. The unused OCI error macro that used to sit
+ * here (CHECK_OCI_TMPL) was removed; it was never referenced.
  *
  * XML output layout (one <field> block per column)
  * -------------------------------------------------
- *  <Insert Template>
+ *  <Insert_Template>
  *    <operation>INSERT</operation>
- *    <table_name>OCI_TEST_FIELDS</table_name>
- *    <row>
+ *    <table_name>MY_TABLE</table_name>
+ *    <owner>MY_SCHEMA</owner>
+ *    <row number="1">
  *      <field>
+ *        <field_number>1</field_number>
  *        <field_name>NUMBER_COL</field_name>
  *        <field_type>NUMBER</field_type>
  *        <field_length>22</field_length>
@@ -39,7 +37,8 @@
  *      </field>
  *      ...
  *    </row>
- *  </Insert Template>
+ *    <column_count>N</column_count>
+ *  </Insert_Template>
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -57,26 +56,6 @@
 #include "Insert_Template_Module.h"
 #include "XML_Helper.h"
 #include "logger.h"
-
-/* ------------------------------------------------------------------ */
-/*  Local OCI error macro (same pattern as the rest of the project)    */
-/* ------------------------------------------------------------------ */
-#define CHECK_OCI_TMPL(errhp, status, ctx, label)                       \
-    do {                                                                 \
-        if ((status) != OCI_SUCCESS &&                                  \
-            (status) != OCI_SUCCESS_WITH_INFO)                          \
-        {                                                                \
-            text   _errbuf[512];                                         \
-            sb4    _errcode = 0;                                         \
-            OCIErrorGet((errhp), 1, NULL, &_errcode,                    \
-                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);     \
-            logger_write((ctx)->logger, LOG_ERROR, __func__, 0,         \
-                         "OCI Error %d: %s", _errcode,                  \
-                         (char *)_errbuf);                               \
-            rc = -1;                                                     \
-            goto label;                                                  \
-        }                                                                \
-    } while (0)
 
 /* ------------------------------------------------------------------ */
 /*  Internal limits                                                     */
@@ -335,14 +314,12 @@ static void emit_field_xml(xml_builder_t          *xml,
 }
 
 /* ==================================================================
-
-/* ==================================================================
  *  get_insert_template
  *  Main Stage-1 entry point.
  *
  *  Calls get_request_metadata() to populate column metadata, then
  *  builds the <Insert_Template> XML from the results.
- *  All OCI metadata work is now owned by OCI_Table_Metadata_Module.
+ *  The metadata itself comes from the driver (describe_table).
  * ================================================================== */
 xml_builder_t *get_insert_template(oci_context_t            *ctx,
                                     const template_request_t *req)

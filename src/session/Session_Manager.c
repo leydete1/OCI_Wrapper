@@ -1004,7 +1004,6 @@ int session_reconcile_orphans(oci_context_t *ctx, int *orphan_count)
     int found  = 0;
     int closed = 0;
     int failed = 0;
-    printf("\nHere 8");
 
     if (cfg.xml && cfg.xml->OUTPUT_XML)
     {

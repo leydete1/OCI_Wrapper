@@ -5,6 +5,10 @@
  * ---------------------------------------------------------------------
  * See OCI_Authz_Manager.h and Security_Module_Design_Specification.docx
  * Section 6.4/6.6 for the full design description.
+ *
+ * Oracle dialect extraction, Stage 5 (2026-10-08): the permission
+ * query in authz_build_permission_cache() runs through the driver's
+ * select cursor with the user id bound - no OCI calls here any more.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -18,27 +22,8 @@
 #include "logger.h"
 #include "metrics.h"          /* metrics_record_t, metrics_now_us() - 2026-09-01 */
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() */
-
-/* Same shape as OCI_Table_Metadata_Module.c's own CHECK_OCI_META and
- * OCI_Auth_Manager.c's own CHECK_OCI_AUTH - logs to ctx->security_logger
- * instead, matching this file's own logging convention (authorization
- * decisions and their DB-side plumbing both belong in the same log as
- * authentication decisions, not a separate one).                      */
-#define CHECK_OCI_AUTHZ(errhp, status, ctx, label)                      \
-    do {                                                                \
-        if ((status) != OCI_SUCCESS &&                                  \
-            (status) != OCI_SUCCESS_WITH_INFO)                          \
-        {                                                                \
-            text _errbuf[512];                                          \
-            sb4  _errcode = 0;                                          \
-            OCIErrorGet((errhp), 1, NULL, &_errcode,                    \
-                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);      \
-            logger_write((ctx)->security_logger, LOG_ERROR, __func__, 0,\
-                         "OCI Error %d: %s", _errcode, (char *)_errbuf); \
-            db_failure = 1;                                             \
-            goto label;                                                 \
-        }                                                                \
-    } while (0)
+#include "db_driver.h"        /* Stage 5 - select cursor, dialect   */
+#include "Resultset_Builder.h" /* resultset_free()                  */
 
 /* Comma-separated PERMISSION_CODE list buffer size - generous enough
  * for any realistic number of permissions per user (PERMISSION_CODE
@@ -58,78 +43,115 @@ int authz_build_permission_cache(oci_context_t *ctx,
     if (!ctx || !session_id || !session_id[0] || user_id <= 0)
         return AUTHZ_ERR_INVALID_ARG;
 
-    int      db_failure = 0;
-    OCIStmt *stmt = NULL;
+    /* Stage 5 (2026-10-08): runs through the driver's select cursor,
+     * user_id bound by position (placeholder from the dialect). The
+     * driver logs the vendor detail of a failure on ctx->select_logger;
+     * this function adds one line to ctx->security_logger. As before,
+     * a failure stores nothing in the cache. */
+    const db_driver_t *driver = db_driver_get(ctx);
 
-    const char *sql =
+    char ph[16];
+    if (driver->dialect->bind_placeholder(1, ph, sizeof(ph)) != 0)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "dialect bind_placeholder(1) failed");
+        return AUTHZ_ERR_DB_FAILURE;
+    }
+
+    char sql[512];
+    snprintf(sql, sizeof(sql),
         "SELECT p.PERMISSION_CODE "
         "FROM   USER_ROLE ur "
         "JOIN   ROLE_PERMISSION rp ON rp.ROLE_ID = ur.ROLE_ID "
         "JOIN   PERMISSION p ON p.PERMISSION_ID = rp.PERMISSION_ID "
-        "WHERE  ur.USER_ID = :user_id "
-        "ORDER BY p.PERMISSION_CODE";
+        "WHERE  ur.USER_ID = %s "
+        "ORDER BY p.PERMISSION_CODE", ph);
 
-    CHECK_OCI_AUTHZ(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)sql, (ub4)strlen(sql),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
-        ctx, Cleanup);
+    char user_id_bind[16];
+    snprintf(user_id_bind, sizeof(user_id_bind), "%d", user_id);
+    const char *binds[1] = { user_id_bind };
 
-    OCIBind *bind_userid = NULL;
-    CHECK_OCI_AUTHZ(ctx->errhp,
-        OCIBindByName(stmt, &bind_userid, ctx->errhp,
-                      (text *)":user_id", -1,
-                      &user_id, sizeof(user_id),
-                      SQLT_INT, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
+    db_select_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql              = sql;
+    req.fetch_array_size = (ctx->ini && ctx->ini->query_fetch_batch_size > 0)
+                           ? ctx->ini->query_fetch_batch_size : 50;
+    req.bind_count       = 1;
+    req.bind_values      = binds;
+    req.text_lobs_inline = 0;   /* no LOB columns */
 
-    char permission_code[101];
-    OCIDefine *def_permission_code = NULL;
-    CHECK_OCI_AUTHZ(ctx->errhp,
-        OCIDefineByPos(stmt, &def_permission_code, ctx->errhp, 1,
-                       permission_code, sizeof(permission_code),
-                       SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
+    db_select_cursor_t *cursor     = NULL;
+    db_column_meta_t   *columns    = NULL;
+    int                 col_count  = 0;
+    int                 batch_size = 0;
 
-    CHECK_OCI_AUTHZ(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 0, 0, NULL, NULL,
-                       OCI_DEFAULT),
-        ctx, Cleanup);
+    if (driver->select_open(ctx, &req, &cursor, &columns,
+                            &col_count, &batch_size) != 0)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "permission query failed for user_id=%d (select_open) "
+                     "- see the select log for the database error",
+                     user_id);
+        return AUTHZ_ERR_DB_FAILURE;
+    }
 
     char permission_list[AUTHZ_PERMISSION_LIST_BUF_SIZE];
     permission_list[0] = '\0';
     size_t list_len = 0;
     int permission_count = 0;
     int truncated = 0;
+    int fetch_failed = 0;
 
-    for (;;)
+    while (!truncated)
     {
-        sword fetch_rc = OCIStmtFetch2(stmt, ctx->errhp, 1, OCI_FETCH_NEXT,
-                                        0, OCI_DEFAULT);
-        if (fetch_rc == OCI_NO_DATA)
-            break;
-        if (fetch_rc != OCI_SUCCESS && fetch_rc != OCI_SUCCESS_WITH_INFO)
-            CHECK_OCI_AUTHZ(ctx->errhp, fetch_rc, ctx, Cleanup);
+        resultset_t *rs   = NULL;
+        int          rows = 0;
 
-        size_t code_len = strlen(permission_code);
-        /* +1 for the comma separator between entries (not needed
-         * before the very first entry, accounted for below).        */
-        size_t needed = code_len + (list_len > 0 ? 1 : 0);
-
-        if (list_len + needed >= sizeof(permission_list))
+        if (driver->select_fetch_batch(cursor, &rs, &rows, NULL) != 0)
         {
-            truncated = 1;
+            fetch_failed = 1;
             break;
         }
+        if (rows == 0)
+            break;
 
-        if (list_len > 0)
+        for (int r = 0; r < rows && !truncated; r++)
         {
-            permission_list[list_len++] = ',';
+            const char *permission_code = rs->records[r].fields[0].value;
+            size_t code_len = strlen(permission_code);
+            /* +1 for the comma separator between entries (not needed
+             * before the very first entry, accounted for below).        */
+            size_t needed = code_len + (list_len > 0 ? 1 : 0);
+
+            if (list_len + needed >= sizeof(permission_list))
+            {
+                truncated = 1;
+                break;
+            }
+
+            if (list_len > 0)
+            {
+                permission_list[list_len++] = ',';
+            }
+            memcpy(permission_list + list_len, permission_code, code_len);
+            list_len += code_len;
+            permission_list[list_len] = '\0';
+            permission_count++;
         }
-        memcpy(permission_list + list_len, permission_code, code_len);
-        list_len += code_len;
-        permission_list[list_len] = '\0';
-        permission_count++;
+        resultset_free(rs);
+    }
+
+    driver->select_close(cursor);
+    free(columns);
+
+    if (fetch_failed || col_count != 1)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "permission query failed for user_id=%d (%s) - "
+                     "nothing cached", user_id,
+                     fetch_failed ? "fetch - see the select log"
+                                  : "unexpected column count");
+        return AUTHZ_ERR_DB_FAILURE;
     }
 
     if (truncated)
@@ -162,9 +184,7 @@ int authz_build_permission_cache(oci_context_t *ctx,
                      truncated ? " (truncated)" : "");
     }
 
-Cleanup:
-    if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-    return db_failure ? AUTHZ_ERR_DB_FAILURE : AUTHZ_OK;
+    return AUTHZ_OK;
 }
 
 /* ================================================================== */

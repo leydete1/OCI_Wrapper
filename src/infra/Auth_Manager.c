@@ -11,6 +11,17 @@
  * ldap_auth_helper.h/.c (deliberately isolated from this file - see
  * that header's own comment on why, re: this project's pre-existing
  * Oracle ldap.h vs OpenLDAP's ldap.h).
+ *
+ * Oracle dialect extraction, Stage 5 (2026-10-08): no OCI calls here
+ * any more. The APP_USER x AUTH_SOURCE lookup runs through the
+ * driver's select cursor (select_open() with a bound username and
+ * text_lobs_inline for the CONFIGURATION CLOB); the two APP_USER
+ * updates run through dml_execute() and commit through
+ * tx_commit_with_retry(). Bind placeholders and the server clock come
+ * from the driver's dialect (bind_placeholder(), now_expr()). These
+ * are deliberately NOT routed through execute_query_batch()/
+ * execute_update_batch(): those write their own AUDIT_TRAIL rows,
+ * which would duplicate the explicit audit_trail_insert() calls below.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -33,6 +44,10 @@
 #include "metrics_writer.h"               /* metrics_finalise_and_enqueue() */
 #include "logger.h"
 #include "ini_reader.h"                   /* app_config_t - ctx->ini->auth_* */
+#include "db_driver.h"                    /* Stage 5 - select cursor,
+                                            * dml_execute(), dialect     */
+#include "Resultset_Builder.h"            /* resultset_free()            */
+#include "Transaction_Manager.h"          /* tx_commit_with_retry()      */
 
 /* NOTE (2026-08-27): auth_max_failed_attempts is now read from
  * ctx->ini->auth_max_failed_attempts (ini_reader.h/.c, config.ini) -
@@ -40,24 +55,87 @@
  * remains from the previous revision of this file.                    */
 
 /* ------------------------------------------------------------------ */
-/*  OCI error macro - same shape as OCI_Table_Metadata_Module.c's own  */
-/*  CHECK_OCI_META, logging to ctx->security_logger instead.           */
+/*  Stage 5 helpers (2026-10-08) - replace the CHECK_OCI_AUTH macro.    */
 /* ------------------------------------------------------------------ */
-#define CHECK_OCI_AUTH(errhp, status, ctx, label)                       \
-    do {                                                                \
-        if ((status) != OCI_SUCCESS &&                                  \
-            (status) != OCI_SUCCESS_WITH_INFO)                          \
-        {                                                                \
-            text _errbuf[512];                                          \
-            sb4  _errcode = 0;                                          \
-            OCIErrorGet((errhp), 1, NULL, &_errcode,                    \
-                        _errbuf, sizeof(_errbuf), OCI_HTYPE_ERROR);      \
-            logger_write((ctx)->security_logger, LOG_ERROR, __func__, 0,\
-                         "OCI Error %d: %s", _errcode, (char *)_errbuf); \
-            db_failure = 1;                                             \
-            goto label;                                                 \
-        }                                                                \
-    } while (0)
+
+/* Bind placeholder for 1-based position pos, from the driver's dialect
+ * (Oracle ":1"). Logs and returns -1 on failure. */
+static int auth_placeholder(oci_context_t *ctx, int pos,
+                            char *out, size_t out_max)
+{
+    if (db_driver_get(ctx)->dialect->bind_placeholder(pos, out, out_max) != 0)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "dialect bind_placeholder(%d) failed", pos);
+        return -1;
+    }
+    return 0;
+}
+
+/* Whole number from a fetched field; "" (NULL) and junk are errors. */
+static int auth_parse_int(const char *text, int *out)
+{
+    char *end = NULL;
+    long  v;
+    if (!text || !text[0]) return -1;
+    v = strtol(text, &end, 10);
+    while (end && *end == ' ') end++;
+    if (end == text || (end && *end != '\0')) return -1;
+    *out = (int)v;
+    return 0;
+}
+
+/* Copies src into dst[dst_size]; -1 (dst untouched) if it does not fit. */
+static int auth_copy(char *dst, size_t dst_size, const char *src)
+{
+    size_t n = strlen(src);
+    if (n >= dst_size) return -1;
+    memcpy(dst, src, n + 1);
+    return 0;
+}
+
+/*
+ * auth_update_and_commit()
+ *
+ * Runs one APP_USER UPDATE through dml_execute() and commits it through
+ * tx_commit_with_retry() - the same commit path, retry policy and log
+ * lines as every other standalone commit (Stage 3/3c). Before Stage 5
+ * the commit was a bare OCITransCommit() whose result was never
+ * checked. The driver logs the vendor error detail on
+ * ctx->security_logger.
+ *
+ * If the commit fails, the transaction is rolled back (best effort, a
+ * no-op if the server already did) so that no uncommitted APP_USER
+ * change is left on this session for a later commit to pick up.
+ *
+ * Returns 0 committed, -1 the UPDATE failed, -2 the commit failed.
+ */
+static int auth_update_and_commit(oci_context_t *ctx, const char *sql,
+                                  const char **bind_values, int bind_count)
+{
+    const db_driver_t *driver = db_driver_get(ctx);
+
+    db_dml_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql         = sql;
+    req.bind_count  = bind_count;
+    req.bind_values = bind_values;
+
+    int rows = 0;
+    if (driver->dml_execute(ctx, ctx->security_logger, &req, &rows,
+                            NULL, 0) != 0)
+        return -1;
+
+    if (tx_commit_with_retry(ctx, ctx->security_logger,
+                             ctx->ini ? ctx->ini->tx_max_retries    : 0,
+                             ctx->ini ? ctx->ini->tx_retry_delay_ms : 0,
+                             NULL) != 0)
+    {
+        driver->rollback(ctx, ctx->security_logger);
+        return -2;
+    }
+    return 0;
+}
 
 /* One row of the APP_USER x AUTH_SOURCE lookup. */
 typedef struct {
@@ -85,175 +163,137 @@ typedef struct {
  * Specification.docx Section 4.2). Returns 1 if a row was found (out
  * populated), 0 if not found (out untouched, not an error - "no such
  * user" is folded into AUTH_ERR_DENIED by the caller), -1 on a genuine
- * OCI/DB failure.
+ * DB failure.
+ *
+ * Stage 5 (2026-10-08): runs through the driver's select cursor. The
+ * username is bound, never concatenated. The cursor reports a NULL
+ * column as "", so DISPLAY_NAME / PASSWORD_HASH / CONFIGURATION (the
+ * only nullable columns read here) need no indicators - the ORA-01405
+ * fixes this function used to carry are now the driver's job.
+ * CONFIGURATION is read with text_lobs_inline, so the JSON comes back
+ * in the field itself (no CLOB file is written); "" (NULL or empty)
+ * leaves ldap_configuration NULL, exactly as before. The driver logs
+ * the vendor detail of a failure on ctx->select_logger; this function
+ * adds one line to ctx->security_logger.
  */
 static int lookup_user(oci_context_t *ctx, const char *username,
                         auth_user_row_t *out)
 {
-    int    rc = 0;
-    int    db_failure = 0;
-    OCIStmt *stmt = NULL;
-    OCILobLocator *config_lob = NULL;
-    sb2 config_ind = 0;   /* OCI NULL indicator for CONFIGURATION - see
-                            * fix below: -1 means the column was NULL,
-                            * which is the normal case for LOCAL rows */
-    sb2 display_name_ind = 0;   /* DISPLAY_NAME is nullable in the schema */
-    sb2 password_hash_ind = 0;  /* PASSWORD_HASH is NULL by design for
-                                  * every non-LOCAL (LDAP/AD) user -
-                                  * Security_Module_Design_Specification
-                                  * .docx Section 4.2. Both of these
-                                  * need an indicator for the same
-                                  * reason CONFIGURATION does - see that
-                                  * fix's own comment for why omitting
-                                  * one throws ORA-01405 rather than
-                                  * just fetching a NULL.              */
-
     out->ldap_configuration = NULL;
 
-    const char *sql =
+    const db_driver_t *driver = db_driver_get(ctx);
+
+    char ph[16];
+    if (auth_placeholder(ctx, 1, ph, sizeof(ph)) != 0)
+        return -1;
+
+    char sql[512];
+    snprintf(sql, sizeof(sql),
         "SELECT u.USER_ID, u.DISPLAY_NAME, u.PASSWORD_HASH, "
         "       u.ENABLED, u.LOCKED, u.FAILED_ATTEMPTS, s.SOURCE_TYPE, "
         "       s.CONFIGURATION "
         "FROM   APP_USER u "
         "JOIN   AUTH_SOURCE s ON s.AUTH_SOURCE_ID = u.AUTH_SOURCE_ID "
-        "WHERE  UPPER(u.USERNAME) = UPPER(:username)";
+        "WHERE  UPPER(u.USERNAME) = UPPER(%s)", ph);
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDescriptorAlloc(ctx->envhp, (void **)&config_lob,
-                           OCI_DTYPE_LOB, 0, NULL),
-        ctx, Cleanup);
+    const char *binds[1] = { username };
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)sql, (ub4)strlen(sql),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
-        ctx, Cleanup);
+    db_select_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql              = sql;
+    req.max_rows         = 1;
+    req.fetch_array_size = 1;
+    req.bind_count       = 1;
+    req.bind_values      = binds;
+    req.text_lobs_inline = 1;
 
-    OCIBind *bind_username = NULL;
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIBindByName(stmt, &bind_username, ctx->errhp,
-                      (text *)":username", -1,
-                      (dvoid *)username, (sb4)(strlen(username) + 1),
-                      SQLT_STR, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
+    db_select_cursor_t *cursor     = NULL;
+    db_column_meta_t   *columns    = NULL;
+    int                 col_count  = 0;
+    int                 batch_size = 0;
 
-    OCIDefine *def_user_id         = NULL;
-    OCIDefine *def_display_name    = NULL;
-    OCIDefine *def_password_hash   = NULL;
-    OCIDefine *def_enabled         = NULL;
-    OCIDefine *def_locked          = NULL;
-    OCIDefine *def_failed_attempts = NULL;
-    OCIDefine *def_source_type     = NULL;
-    OCIDefine *def_config          = NULL;
+    if (driver->select_open(ctx, &req, &cursor, &columns,
+                            &col_count, &batch_size) != 0)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "user lookup failed for username='%s' (select_open) "
+                     "- see the select log for the database error",
+                     username);
+        return -1;
+    }
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_user_id, ctx->errhp, 1,
-                       &out->user_id, sizeof(out->user_id),
-                       SQLT_INT, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_display_name, ctx->errhp, 2,
-                       out->display_name, sizeof(out->display_name),
-                       SQLT_STR, &display_name_ind, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_password_hash, ctx->errhp, 3,
-                       out->password_hash, sizeof(out->password_hash),
-                       SQLT_STR, &password_hash_ind, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_enabled, ctx->errhp, 4,
-                       out->enabled, sizeof(out->enabled),
-                       SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_locked, ctx->errhp, 5,
-                       out->locked, sizeof(out->locked),
-                       SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_failed_attempts, ctx->errhp, 6,
-                       &out->failed_attempts, sizeof(out->failed_attempts),
-                       SQLT_INT, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_source_type, ctx->errhp, 7,
-                       out->source_type, sizeof(out->source_type),
-                       SQLT_STR, NULL, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIDefineByPos(stmt, &def_config, ctx->errhp, 8,
-                       &config_lob, sizeof(config_lob),
-                       SQLT_CLOB, &config_ind, NULL, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
+    int          rc   = -1;
+    resultset_t *rs   = NULL;
+    int          rows = 0;
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 0, 0, NULL, NULL,
-                       OCI_DEFAULT),
-        ctx, Cleanup);
+    if (col_count != 8)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "user lookup returned %d columns, expected 8",
+                     col_count);
+        goto Done;
+    }
 
-    sword fetch_rc = OCIStmtFetch2(stmt, ctx->errhp, 1, OCI_FETCH_NEXT,
-                                    0, OCI_DEFAULT);
-    if (fetch_rc == OCI_NO_DATA)
+    if (driver->select_fetch_batch(cursor, &rs, &rows, NULL) != 0)
+    {
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "user lookup failed for username='%s' (fetch) - see "
+                     "the select log for the database error", username);
+        goto Done;
+    }
+
+    if (rows == 0)
     {
         rc = 0;   /* no such user - not a DB failure */
+        goto Done;
     }
-    else if (fetch_rc == OCI_SUCCESS || fetch_rc == OCI_SUCCESS_WITH_INFO)
+
     {
-        rc = 1;
+        const resultset_field_t *f = rs->records[0].fields;
 
-        /* CONFIGURATION is NULL for LOCAL rows (Security_Module_
-         * Design_Specification.docx Section 4.1) - config_ind == -1
-         * is OCI's NULL indicator for that column on this fetch (see
-         * the OCIDefineByPos above). A NULL LOB locator must not be
-         * passed to OCILobGetLength()/OCILobRead() at all - doing so
-         * on a NULL column is exactly what raised ORA-01405 before
-         * this indicator was added.                                  */
-        if (config_ind != -1)
+        if (auth_parse_int(f[0].value, &out->user_id) != 0 ||
+            auth_parse_int(f[5].value, &out->failed_attempts) != 0)
         {
-            ub4 config_len = 0;
-            OCILobGetLength(ctx->svchp, ctx->errhp, config_lob, &config_len);
+            logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                         "user lookup for username='%s': USER_ID '%s' or "
+                         "FAILED_ATTEMPTS '%s' is not a whole number",
+                         username, f[0].value, f[5].value);
+            goto Done;
+        }
 
-            if (config_len > 0)
+        /* A value too long for its buffer is an error, never cut short
+         * (the old OCI defines raised ORA-01406 in the same case). The
+         * schema sizes all fit: VARCHAR2(255) / (1) / (20).            */
+        if (auth_copy(out->display_name,  sizeof(out->display_name),  f[1].value) ||
+            auth_copy(out->password_hash, sizeof(out->password_hash), f[2].value) ||
+            auth_copy(out->enabled,       sizeof(out->enabled),       f[3].value) ||
+            auth_copy(out->locked,        sizeof(out->locked),        f[4].value) ||
+            auth_copy(out->source_type,   sizeof(out->source_type),   f[6].value))
+        {
+            logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                         "user lookup for username='%s': a column value is "
+                         "longer than its buffer", username);
+            goto Done;
+        }
+
+        if (f[7].value[0])
+        {
+            out->ldap_configuration = strdup(f[7].value);
+            if (!out->ldap_configuration)
             {
-                char *buf = malloc((size_t)config_len + 1);
-                if (buf)
-                {
-                    ub4 offset = 1;
-                    ub4 remaining = config_len;
-                    char *wp = buf;
-                    while (remaining > 0)
-                    {
-                        ub4 amount = remaining;
-                        sword lob_rc = OCILobRead(ctx->svchp, ctx->errhp,
-                                                   config_lob, &amount, offset,
-                                                   wp, remaining, NULL, NULL,
-                                                   0, SQLCS_IMPLICIT);
-                        if (lob_rc != OCI_SUCCESS &&
-                            lob_rc != OCI_SUCCESS_WITH_INFO)
-                            break;   /* leave whatever was read so far -
-                                      * caller treats a short/garbled JSON
-                                      * parse failure the same as "no
-                                      * configuration", logged, not fatal */
-                        wp        += amount;
-                        offset    += amount;
-                        remaining -= amount;
-                    }
-                    *wp = '\0';
-                    out->ldap_configuration = buf;
-                }
+                logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                             "strdup failed for AUTH_SOURCE.CONFIGURATION");
+                goto Done;
             }
         }
-    }
-    else
-    {
-        CHECK_OCI_AUTH(ctx->errhp, fetch_rc, ctx, Cleanup);
+        rc = 1;
     }
 
-Cleanup:
-    if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
-    if (config_lob) OCIDescriptorFree(config_lob, OCI_DTYPE_LOB);
-    return db_failure ? -1 : rc;
+Done:
+    if (rs) resultset_free(rs);
+    driver->select_close(cursor);
+    free(columns);
+    return rc;
 }
 
 /*
@@ -319,48 +359,57 @@ static void record_auth_failure(oci_context_t *ctx, int user_id,
                                  int max_failed_attempts)
 {
     int db_failure = 0;
-    OCIStmt *stmt = NULL;
     int new_failed_attempts = current_failed_attempts + 1;
     int should_lock = (new_failed_attempts >= max_failed_attempts);
 
-    const char *sql = should_lock
-        ? "UPDATE APP_USER "
-          "SET    FAILED_ATTEMPTS = :failed_attempts, "
-          "       LOCKED = 'Y', LOCKED_TS = SYSTIMESTAMP, "
-          "       MODIFIED_TS = SYSTIMESTAMP "
-          "WHERE  USER_ID = :user_id"
-        : "UPDATE APP_USER "
-          "SET    FAILED_ATTEMPTS = :failed_attempts, "
-          "       MODIFIED_TS = SYSTIMESTAMP "
-          "WHERE  USER_ID = :user_id";
+    /* Stage 5: placeholders and server clock from the driver's dialect
+     * (Oracle ":1"/":2" and SYSTIMESTAMP - same statement as before). */
+    char p1[16], p2[16];
+    if (auth_placeholder(ctx, 1, p1, sizeof(p1)) != 0 ||
+        auth_placeholder(ctx, 2, p2, sizeof(p2)) != 0)
+    {
+        db_failure = 1;
+        goto Cleanup;
+    }
+    const char *now = db_driver_get(ctx)->dialect->now_expr();
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)sql, (ub4)strlen(sql),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
-        ctx, Cleanup);
+    char sql[512];
+    if (should_lock)
+        snprintf(sql, sizeof(sql),
+            "UPDATE APP_USER "
+            "SET    FAILED_ATTEMPTS = %s, "
+            "       LOCKED = 'Y', LOCKED_TS = %s, "
+            "       MODIFIED_TS = %s "
+            "WHERE  USER_ID = %s", p1, now, now, p2);
+    else
+        snprintf(sql, sizeof(sql),
+            "UPDATE APP_USER "
+            "SET    FAILED_ATTEMPTS = %s, "
+            "       MODIFIED_TS = %s "
+            "WHERE  USER_ID = %s", p1, now, p2);
 
-    OCIBind *bind_failed = NULL;
-    OCIBind *bind_userid = NULL;
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIBindByName(stmt, &bind_failed, ctx->errhp,
-                      (text *)":failed_attempts", -1,
-                      &new_failed_attempts, sizeof(new_failed_attempts),
-                      SQLT_INT, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIBindByName(stmt, &bind_userid, ctx->errhp,
-                      (text *)":user_id", -1,
-                      &user_id, sizeof(user_id),
-                      SQLT_INT, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
+    char failed_str[16], user_id_bind[16];
+    snprintf(failed_str,   sizeof(failed_str),   "%d", new_failed_attempts);
+    snprintf(user_id_bind, sizeof(user_id_bind), "%d", user_id);
+    const char *binds[2] = { failed_str, user_id_bind };
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL,
-                       OCI_DEFAULT),
-        ctx, Cleanup);
-
-    OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+    int upd_rc = auth_update_and_commit(ctx, sql, binds, 2);
+    if (upd_rc == -2)
+    {
+        /* Stage 5: the change was not saved, so no audit row is
+         * written for it (before Stage 5 the commit was unchecked and
+         * the audit row was written regardless). */
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "record_auth_failure: commit failed for user_id=%d "
+                     "- FAILED_ATTEMPTS not persisted, no AUDIT_TRAIL row "
+                     "written", user_id);
+        return;
+    }
+    if (upd_rc != 0)
+    {
+        db_failure = 1;
+        goto Cleanup;
+    }
 
     /* Stage 4: AUDIT_TRAIL row for this change - see this function's
      * own doc comment above for why audit_trail_insert() is called
@@ -451,7 +500,6 @@ static void record_auth_failure(oci_context_t *ctx, int user_id,
                      user_id, new_failed_attempts);
 
 Cleanup:
-    if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
     if (db_failure)
         logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
                      "record_auth_failure: DB update failed for "
@@ -481,34 +529,43 @@ static void record_auth_success(oci_context_t *ctx, int user_id,
                                  int previous_failed_attempts)
 {
     int db_failure = 0;
-    OCIStmt *stmt = NULL;
 
-    const char *sql =
+    /* Stage 5: placeholder and server clock from the driver's dialect. */
+    char p1[16];
+    if (auth_placeholder(ctx, 1, p1, sizeof(p1)) != 0)
+    {
+        db_failure = 1;
+        goto Cleanup;
+    }
+    const char *now = db_driver_get(ctx)->dialect->now_expr();
+
+    char sql[512];
+    snprintf(sql, sizeof(sql),
         "UPDATE APP_USER "
-        "SET    FAILED_ATTEMPTS = 0, LAST_LOGIN_TS = SYSTIMESTAMP, "
-        "       MODIFIED_TS = SYSTIMESTAMP "
-        "WHERE  USER_ID = :user_id";
+        "SET    FAILED_ATTEMPTS = 0, LAST_LOGIN_TS = %s, "
+        "       MODIFIED_TS = %s "
+        "WHERE  USER_ID = %s", now, now, p1);
 
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtPrepare2(ctx->svchp, &stmt, ctx->errhp,
-                        (text *)sql, (ub4)strlen(sql),
-                        NULL, 0, OCI_NTV_SYNTAX, OCI_DEFAULT),
-        ctx, Cleanup);
+    char user_id_bind[16];
+    snprintf(user_id_bind, sizeof(user_id_bind), "%d", user_id);
+    const char *binds[1] = { user_id_bind };
 
-    OCIBind *bind_userid = NULL;
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIBindByName(stmt, &bind_userid, ctx->errhp,
-                      (text *)":user_id", -1,
-                      &user_id, sizeof(user_id),
-                      SQLT_INT, NULL, NULL, NULL, 0, NULL, OCI_DEFAULT),
-        ctx, Cleanup);
-
-    CHECK_OCI_AUTH(ctx->errhp,
-        OCIStmtExecute(ctx->svchp, stmt, ctx->errhp, 1, 0, NULL, NULL,
-                       OCI_DEFAULT),
-        ctx, Cleanup);
-
-    OCITransCommit(ctx->svchp, ctx->errhp, OCI_DEFAULT);
+    int upd_rc = auth_update_and_commit(ctx, sql, binds, 1);
+    if (upd_rc == -2)
+    {
+        /* Stage 5: not saved, so no audit row - see record_auth_failure(). */
+        logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
+                     "record_auth_success: commit failed for user_id=%d "
+                     "- FAILED_ATTEMPTS/LAST_LOGIN_TS not persisted, no "
+                     "AUDIT_TRAIL row written (session was still created)",
+                     user_id);
+        return;
+    }
+    if (upd_rc != 0)
+    {
+        db_failure = 1;
+        goto Cleanup;
+    }
 
     /* Stage 4: only audit this when it's actually meaningful - a
      * login that resets a genuine prior failure count, not every
@@ -566,7 +623,6 @@ static void record_auth_success(oci_context_t *ctx, int user_id,
     }
 
 Cleanup:
-    if (stmt) OCIStmtRelease(stmt, ctx->errhp, NULL, 0, OCI_DEFAULT);
     if (db_failure)
         logger_write(ctx->security_logger, LOG_ERROR, __func__, 0,
                      "record_auth_success: DB update failed for "

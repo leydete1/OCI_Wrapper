@@ -71,13 +71,11 @@
  * unpooled ctx is today - this interface does not change that
  * precondition, only where the call sites live.
  *
- * BINDS - deliberately NOT in db_select_request_t yet.
- * The current select path (execute_query_batch) builds a fully-substituted
- * SQL string and has no OCIBindByName/OCIBindByPos calls anywhere today.
- * Parameterized execute-with-binds is real future scope (notes doc,
- * section 2) but there is no existing behavior to preserve for it yet,
- * so it is left out here rather than guessed at. Add a bind_params
- * field to db_select_request_t when that work actually starts.
+ * BINDS - added to db_select_request_t in Stage 5 (2026-10-08) for the
+ * Security module's lookups, which filter on caller-supplied values
+ * (a username at login) that must be bound, never concatenated into
+ * the SQL. execute_query_batch() still builds a fully-substituted SQL
+ * string and sets bind_count = 0. See db_select_request_t below.
  *
  * ASYNC BATCH CALLBACK - deliberately NOT in scope for this pass either.
  * execute_config_t's async_batch_callback (streaming partial resultsets
@@ -149,8 +147,9 @@ extern "C" {
  * wouldn't make sense on a SQL Server driver too, it does not belong
  * here (see ACID TEST above).
  *
- * SQL is expected fully-substituted, matching current behavior - see
- * "BINDS" note above.
+ * sql is either fully-substituted (execute_query_batch(), bind_count 0)
+ * or contains bind placeholders built with the dialect's
+ * bind_placeholder() (Stage 5 - see bind_values below).
  */
 typedef struct {
     const char *sql;              /* fully-substituted SELECT text      */
@@ -169,6 +168,26 @@ typedef struct {
     int         query_timeout;    /* seconds, mirrors
                                       execute_config_t.query_timeout     */
     int         include_column_names; /* mirrors execute_config_t field */
+
+    /* ---- Stage 5 (2026-10-08) ---- */
+    int          bind_count;      /* 0 = no binds                        */
+    const char **bind_values;     /* bound by position 1..bind_count,
+                                     same rules as db_dml_request_t:
+                                     always strings, a NULL entry binds
+                                     SQL NULL, caller-owned. They only
+                                     need to stay valid until
+                                     select_open() returns - the
+                                     statement is executed inside it.   */
+    int          text_lobs_inline; /* 0 (default): a CLOB value is
+                                     written to CLOB_output_dir and the
+                                     field holds its URL, as before.
+                                     1: the CLOB text itself is put in
+                                     the field and no file is written.
+                                     A value that does not fit the
+                                     field (resultset_field_t.value)
+                                     fails the fetch with a logged error
+                                     - it is never cut short. BLOBs are
+                                     unaffected.                         */
 } db_select_request_t;
 
 /*
@@ -631,6 +650,11 @@ typedef struct {
  *   comes up later, but is no longer returned for CLOB/BLOB specifically.
  *   Returns a negative value on any other failure, logged via
  *   ctx->select_logger, same as today.
+ *
+ *   Stage 5 (2026-10-08): binds req->bind_values (if any) before the
+ *   statement is executed, and returns -1 when the execute itself
+ *   fails. Before Stage 5 a failed execute was only logged, select_open()
+ *   still returned 0, and the failure surfaced at the first fetch.
  *
  * select_fetch_batch()
  *   Fetches the cursor's next batch (its actual batch size, from
