@@ -1,27 +1,3 @@
-This is a copy of a conversation between ChatGPT & Anonymous.
-You said:
-Hi. I have 2 bits to do today. I am writing a general oci wrapper for oracle 23ai. Now i have oracle installed and workong on ubuntu24 . Tge laptop has 32gb ram so it is handling it well. First thing i need is a table lets call it oci_field_test.  This table should have one test_field_type_colum for each oracle data type including clob and blob. I will also need an insert statement to insert a test row. For the moment you can leave the blob null and i will adress it last
-
-ChatGPT said:
-
-Great 👍 since you’re targeting Oracle 23ai and building a general OCI wrapper, the best approach is to create a table that covers:
-
-    All scalar SQL types
-
-    Character + national character types
-
-    Date/time types (including time zone variants)
-
-    Interval types
-
-    LOBs (CLOB, NCLOB, BLOB)
-
-    RAW / LONG RAW
-
-    Rowid types
-
-Below is a clean, OCI-friendly test table and a matching insert.
-1️⃣ Create Table: oci_field_test
 
 CREATE TABLE oci_field_test (
     -- Numeric types

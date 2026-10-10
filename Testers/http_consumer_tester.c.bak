@@ -212,73 +212,59 @@ static int write_file(const char *path, const char *data, size_t len)
 }
 
 /* ---------------------------------------------------------------- */
-/*  Splices the real session_id into a fixture body when the body   */
-/*  carries a placeholder. Handles both shapes:                      */
-/*    XML:  <session_id>...</session_id>                            */
-/*    JSON: "session_id":"..."  or  "session_id": "..."             */
+/*  Splices the real session_id into a fixture body, replacing the  */
+/*  "-" placeholder. Handles both shapes:                            */
+/*    XML:  <session_id>-</session_id>                              */
+/*    JSON: "session_id":"-"  or  "session_id": "-"                 */
 /*  Returns a newly malloc'd string; caller frees. Falls back to a  */
-/*  plain strdup of the original if there is no session_id or it is */
-/*  not a placeholder.                                               */
-/*                                                                   */
-/*  2026-10-10 (point 11): the same rule for both formats, the one   */
-/*  this file's header always described - only "-" is a placeholder  */
-/*  and is replaced; any other value is a deliberate test value and  */
-/*  is sent as written. XML already worked this way; JSON replaced   */
-/*  every value, so the two formats of one fixture tested different  */
-/*  things - CheckPermission R1/R2 .xml sent PASTE_REAL_SESSION_ID_  */
-/*  HERE (SESSION_NOT_FOUND) while the .json sent the run's session  */
-/*  (DENIED), and a .json fixture's deliberately bad session id was  */
-/*  silently replaced.                                               */
+/*  plain strdup of the original if no placeholder is found (some    */
+/*  fixtures - e.g. the CREATE_SESSION one itself - carry none).    */
 /* ---------------------------------------------------------------- */
-static int is_session_placeholder(const char *v, size_t n)
-{
-    while (n > 0 && (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r')) { v++; n--; }
-    while (n > 0 && (v[n-1] == ' ' || v[n-1] == '\t' || v[n-1] == '\n' || v[n-1] == '\r')) n--;
-
-    static const char *placeholders[] = { "-" };
-    for (size_t i = 0; i < sizeof(placeholders) / sizeof(placeholders[0]); i++)
-        if (n == strlen(placeholders[i]) && strncmp(v, placeholders[i], n) == 0)
-            return 1;
-    return 0;
-}
-
 static char *inject_session_id(const char *body, const char *session_id, int is_json)
 {
-    const char *value_start = NULL;
-    const char *value_end   = NULL;
+    const char *needle = is_json ? "\"session_id\"" : "<session_id>-</session_id>";
 
     if (!is_json)
     {
-        const char *open = strstr(body, "<session_id>");
-        if (!open) return strdup(body);
-        value_start = open + strlen("<session_id>");
-        value_end   = strstr(value_start, "</session_id>");
-        if (!value_end) return strdup(body);
-    }
-    else
-    {
-        /* find "session_id", then the next quoted value after the
-         * colon - tolerant of "session_id":"x" or "session_id": "x" */
-        const char *key_pos = strstr(body, "\"session_id\"");
-        if (!key_pos) return strdup(body);
-        const char *colon = strchr(key_pos + strlen("\"session_id\""), ':');
-        if (!colon) return strdup(body);
-        value_start = strchr(colon, '"');
-        if (!value_start) return strdup(body);
-        value_start++;                       /* past the opening quote */
-        value_end = strchr(value_start, '"');
-        if (!value_end) return strdup(body);
+        const char *pos = strstr(body, needle);
+        if (!pos) return strdup(body);
+
+        size_t prefix_len = (size_t)(pos - body);
+        size_t suffix_off = prefix_len + strlen(needle);
+
+        size_t new_len = prefix_len + strlen("<session_id>") +
+                          strlen(session_id) + strlen("</session_id>") +
+                          strlen(body + suffix_off) + 1;
+        char *out = malloc(new_len);
+        snprintf(out, new_len, "%.*s<session_id>%s</session_id>%s",
+                 (int)prefix_len, body, session_id, body + suffix_off);
+        return out;
     }
 
-    if (!is_session_placeholder(value_start, (size_t)(value_end - value_start)))
-        return strdup(body);                 /* deliberate test value */
+    /* JSON: find "session_id", then the next quoted value after the
+     * colon, and replace just that value - tolerant of either
+     * "session_id":"-" or "session_id": "-" (optional space). */
+    const char *key_pos = strstr(body, needle);
+    if (!key_pos) return strdup(body);
+
+    const char *colon = strchr(key_pos, ':');
+    if (!colon) return strdup(body);
+
+    const char *value_start = strchr(colon, '"');
+    if (!value_start) return strdup(body);
+    value_start++; /* past the opening quote */
+
+    const char *value_end = strchr(value_start, '"');
+    if (!value_end) return strdup(body);
 
     size_t prefix_len = (size_t)(value_start - body);
-    size_t new_len    = prefix_len + strlen(session_id) + strlen(value_end) + 1;
+    size_t suffix_off  = (size_t)(value_end - body);
+
+    size_t new_len = prefix_len + strlen(session_id) +
+                      strlen(body + suffix_off) + 1;
     char *out = malloc(new_len);
-    if (!out) return strdup(body);
     snprintf(out, new_len, "%.*s%s%s",
-             (int)prefix_len, body, session_id, value_end);
+             (int)prefix_len, body, session_id, body + suffix_off);
     return out;
 }
 
@@ -310,25 +296,20 @@ static int contains_ci(const char *haystack, const char *needle)
  * the first place). Returns a newly malloc'd string; caller frees. */
 static char *normalize_execution_time(const char *body)
 {
-    char *out = malloc(2 * strlen(body) + 2);   /* see point 11 note below */
+    char *out = malloc(strlen(body) + 1);
     size_t out_len = 0;
     const char *p = body;
 
-    /* 2026-10-10 (point 11): session_id is ignored too - a successful
-     * AUTHENTICATE returns a new session_id on every run, so its
-     * response could never match a baseline. No other response
-     * carries one (error envelopes and CHECK_PERMISSION do not). */
     const char *needles[] = {
         "<execution_time_total>", "<execution_time>",
-        "\"execution_time\":",
-        "<session_id>", "\"session_id\":"
+        "\"execution_time\":"
     };
-    const int is_xml_tag[] = { 1, 1, 0, 1, 0 };
+    const int is_xml_tag[] = { 1, 1, 0 };
 
     while (*p)
     {
         int matched = 0;
-        for (int n = 0; n < (int)(sizeof(needles) / sizeof(needles[0])); n++)
+        for (int n = 0; n < 3; n++)
         {
             size_t nlen = strlen(needles[n]);
             if (strncmp(p, needles[n], nlen) == 0)
@@ -522,25 +503,6 @@ static void end_shared_session(CURL *curl)
 /*  Runs one fixture: inject session_id, POST, structural asserts,   */
 /*  baseline compare. Logs its own outcome; updates shared counters. */
 /* ---------------------------------------------------------------- */
-/* 2026-10-10 (point 10): the response of a fixture that does not PASS
- * is kept as <baseline_dir>/<name>.current, beside <name>.baseline, so
- * a difference can be read with diff rather than guessed at. A PASS
- * removes any .current left by an earlier run. */
-static void save_current(const fixture_t *fx, const dyn_buf_t *resp)
-{
-    char path[720];
-    snprintf(path, sizeof(path), "%s/%s.current", g_baseline_dir, fx->name);
-    if (resp->data && write_file(path, resp->data, resp->len) != 0)
-        fprintf(stderr, "[%s] could not write %s\n", fx->name, path);
-}
-
-static void clear_current(const fixture_t *fx)
-{
-    char path[720];
-    snprintf(path, sizeof(path), "%s/%s.current", g_baseline_dir, fx->name);
-    remove(path);   /* usually absent - that is fine */
-}
-
 static void run_one_fixture(CURL *curl, const fixture_t *fx)
 {
     size_t raw_len = 0;
@@ -625,7 +587,6 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
 
     if (!structural_ok)
     {
-        save_current(fx, &resp);   /* point 10 */
         pthread_mutex_lock(&g_stats_mutex);
         g_stat_fail++;
         pthread_mutex_unlock(&g_stats_mutex);
@@ -663,7 +624,6 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
     if (identical)
     {
         printf("[%s] PASS (HTTP %ld)\n", fx->name, status);
-        clear_current(fx);   /* point 10 */
         pthread_mutex_lock(&g_stats_mutex);
         g_stat_pass++;
         pthread_mutex_unlock(&g_stats_mutex);
@@ -674,7 +634,6 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
                "fixture with a known source of run-to-run variance "
                "(DML, EXECUTE_PROCEDURE, or LOB content), not treated "
                "as a failure\n", fx->name, status);
-        save_current(fx, &resp);   /* point 10 */
         pthread_mutex_lock(&g_stats_mutex);
         g_stat_expected_diff++;
         pthread_mutex_unlock(&g_stats_mutex);
@@ -684,7 +643,6 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
         printf("[%s] FAIL - response differs from baseline (HTTP %ld) - "
                "unexpected - no known source of variance for this "
                "fixture\n", fx->name, status);
-        save_current(fx, &resp);   /* point 10 */
         pthread_mutex_lock(&g_stats_mutex);
         g_stat_fail++;
         pthread_mutex_unlock(&g_stats_mutex);

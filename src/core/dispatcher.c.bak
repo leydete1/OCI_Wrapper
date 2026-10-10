@@ -1945,14 +1945,6 @@ int process_xml_file(oci_context_t      *ctx,
                       const char         *session_id_override,
                       response_object_t  *resp)
 {
-    /* 2026-10-10 - start every request with no trace sid. Until the
-     * session_id is known (logger_set_sid() below), this thread's log
-     * lines - the Level 1 parse lines included - carried whatever sid
-     * the thread's previous request left behind, because the HTTP
-     * worker never cleared it (worker.c does). Cleared here so no
-     * caller can leak one into the next request's lines. */
-    logger_clear_sid();
-
     /* xml/len aliases keep the rest of this function's body (which
      * pervasively used these names when it did its own read_file()
      * call) unchanged below - payload is caller-owned now, not
@@ -2039,10 +2031,9 @@ int process_xml_file(oci_context_t      *ctx,
          * thread now that the request's session_id is known - every
          * subsequent logger_write() call on this thread, across every
          * module it touches for the rest of this request, picks it up
-         * automatically. Cleared at the start of this function and by
-         * each worker loop (worker.c, http_worker_pool.c) once the
-         * request is fully done, so it never leaks into the next
-         * request handled by the same thread. */
+         * automatically. Cleared in worker.c once this request is
+         * fully done, so it never leaks into the next request handled
+         * by the same thread. */
         logger_set_sid(new_request.session_id);
 
         int is_json = (new_request.source_format == INPUT_FORMAT_JSON);

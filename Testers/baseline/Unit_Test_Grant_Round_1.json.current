@@ -1,0 +1,1 @@
+{"operation":"GRANT","status":"SUCCESS","executed_ddl":"GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO MIGRATOR_USER;","execution_time":0.012701}

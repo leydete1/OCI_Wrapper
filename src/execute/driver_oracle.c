@@ -155,7 +155,7 @@ static int oracle_health_check(oci_context_t *ctx)
 /*    - oracle_define_columns() (below; was get_multi_metadata() in    */
 /*      Table_Metadata_Module.c until Stage 4a) does the real           */
 /*      OCIParamGet/OCIDefineByPos/OCIDefineArrayOfStruct work. It      */
-/*      still needs the col_blob_locs/clob_loc slots allocated even     */
+/*      still needs the col_blob_locs/clob_locs slots allocated even    */
 /*      for a scalar-only cursor (it has no way to know in advance that */
 /*      none of the columns will be BLOB/CLOB), so those are allocated  */
 /*      below and simply never populated for a pure-scalar result set.  */
@@ -178,7 +178,7 @@ static int oracle_health_check(oci_context_t *ctx)
 /*  column's type via OCIParamGet as it goes, and its BLOB/CLOB branches  */
 /*  already allocate everything a fetch needs (a per-row                 */
 /*  OCILobLocator array for each BLOB column, a                           */
-/*  single shared locator for CLOB). select_open() no longer rejects      */
+/*  locator for each CLOB column). select_open() no longer rejects        */
 /*  these columns - oracle_fetch_blob_field()/oracle_fetch_clob_field()   */
 /*  below (called from select_fetch_batch()) read straight from what      */
 /*  oracle_define_columns() already set up, the same way handle_blob_     */
@@ -246,8 +246,18 @@ struct db_select_cursor_t {
     char           (*col_names)[256];
 
     OCILobLocator ***col_blob_locs;   /* [col][row], row < alloc_batch_size */
-    OCILobLocator   *clob_loc;        /* single shared locator - OCI can't
-                                          array-fetch CLOB, see below      */
+    /* 2026-10-10 - one locator PER CLOB/NCLOB column, [col]; NULL for
+     * every other column. Until now there was one locator shared by
+     * every CLOB column of the statement (carried over unchanged from
+     * get_multi_metadata()): each column's define pointed at the same
+     * address, so on every row the last CLOB column's fetch overwrote
+     * the earlier ones. OCI_FIELD_TEST has CLOB_COL and NCLOB_COL, so
+     * every SELECT * returned CLOB_COL as "" (when NCLOB_COL was NULL -
+     * OCILobGetLength failed on the reset locator, logged as a stale
+     * ORA-01403, and the length stayed 0) or as NCLOB_COL's text. Still
+     * one row per fetch - OCI cannot array-fetch these (see the CLOB
+     * downgrade in oracle_select_describe_and_define()). */
+    OCILobLocator  **clob_locs;
 
     /* v2 - persist across every select_fetch_batch() call on this
      * cursor, exactly like execute_query_batch()'s own abs_rownum/
@@ -305,8 +315,8 @@ struct db_select_cursor_t {
      * column used to be defined against the address of a field in that
      * request struct, and OCI reads a define address at OCIStmtFetch2
      * time, so the struct had to live as long as the cursor.
-     * oracle_define_columns() now defines it against &cur->clob_loc - a
-     * field of this heap-allocated struct - so the address OCI holds is
+     * oracle_define_columns() now defines it against &cur->clob_locs[col]
+     * - owned by this heap-allocated struct - so the address OCI holds is
      * valid for exactly the cursor's lifetime by construction, with no
      * separate request struct to keep alive. */
 };
@@ -367,8 +377,13 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
         free(cur->indicators);
     }
 
-    if (cur->clob_loc)
-        OCIDescriptorFree(cur->clob_loc, OCI_DTYPE_LOB);
+    if (cur->clob_locs)
+    {
+        for (ub4 i = 0; i < cur->col_count; i++)
+            if (cur->clob_locs[i])
+                OCIDescriptorFree(cur->clob_locs[i], OCI_DTYPE_LOB);
+        free(cur->clob_locs);
+    }
 
     if (cur->def)        free(cur->def);
     if (cur->buf_sizes)  free(cur->buf_sizes);
@@ -401,8 +416,9 @@ static void oracle_select_cursor_free(db_select_cursor_t *cur)
  *  Table_Metadata_Module.c. Moved here verbatim; the only changes are
  *  mechanical: it reads and fills the cursor's own arrays directly
  *  (cur->X where it used to take mmr->X, cur->alloc_batch_size where it
- *  took mmr->fetch_count - the same value at this point), and the CLOB
- *  column is defined against &cur->clob_loc. Log messages are unchanged
+ *  took mmr->fetch_count - the same value at this point), and each CLOB
+ *  column is defined against its own &cur->clob_locs[col] (2026-10-10;
+ *  it was one shared locator - see the struct). Log messages are unchanged
  *  apart from the function name the logger stamps, so the Stage 4a
  *  log comparison can match them line for line.
  *
@@ -443,7 +459,7 @@ static int oracle_define_columns(oci_context_t *ctx, db_select_cursor_t *cur)
     /* Validate all required output pointers are present */
     if (!cur->def        || !cur->buffers    || !cur->buf_sizes  ||
         !cur->indicators || !cur->data_types || !cur->data_sizes ||
-        !cur->col_names  || !cur->col_blob_locs)
+        !cur->col_names  || !cur->col_blob_locs || !cur->clob_locs)
     {
         logger_write(ctx->Metadata_logger, LOG_ERROR, __func__, 0,
                      "One or more required array pointers are NULL - "
@@ -587,11 +603,24 @@ static int oracle_define_columns(oci_context_t *ctx, db_select_cursor_t *cur)
              * CLOB ARRAY FETCH RESTRICTION - OCI QUIRK - DO NOT REMOVE
              * ----------------------------------------------------------
              * OCI does not support array fetch of CLOB locators via
-             * OCIDefineArrayOfStruct.  A single shared locator is used
-             * and the caller must force fetch_count=1 whenever any CLOB
-             * column is present (enforced in execute_query_batch after
-             * this function returns, exactly as before).
+             * OCIDefineArrayOfStruct, so the caller must force
+             * fetch_count=1 whenever any CLOB column is present
+             * (oracle_select_describe_and_define(), after this returns).
+             *
+             * One locator per CLOB column (2026-10-10). It used to be one
+             * locator shared by every CLOB column, so a second CLOB/NCLOB
+             * column overwrote the first on every row - see the struct.
+             * NCLOB arrives here as SQLT_CLOB too; its character set form
+             * is read from the locator when the value is read.
              */
+            logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
+                         "OCIDescriptorAlloc CLOB locator col=%u", ci);
+            CHECK_OCI_META(ctx->errhp,
+                OCIDescriptorAlloc(ctx->envhp,
+                                   (void **)&cur->clob_locs[ci],
+                                   OCI_DTYPE_LOB, 0, NULL),
+                ctx, Cleanup);
+
             cur->indicators[ci] = calloc(cur->alloc_batch_size, sizeof(sb2));
             if (!cur->indicators[ci])
             {
@@ -602,12 +631,12 @@ static int oracle_define_columns(oci_context_t *ctx, db_select_cursor_t *cur)
             }
 
             logger_write(ctx->Metadata_logger, LOG_DEBUG, __func__, 0,
-                         "OCIDefineByPos CLOB col=%u (single locator)",
+                         "OCIDefineByPos CLOB col=%u (own locator)",
                          i);
             CHECK_OCI_META(ctx->errhp,
                 OCIDefineByPos(cur->stmt, &cur->def[ci], ctx->errhp,
                                i,
-                               (dvoid *)&cur->clob_loc,
+                               (dvoid *)&cur->clob_locs[ci],
                                -1,
                                SQLT_CLOB,
                                &cur->indicators[ci][0],
@@ -735,17 +764,15 @@ static int oracle_select_describe_and_define(oci_context_t       *ctx,
     cur->data_sizes    = calloc(cur->col_count, sizeof(ub4));
     cur->col_names     = calloc(cur->col_count, sizeof(*cur->col_names));
     cur->col_blob_locs = calloc(cur->col_count, sizeof(OCILobLocator **));
+    /* 2026-10-10 - one slot per column; oracle_define_columns()
+     * allocates a locator only for CLOB columns. Replaces the single
+     * shared locator that used to be allocated here for every cursor. */
+    cur->clob_locs     = calloc(cur->col_count, sizeof(OCILobLocator *));
 
     if (!cur->def || !cur->buffers || !cur->buf_sizes || !cur->indicators ||
-        !cur->data_types || !cur->data_sizes || !cur->col_names || !cur->col_blob_locs)
+        !cur->data_types || !cur->data_sizes || !cur->col_names ||
+        !cur->col_blob_locs || !cur->clob_locs)
         return -1;
-
-    /* Required by oracle_define_columns() even for a scalar-only
-     * cursor - see block comment above oracle_select_open(). */
-    ORACLE_CHECK_OCI(ctx,
-        OCIDescriptorAlloc(ctx->envhp, (void **)&cur->clob_loc,
-                           OCI_DTYPE_LOB, 0, NULL));
-    if (!cur->clob_loc) return -1;
 
     if (oracle_define_columns(ctx, cur) != 0)
     {
@@ -1188,7 +1215,12 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
  * [col_idx][0]") - safe because cur->batch_size is always 1 whenever a
  * CLOB column is present (see the CLOB array-fetch quirk in
  * oracle_select_open()), so 'row' passed in from
- * oracle_select_fetch_batch()'s loop is always 0 in that case anyway. */
+ * oracle_select_fetch_batch()'s loop is always 0 in that case anyway.
+ *
+ * 2026-10-10: reads cur->clob_locs[col_idx] (this column's own
+ * locator, not one shared by every CLOB column), fails the fetch if
+ * the length cannot be read, and reads NCLOB in its own character set
+ * form. */
 static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
                                     ub4 col_idx, resultset_row_t *rs_row,
                                     uint64_t *out_bytes)
@@ -1207,9 +1239,42 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
         return 0;
     }
 
+    /* 2026-10-10 - this column's own locator (see the struct), and the
+     * length call is now checked. It used to be logged only: a failure
+     * left lob_len at 0 and the value came back as "" with the fetch
+     * reporting success. A value that cannot be read now fails the
+     * fetch, the same rule as a failed OCILobRead below. The rc is
+     * logged as well as OCIErrorGet's text, because an invalid locator
+     * (OCI_INVALID_HANDLE) sets no error and that text is then left
+     * over from an earlier call - which is how a failed length call
+     * showed up as "ORA-01403: no data found". */
+    OCILobLocator *loc = cur->clob_locs[col_idx];
     ub4 lob_len = 0;
-    ORACLE_CHECK_OCI(ctx,
-        OCILobGetLength(ctx->svchp, ctx->errhp, cur->clob_loc, &lob_len));
+    sword len_rc = OCILobGetLength(ctx->svchp, ctx->errhp, loc, &lob_len);
+    if (len_rc != OCI_SUCCESS && len_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI(ctx, len_rc);
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "OCILobGetLength failed (rc=%d) for col=%s - fetch "
+                     "failed rather than returning the value as empty",
+                     (int)len_rc, cur->col_names[col_idx]);
+        return -1;
+    }
+
+    /* NCLOB (2026-10-10): read in the locator's own character set
+     * form. Reading an NCLOB as SQLCS_IMPLICIT is rejected by Oracle
+     * (ORA-24806, LOB form mismatch). */
+    ub1 csfrm = SQLCS_IMPLICIT;
+    sword form_rc = OCILobCharSetForm(ctx->envhp, ctx->errhp, loc, &csfrm);
+    if (form_rc != OCI_SUCCESS && form_rc != OCI_SUCCESS_WITH_INFO)
+    {
+        ORACLE_CHECK_OCI(ctx, form_rc);
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "OCILobCharSetForm failed (rc=%d) for col=%s - fetch "
+                     "failed", (int)form_rc, cur->col_names[col_idx]);
+        return -1;
+    }
+    if (csfrm != SQLCS_NCHAR) csfrm = SQLCS_IMPLICIT;
 
     if (lob_len == 0)
     {
@@ -1236,9 +1301,9 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
         if (chunk > bytes_remaining) chunk = bytes_remaining;
         ub4 amount = chunk;
 
-        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp, cur->clob_loc,
+        sword lob_read_rc = OCILobRead(ctx->svchp, ctx->errhp, loc,
                                         &amount, offset, write_ptr, chunk,
-                                        NULL, NULL, 0, SQLCS_IMPLICIT);
+                                        NULL, NULL, 0, csfrm);
         ORACLE_CHECK_OCI(ctx, lob_read_rc);
 
         if (lob_read_rc != OCI_SUCCESS && lob_read_rc != OCI_SUCCESS_WITH_INFO)

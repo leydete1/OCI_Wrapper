@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DDL_Execution_Result>
+  <operation>CREATE_VIEW</operation>
+  <status>SUCCESS</status>
+  <executed_ddl>CREATE OR REPLACE VIEW DATA_MANAGER.FIELD_TEST_SAMPLE (NUM_VAL, TEXT_VAL)
+AS
+SELECT NUMBER_COL, VARCHAR2_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL IS NOT NULL;</executed_ddl>
+  <execution_time>0.012061</execution_time>
+</DDL_Execution_Result>

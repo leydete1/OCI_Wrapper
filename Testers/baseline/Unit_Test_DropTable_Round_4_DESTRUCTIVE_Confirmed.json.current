@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_droptable_round_4_destructive","operation":"DROP_TABLE","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 942: ORA-00942: table or view \"HR\".\"MIGRATION_LOG\" does not exist\nHelp: https://docs.oracle.com/error-help/db/ora-00942/\n"}

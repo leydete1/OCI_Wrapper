@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_createtable_round_1</audit_id>
+<operation>CREATE_TABLE</operation>
+<error_code>DDL_EXECUTION_FAILED</error_code>
+<error_text>OCI Error 955: ORA-00955: name is already used by an existing object
+Help: https://docs.oracle.com/error-help/db/ora-00955/
+</error_text>
+</execution_envelope>
+</output_xml>

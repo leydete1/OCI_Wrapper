@@ -1,0 +1,5 @@
+UPDATE app_user SET locked = 'N', locked_ts = NULL, failed_attempts = 4
+ WHERE username = 'auth.test.nearlock';
+UPDATE app_user SET locked = 'N', locked_ts = NULL, failed_attempts = 0
+ WHERE username = 'auth.test.user';
+COMMIT;

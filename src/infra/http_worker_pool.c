@@ -182,6 +182,14 @@ static void *http_worker_thread_main(void *arg_v)
         }
 
         request_object_free(req);
+
+        /* 2026-10-10 - clear this request's trace sid before the next
+         * one, the same as worker.c does. It was never cleared here, so
+         * an HTTP worker's lines up to the next request's session lookup
+         * (its Level 1 parse lines included) carried the previous
+         * request's sid - e.g. CreateProcedure Round 1 logged with the
+         * sid of the CheckPermission request before it (10 Oct run). */
+        logger_clear_sid();
     }
 
     driver->release_session(pool->base_ctx, &thread_ctx);

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DDL_Execution_Result>
+  <operation>GRANT</operation>
+  <status>SUCCESS</status>
+  <executed_ddl>GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO MIGRATOR_USER;</executed_ddl>
+  <execution_time>0.003965</execution_time>
+</DDL_Execution_Result>
