@@ -930,9 +930,20 @@ static int oracle_select_open_from_cursor(oci_context_t        *ctx,
                                            int                  *out_column_count,
                                            int                  *out_batch_size)
 {
-    if (!ctx || !cursor_handle || !out_cursor || !out_columns ||
+    /* Stage 6 (2026-10-09): the handle is ours from here on, success or
+     * failure (db_driver.h, select_open_from_cursor() - Ownership). The
+     * describe-failure path already released it through
+     * oracle_select_cursor_free(); these two early returns did not, so
+     * the caller could not know whether to release it - and the
+     * procedure module released it again after a describe failure. */
+    if (!cursor_handle) return -1;
+
+    if (!ctx || !out_cursor || !out_columns ||
         !out_column_count || !out_batch_size)
+    {
+        OCIHandleFree(cursor_handle, OCI_HTYPE_STMT);
         return -1;
+    }
 
     *out_cursor       = NULL;
     *out_columns      = NULL;
@@ -940,7 +951,11 @@ static int oracle_select_open_from_cursor(oci_context_t        *ctx,
     *out_batch_size   = 0;
 
     db_select_cursor_t *cur = calloc(1, sizeof(*cur));
-    if (!cur) return -1;
+    if (!cur)
+    {
+        OCIHandleFree(cursor_handle, OCI_HTYPE_STMT);
+        return -1;
+    }
 
     cur->ctx  = ctx;
     cur->stmt = (OCIStmt *)cursor_handle;
@@ -3342,6 +3357,15 @@ static const db_dialect_t oracle_dialect = {
     .procedure_call_sql  = oracle_procedure_call_sql,
 };
 
+/* Stage 6 (2026-10-09) - see db_driver.h, cursor_handle_free(). The
+ * handle is a REF CURSOR statement obtained with OCIHandleAlloc() in
+ * oracle_dml_execute_procedure(), so it is released the same way. */
+static void oracle_cursor_handle_free(void *cursor_handle)
+{
+    if (cursor_handle)
+        OCIHandleFree(cursor_handle, OCI_HTYPE_STMT);
+}
+
 static const db_driver_t oracle_driver = {
     .driver_name          = "oracle",
     .connect              = oracle_connect,
@@ -3363,6 +3387,7 @@ static const db_driver_t oracle_driver = {
     .dml_execute_procedure        = oracle_dml_execute_procedure,
     .select_open_from_cursor      = oracle_select_open_from_cursor,
     .describe_table               = oracle_describe_table,
+    .cursor_handle_free           = oracle_cursor_handle_free,
     .dialect                      = &oracle_dialect
 };
 

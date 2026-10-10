@@ -79,33 +79,10 @@
 #include "Response_Writer.h";
 #include "cJSON.h"                       /* Stage 3c JSON verification only */
 
-/* ------------------------------------------------------------------ */
-/*  Internal batch context - groups all per-column arrays together     */
-/* ------------------------------------------------------------------ */
-typedef struct {
-    ub4              col_count;
-    ub4              fetch_count;     /* rows per fetch batch           */
-
-    OCIDefine      **def;             /* [col]                          */
-    char           **buffers;         /* [col] flat [fetch_count*bsz]   */
-    ub4             *buf_sizes;       /* [col] individual buffer width   */
-    sb2            **indicators;      /* [col] -> [fetch_count]          */
-    ub2             *data_types;      /* [col]                           */
-    ub4             *data_sizes;      /* [col] from OCI metadata         */
-    char           (*col_names)[256]; /* [col]                           */
-
-    /*
-     * BLOB locators: flat array per column, one slot per row in the batch.
-     * col_blob_locs[col] points to a contiguous block of fetch_count
-     * OCILobLocator* handles. OCI strides through this block using
-     * sizeof(OCILobLocator*) as the value_skip in OCIDefineArrayOfStruct.
-     * Access row r of column c as: col_blob_locs[c][r]
-     */
-    OCILobLocator ***col_blob_locs;   /* [col] -> flat [fetch_count]     */
-
-    /* Single CLOB locator reused per row (CLOBs not array-fetchable)   */
-    OCILobLocator   *clob_loc;
-} batch_ctx_t;
+/* batch_ctx_t removed in Stage 6 (2026-10-09). It held the OCI define
+ * and LOB-locator arrays of the old in-module fetch loop; since Phase
+ * 2b (2026-09-15) the only field still used was fetch_count, which is
+ * now a plain local in execute_query_batch(). */
 
 /* ------------------------------------------------------------------ */
 /*  Forward declarations                                               */
@@ -116,9 +93,8 @@ typedef struct {
  * this file once both sync and async fetch loops moved onto
  * driver->select_open()/select_fetch_batch()/select_close(). See the
  * v2 driver integration comment inside execute_query_batch() for the
- * full reasoning. batch_ctx_t itself is kept - bc.fetch_count is still
- * read (feeds db_select_request_t.fetch_array_size) even though every
- * other field on it is now unused.                                    */
+ * full reasoning. batch_ctx_t itself was removed in Stage 6 - see the
+ * note above.                                                        */
 
 
 /* ================================================================== */
@@ -325,8 +301,8 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     memset(&deps, 0, sizeof(deps));
     memset(&parse_msg, 0, sizeof(parse_msg));
 
-    batch_ctx_t bc;
-    memset(&bc, 0, sizeof(bc));
+    unsigned int fetch_count = 0;   /* rows per fetch batch - was
+                                        bc.fetch_count (Stage 6)     */
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
                  "Entering execute_query_batch sql=%s", cfg->SQL);
@@ -340,16 +316,16 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     }
 
     /* ---- Resolve fetch batch size ---- */
-    bc.fetch_count = (ub4)ctx->ini->query_fetch_batch_size;
-    if (bc.fetch_count < 1)
+    fetch_count = (unsigned int)ctx->ini->query_fetch_batch_size;
+    if (fetch_count < 1)
     {
         logger_write(ctx->select_logger, LOG_WARN, __func__, 0,
                      "query_fetch_batch_size=%d < 1, defaulting to 1",
                      ctx->ini->query_fetch_batch_size);
-        bc.fetch_count = 1;
+        fetch_count = 1;
     }
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                 "fetch_count=%u", bc.fetch_count);
+                 "fetch_count=%u", fetch_count);
 
     /* ---- Clean SQL ---- */
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0, "Calling trim_sql_inplace");
@@ -745,7 +721,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     req.sql                  = fetch_sql;
     req.max_rows             = record_count;
     req.max_memory_bytes     = cfg->max_memory_bytes;
-    req.fetch_array_size     = (int)bc.fetch_count;
+    req.fetch_array_size     = (int)fetch_count;
     req.query_timeout        = cfg->query_timeout;
     req.include_column_names = cfg->include_column_names;
     req.bind_count           = 0;      /* Stage 5: SQL is fully substituted */
@@ -1075,7 +1051,7 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     xml_append(xml, "<execution_time_total>%.6f</execution_time_total>\n",
                elapsed);
     xml_append(xml, "<fetch_batch_size>%u</fetch_batch_size>\n",
-               bc.fetch_count);
+               fetch_count);
     xml_append(xml, "<blobs_extracted>%d</blobs_extracted>\n", BLOB_index);
     xml_append(xml, "<clobs_extracted>%d</clobs_extracted>\n", CLOB_index);
     xml_end_execution(xml);
@@ -1433,10 +1409,8 @@ Cleanup:
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0, "Stage 7: Cleanup");
 
     /* free_batch_ctx(ctx, &bc) removed (Phase 2b, 2026-09-15) - the
-     * function itself is gone, and bc's only field anything still
-     * populates is bc.fetch_count (a plain int, nothing to free).
-     * Every other bc field stays permanently NULL now - nothing left
-     * to release here. (Item 2b, 2026-10-03: the stmt, stmt_count and
+     * function itself is gone, and batch_ctx_t with it (Stage 6) -
+     * nothing left to release here. (Item 2b, 2026-10-03: the stmt, stmt_count and
      * BLOB_list releases that used to follow were removed with the
      * last raw OCI call; stmt and BLOB_list had not been assigned
      * since Phase 2b, 2026-09-15.) */

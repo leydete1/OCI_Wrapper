@@ -75,7 +75,6 @@
 #include <ctype.h>
 
 #include "Connection.h"
-#include "Connection_Pool.h"
 #include "db_driver.h"                   /* db_driver_get(), db_driver_t -
                                              connect()/disconnect()/
                                              get_session() now route
@@ -582,7 +581,7 @@ static int parse_pool_arg(const char *arg)
  *
  * Response to closure proposal (13 Aug 2026) - the metrics DB pool is
  * entirely independent of the business connection pool/mode, so it
- * needs its own OCI_Disconnect_pool() call at every shutdown/exit path
+ * needs its own disconnect at every shutdown/exit path
  * in main() below, guarded by whether it was actually connected in the
  * first place (metrics_db_enabled=0, or a failed connect with
  * metrics_db_fail_force_shutdown=0, both leave it never connected).
@@ -592,8 +591,11 @@ static int parse_pool_arg(const char *arg)
 static void shutdown_metrics_pool(oci_context_t *metrics_ctx,
                                    int metrics_pool_connected)
 {
+    /* Stage 6 (2026-10-09): through the driver. metrics_ctx's own
+     * ini->use_connection_pool is forced to 1 where it is connected
+     * (see main()), so this is the same pooled disconnect as before. */
     if (metrics_pool_connected)
-        OCI_Disconnect_pool(metrics_ctx);
+        db_driver_get(metrics_ctx)->disconnect(metrics_ctx);
 }
 
 /* ================================================================== */
@@ -1530,18 +1532,25 @@ int main(int argc, char *argv[])
 
             metrics_config.retries_on_connection_failure = config.metrics_retries_on_connection_failure;
 
+            /* Stage 6 (2026-10-09): connected through the driver, which
+             * picks pooled or direct from ini->use_connection_pool.
+             * metrics_config is a copy of the business config, so after
+             * a --direct start it would say 0 - the metrics connection
+             * has always been a pool regardless, so it is forced here. */
+            metrics_config.use_connection_pool = 1;
+
             metrics_config.connection_validation_on_borrow = config.metrics_connection_validation_on_borrow;
             metrics_config.rollback_on_return_to_pool      = config.metrics_rollback_on_return_to_pool;
             metrics_config.autocommit_mode                 = config.metrics_autocommit_mode;
 
             logger_write(&logger, LOG_INFO, __func__, 0,
-                         "Calling OCI_Connect_pool for the metrics DB "
+                         "Calling driver connect for the metrics DB "
                          "pool (dbname=%s)", metrics_config.dbname);
 
-            if (OCI_Connect_pool(&metrics_ctx) != 0)
+            if (db_driver_get(&metrics_ctx)->connect(&metrics_ctx) != 0)
             {
                 logger_write(&logger, LOG_ERROR, __func__, 0,
-                             "OCI_Connect_pool failed for the metrics "
+                             "driver connect failed for the metrics "
                              "DB pool (dbname=%s)", metrics_config.dbname);
 
                 if (config.metrics_db_fail_force_shutdown)
@@ -1564,7 +1573,7 @@ int main(int argc, char *argv[])
             {
                 metrics_pool_connected = 1;
                 logger_write(&logger, LOG_INFO, __func__, 0,
-                             "OCI_Connect_pool OK for the metrics DB pool");
+                             "driver connect OK for the metrics DB pool");
             }
         }
 
@@ -1703,7 +1712,7 @@ int main(int argc, char *argv[])
         if (driver->get_session(&ctx, &worker_ctx) != 0)
         {
             logger_write(&logger, LOG_ERROR, __func__, 0,
-                         "OCI_Pool_get_session failed - cannot start "
+                         "get_session failed - cannot start "
                          "transaction-scoped session");
             closedir(dir);
             metrics_writer_stop_and_join(ctx.metrics_writer);

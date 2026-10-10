@@ -13,7 +13,7 @@
 #include "file_consumer_runner.h"
 #include "file_consumer.h"
 #include "Session_Manager.h"
-#include "Connection_Pool.h"
+#include "db_driver.h"          /* get_session()/release_session() - Stage 6 */
 #include "ctx_utils.h"
 #include "logger.h"
 
@@ -148,7 +148,7 @@ static void *runner_thread_main(void *arg)
      * those calls was the actual bug behind every File-Consumer-
      * triggered session_create() failing with SESSION_ERR_DB_FAILURE:
      * base_ctx's own bootstrap session is explicitly released back to
-     * the pool in main() (OCI_Pool_release_session()) BEFORE this
+     * the pool in main() (release_session()) BEFORE this
      * thread is even started, so by the time this thread tried to use
      * it, there was no valid OCI session behind it at all. Same fix
      * shape as every worker thread already uses (worker.c) - borrow an
@@ -157,10 +157,13 @@ static void *runner_thread_main(void *arg)
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
-    if (OCI_Pool_get_session(base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): through the driver - same pool underneath. */
+    const db_driver_t *driver = db_driver_get(base_ctx);
+
+    if (driver->get_session(base_ctx, &thread_ctx) != 0)
     {
         logger_write(base_ctx->file_consumer_logger, LOG_ERROR, __func__, 0,
-                     "File Consumer thread: OCI_Pool_get_session failed - "
+                     "File Consumer thread: get_session failed - "
                      "this thread cannot start, no files will ever be "
                      "processed until the process restarts");
         return NULL;
@@ -228,7 +231,7 @@ static void *runner_thread_main(void *arg)
                  "File Consumer thread exiting after %d scan pass(es) - "
                  "releasing session", pass);
 
-    OCI_Pool_release_session(base_ctx, &thread_ctx);
+    driver->release_session(base_ctx, &thread_ctx);
 
     return NULL;
 }

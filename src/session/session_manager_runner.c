@@ -10,7 +10,7 @@
 
 #include "session_manager_runner.h"
 #include "Session_Manager.h"
-#include "Connection_Pool.h"
+#include "db_driver.h"          /* get_session()/release_session() - Stage 6 */
 #include "ctx_utils.h"
 #include "logger.h"
 
@@ -37,10 +37,13 @@ static void *runner_thread_main(void *arg)
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
-    if (OCI_Pool_get_session(base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): through the driver - same pool underneath. */
+    const db_driver_t *driver = db_driver_get(base_ctx);
+
+    if (driver->get_session(base_ctx, &thread_ctx) != 0)
     {
         logger_write(base_ctx->session_logger, LOG_ERROR, __func__, 0,
-                     "Session Manager thread: OCI_Pool_get_session failed "
+                     "Session Manager thread: get_session failed "
                      "- this thread cannot start, session activity will "
                      "never be persisted to the table until the process "
                      "restarts (session_touch()'s own cache-only refresh "
@@ -84,7 +87,7 @@ static void *runner_thread_main(void *arg)
                  "Session Manager thread exiting after %d touch(es) - "
                  "releasing session", touched);
 
-    OCI_Pool_release_session(base_ctx, &thread_ctx);
+    driver->release_session(base_ctx, &thread_ctx);
 
     return NULL;
 }

@@ -12,7 +12,7 @@
 #include "dispatcher.h"
 #include "response_object.h"
 #include "response_manager.h"
-#include "Connection_Pool.h"
+#include "db_driver.h"          /* get_session()/release_session() - Stage 6 */
 #include "ctx_utils.h"
 #include "generic_queue.h"
 #include "logger.h"
@@ -55,14 +55,18 @@ static void *worker_thread_main(void *arg)
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
-    if (OCI_Pool_get_session(args.base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): session borrow/return goes through the
+     * driver (db_driver.h) - same Oracle pool calls underneath. */
+    const db_driver_t *driver = db_driver_get(args.base_ctx);
+
+    if (driver->get_session(args.base_ctx, &thread_ctx) != 0)
     {
         /* Can't use thread_ctx's own logger - the borrow that would
          * have populated it failed. Log via base_ctx instead so this
          * failure is at least visible somewhere.                      */
         logger_write(args.base_ctx->worker_logger, LOG_ERROR, __func__,
                      args.worker_id,
-                     "Worker[%d]: OCI_Pool_get_session failed - this "
+                     "Worker[%d]: get_session failed - this "
                      "worker thread cannot start, queue[%d] will never "
                      "be drained until the process restarts",
                      args.worker_id, args.queue_index);
@@ -71,8 +75,8 @@ static void *worker_thread_main(void *arg)
 
     copy_shared_ctx_fields(&thread_ctx, args.base_ctx);
     thread_ctx.active_tx = NULL;   /* no managed transaction - each
-                                       request self-commits via
-                                       OCITransCommit, per the Session
+                                       request self-commits (driver
+                                       commit), per the Session
                                        Model decision.                  */
 
     logger_write(thread_ctx.worker_logger, LOG_INFO, __func__, args.worker_id,
@@ -106,8 +110,9 @@ static void *worker_thread_main(void *arg)
             /* Self-healing connection check (2026-08-07). Confirmed by
              * direct evidence that a worker's session does NOT reliably
              * recover on its own after a connection-level failure - see
-             * OCI_Connection_Pool.c's own doc comment on
-             * OCI_Pool_session_is_alive() for the investigation this
+             * Connection_Pool.c's own doc comment on
+             * OCI_Pool_session_is_alive() (the driver's session_is_alive())
+             * for the investigation this
              * came from. Only checked here, after a failure - a
              * successful dispatch already proves the connection was
              * fine, so there's no reason to add this check to the
@@ -121,7 +126,7 @@ static void *worker_thread_main(void *arg)
              * automatic retry as a genuine follow-up once this is
              * trusted, rather than bundling two behaviour changes into
              * one change.                                              */
-            if (!OCI_Pool_session_is_alive(&thread_ctx))
+            if (!driver->session_is_alive(&thread_ctx))
             {
                 logger_write(thread_ctx.worker_logger, LOG_WARN, __func__, args.worker_id,
                              "Worker[%d]: WARNING - connection lost (session no "
@@ -130,7 +135,7 @@ static void *worker_thread_main(void *arg)
                              "'%s' remains a FAIL and is not automatically "
                              "retried.", args.worker_id, req->filename);
 
-                if (OCI_Pool_reconnect_session(args.base_ctx, &thread_ctx) == 0)
+                if (driver->reconnect_session(args.base_ctx, &thread_ctx) == 0)
                 {
                     thread_ctx.active_tx = NULL;   /* same reset as at thread
                                                        startup - no managed
@@ -212,7 +217,7 @@ static void *worker_thread_main(void *arg)
                  "processed %d item(s) total this run, releasing session",
                  args.worker_id, args.queue_index, processed);
 
-    OCI_Pool_release_session(args.base_ctx, &thread_ctx);
+    driver->release_session(args.base_ctx, &thread_ctx);
 
     return NULL;
 }

@@ -1,0 +1,1 @@
+"SELECT NVL(t.amount, 0), t.name FROM my_table t",

@@ -13,7 +13,6 @@
 
 #include "metrics_writer.h"
 #include "generic_queue.h"
-#include "Connection_Pool.h"
 #include "ctx_utils.h"
 #include "logger.h"
 #include "db_driver.h"            /* dml_execute(), dialect - item 3b */
@@ -397,10 +396,13 @@ static void *db_writer_thread_main(void *arg)
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
 
-    if (OCI_Pool_get_session(metrics_base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): through the driver - same pool underneath. */
+    const db_driver_t *pool_driver = db_driver_get(metrics_base_ctx);
+
+    if (pool_driver->get_session(metrics_base_ctx, &thread_ctx) != 0)
     {
         logger_write(writer_logger, LOG_ERROR, __func__, 0,
-                     "Metrics DB writer thread: OCI_Pool_get_session "
+                     "Metrics DB writer thread: get_session "
                      "failed - this thread cannot start, DB metrics "
                      "will never be persisted until the process "
                      "restarts (file metrics, if enabled, are "
@@ -435,7 +437,7 @@ static void *db_writer_thread_main(void *arg)
                      "Metrics DB writer thread: malloc failed for batch "
                      "array (per_write=%d) - this thread cannot start",
                      args.per_write);
-        OCI_Pool_release_session(metrics_base_ctx, &thread_ctx);
+        pool_driver->release_session(metrics_base_ctx, &thread_ctx);
         return NULL;
     }
 
@@ -509,7 +511,7 @@ static void *db_writer_thread_main(void *arg)
                  "%d record(s) total - releasing session",
                  total_batches, total_flushed);
 
-    OCI_Pool_release_session(metrics_base_ctx, &thread_ctx);
+    pool_driver->release_session(metrics_base_ctx, &thread_ctx);
 
     return NULL;
 }

@@ -122,16 +122,18 @@ typedef struct {
     param_direction_t  direction;
     char               param_value[MAX_PARAM_VALUE_SIZE];
 
-    /* Bind handle - one per parameter */
-    OCIBind           *bind_hdl;
+    /* Stage 6 (2026-10-09): no vendor types in this struct any more.
+     * The unused OCIBind* is gone (binding moved into the driver on
+     * 2026-09-21), the NULL indicator is a plain short, and the CURSOR
+     * handle is the driver's opaque out_cursor_handle.                 */
 
     /* For scalar OUT/IN_OUT: post-execute value buffer                */
     char               out_value  [MAX_PARAM_VALUE_SIZE];
     int                out_int;          /* used when param_type=INTEGER/NUMBER */
-    sb2                indicator;        /* OCI NULL indicator                  */
+    short              indicator;        /* -1 = NULL returned                  */
 
-    /* For CURSOR OUT: the fetched cursor statement handle             */
-    OCIStmt           *cursor_stmt;      /* populated after execute             */
+    /* For CURSOR OUT: the driver's opaque cursor handle               */
+    void              *cursor_handle;    /* populated after execute             */
     int                is_cursor;        /* 1 if param_type == "CURSOR"         */
     int                is_integer;       /* 1 if bound as SQLT_INT              */
     int                is_numeric;       /* 1 if NUMBER/FLOAT (bound as str)    */
@@ -579,7 +581,7 @@ int execute_procedure(oci_context_t                *ctx,
 
         p->indicator = dp->out_is_null ? -1 : 0;
         if (dp->type == DB_PROC_TYPE_INT) p->out_int = dp->out_int;
-        if (p->is_cursor) p->cursor_stmt = (OCIStmt *)dp->out_cursor_handle;
+        if (p->is_cursor) p->cursor_handle = dp->out_cursor_handle;
     }
 
     free(driver_params);
@@ -643,7 +645,7 @@ int execute_procedure(oci_context_t                *ctx,
     /* ================================================================
      *  Stage 6 - Fetch CURSOR OUT result sets
      *  v2 driver integration: each CURSOR OUT parameter's own handle
-     *  (p->cursor_stmt, populated by the copy-back loop above from the
+     *  (p->cursor_handle, populated by the copy-back loop above from the
      *  driver's own out_cursor_handle) is opened via
      *  driver->select_open_from_cursor() and fetched through the SAME
      *  select_fetch_batch()/select_close() pair execute_query_batch()
@@ -712,11 +714,11 @@ int execute_procedure(oci_context_t                *ctx,
              * own comment on this exact case), so this is just
              * defensive - matches the driver's own out_cursor_handle=
              * NULL contract for that case, not expected to fire. */
-            p->cursor_stmt = NULL;
+            p->cursor_handle = NULL;
             continue;
         }
 
-        if (!p->cursor_stmt)
+        if (!p->cursor_handle)
         {
             logger_write(ctx->procedure_logger, LOG_WARN, __func__, 0,
                          "CURSOR param '%s' has NULL stmt handle - "
@@ -733,7 +735,16 @@ int execute_procedure(oci_context_t                *ctx,
         int                  column_count = 0;
         int                  batch_size   = 0;
 
-        if (driver->select_open_from_cursor(ctx, p->cursor_stmt, &cur,
+        /* Stage 6 (2026-10-09): ownership passes to the driver at the
+         * call, success or failure (db_driver.h), so the handle is
+         * cleared here, BEFORE the call. Clearing it only after success
+         * meant a failed describe - which already released the handle
+         * inside the driver - left it set, and Cleanup released it a
+         * second time. */
+        void *handle = p->cursor_handle;
+        p->cursor_handle = NULL;
+
+        if (driver->select_open_from_cursor(ctx, handle, &cur,
                                              &columns, &column_count,
                                              &batch_size) != 0)
         {
@@ -743,9 +754,6 @@ int execute_procedure(oci_context_t                *ctx,
             rc = -1;
             goto Cleanup;
         }
-        /* Ownership transferred to select_close() below - Cleanup must
-         * not also try to free this handle. */
-        p->cursor_stmt = NULL;
 
         resultset_t **batches       = NULL;
         int          *batch_counts  = NULL;
@@ -974,14 +982,18 @@ Cleanup:
 #
     if (pc)
     {
+        /* Stage 6 (2026-10-09): any CURSOR OUT handle never handed to
+         * select_open_from_cursor() (the request failed first) is
+         * released through the driver, not with OCIHandleFree here. */
+        const db_driver_t *cleanup_driver = db_driver_get(ctx);
         for (int i = 0; i < pc->param_count; i++)
         {
-            if (pc->params[i].cursor_stmt)
+            if (pc->params[i].cursor_handle)
             {
                 logger_write(ctx->procedure_logger, LOG_DEBUG, __func__, 0,
-                             "OCIHandleFree cursor_stmt param=%d", i);
-                OCIHandleFree(pc->params[i].cursor_stmt, OCI_HTYPE_STMT);
-                pc->params[i].cursor_stmt = NULL;
+                             "cursor_handle_free param=%d", i);
+                cleanup_driver->cursor_handle_free(pc->params[i].cursor_handle);
+                pc->params[i].cursor_handle = NULL;
             }
         }
         free(pc);

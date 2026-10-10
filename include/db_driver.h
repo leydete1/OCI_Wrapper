@@ -848,11 +848,26 @@ typedef struct {
  *   proven path, not a parallel one. select_close() releases the
  *   underlying cursor statement too, same as it already releases a
  *   normal SELECT's own prepared statement - no separate cleanup call
- *   exists or is needed for a fetched cursor handle. Returns 0 on
+ *   exists or is needed for a fetched cursor handle.
+ *
+ *   Ownership (Stage 6, 2026-10-09): cursor_handle belongs to the
+ *   driver from the moment of the call, whether it succeeds or fails -
+ *   on failure the driver releases it itself. The caller must not use
+ *   or release the handle afterwards. (Before Stage 6 a failure during
+ *   the describe released it while an early failure did not, and the
+ *   procedure module's cleanup then released it a second time.) Returns 0 on
  *   success, non-zero on failure (including DB_SELECT_UNSUPPORTED_LOB,
  *   same meaning as select_open()'s own use of it, if the cursor's
  *   result has a LOB column this pass's driver doesn't support through
  *   this interface yet).
+ *
+ * cursor_handle_free()
+ *   Added in Stage 6 (2026-10-09). Releases a db_proc_param_t
+ *   out_cursor_handle that will NOT be fetched - e.g. the request
+ *   failed after dml_execute_procedure() but before every CURSOR OUT
+ *   parameter was handed to select_open_from_cursor(). NULL is a no-op.
+ *   Never call it on a handle already passed to select_open_from_cursor().
+ *   Oracle: OCIHandleFree(handle, OCI_HTYPE_STMT).
  *
  * describe_table()
  *   Added in Stage 4a (Oracle dialect extraction, 2026-10-06). Describes
@@ -1056,6 +1071,9 @@ typedef struct db_driver_t {
                          col_metadata_t              *cols,
                          int                         *col_count,
                          int                          max_cols);
+
+    /* Stage 6 (2026-10-09) - see cursor_handle_free() above. */
+    void (*cursor_handle_free)(void *cursor_handle);
 
     /* Stage 2 (2026-10-02) - SQL fragments; see db_dialect_t above.
      * Never NULL for a real driver, and every hook in it is set. */

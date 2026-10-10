@@ -139,10 +139,13 @@ static enum MHD_Result handle_session_request(oci_context_t *base_ctx,
 
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));
-    if (OCI_Pool_get_session(base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): through the driver - same pool underneath. */
+    const db_driver_t *driver = db_driver_get(base_ctx);
+
+    if (driver->get_session(base_ctx, &thread_ctx) != 0)
     {
         logger_write(base_ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
-                     "HTTP Consumer: OCI_Pool_get_session failed servicing "
+                     "HTTP Consumer: get_session failed servicing "
                      "a %s request", sess_req.operation);
         return send_static_response(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
                                      "text/plain",
@@ -203,7 +206,7 @@ static enum MHD_Result handle_session_request(oci_context_t *base_ctx,
     }
 
     free(result_xml);
-    OCI_Pool_release_session(base_ctx, &thread_ctx);
+    driver->release_session(base_ctx, &thread_ctx);
     return ret;
 }
 

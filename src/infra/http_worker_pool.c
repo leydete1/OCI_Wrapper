@@ -10,7 +10,7 @@
 
 #include "http_worker_pool.h"
 #include "queue_manager.h"
-#include "Connection_Pool.h"
+#include "db_driver.h"          /* get_session()/release_session() - Stage 6 */
 #include "ctx_utils.h"
 #include "dispatcher.h"
 #include "logger.h"
@@ -100,13 +100,16 @@ static void *http_worker_thread_main(void *arg_v)
 
     oci_context_t thread_ctx;
     memset(&thread_ctx, 0, sizeof(thread_ctx));   /* see http_consumer.c's
-        own Stage 2 note on why this is mandatory before OCI_Pool_get_session() -
+        own Stage 2 note on why this is mandatory before get_session() -
         it does not zero the struct itself. */
 
-    if (OCI_Pool_get_session(pool->base_ctx, &thread_ctx) != 0)
+    /* Stage 6 (2026-10-09): through the driver - same pool underneath. */
+    const db_driver_t *driver = db_driver_get(pool->base_ctx);
+
+    if (driver->get_session(pool->base_ctx, &thread_ctx) != 0)
     {
         logger_write(pool->base_ctx->http_consumer_logger, LOG_ERROR, __func__, 0,
-                     "HTTP worker %d: OCI_Pool_get_session failed at startup - "
+                     "HTTP worker %d: get_session failed at startup - "
                      "this worker cannot run, queue %d will never be serviced",
                      queue_index, queue_index);
         return NULL;
@@ -181,7 +184,7 @@ static void *http_worker_thread_main(void *arg_v)
         request_object_free(req);
     }
 
-    OCI_Pool_release_session(pool->base_ctx, &thread_ctx);
+    driver->release_session(pool->base_ctx, &thread_ctx);
     logger_write(pool->base_ctx->http_consumer_logger, LOG_INFO, __func__, 0,
                  "HTTP worker %d stopped", queue_index);
     return NULL;
