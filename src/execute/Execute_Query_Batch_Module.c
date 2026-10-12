@@ -1050,8 +1050,13 @@ int execute_query_batch(oci_context_t *ctx, execute_config_t *cfg)
     xml_append(xml, "<num_rows>%u</num_rows>\n",               abs_rownum);
     xml_append(xml, "<execution_time_total>%.6f</execution_time_total>\n",
                elapsed);
-    xml_append(xml, "<fetch_batch_size>%u</fetch_batch_size>\n",
-               fetch_count);
+    /* 2026-10-11 (point 16): the batch size actually used, as
+     * select_open() returned it - 1 whenever a CLOB column is present
+     * (OCI array-fetch restriction). fetch_count is only what was
+     * asked for (query_fetch_batch_size), so a CLOB select used to
+     * report 5 while fetching one row at a time. */
+    xml_append(xml, "<fetch_batch_size>%d</fetch_batch_size>\n",
+               batch_size_driver);
     xml_append(xml, "<blobs_extracted>%d</blobs_extracted>\n", BLOB_index);
     xml_append(xml, "<clobs_extracted>%d</clobs_extracted>\n", CLOB_index);
     xml_end_execution(xml);

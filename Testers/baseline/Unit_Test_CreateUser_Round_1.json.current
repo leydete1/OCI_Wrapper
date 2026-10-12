@@ -1,1 +1,1 @@
-{"status":"ERROR","audit_id":"audit_stub_createuser_round_1","operation":"CREATE_USER","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 1920: ORA-01920: user name 'MIGRATOR_USER' conflicts with another user or role name\nHelp: https://docs.oracle.com/error-help/db/ora-01920/\n"}
+{"operation":"CREATE_USER","status":"SUCCESS","executed_ddl":"CREATE USER FX_CU_USER_J IDENTIFIED BY Round1PlainPwd\n  DEFAULT TABLESPACE USERS\n  TEMPORARY TABLESPACE TEMP\n  QUOTA UNLIMITED ON USERS\n  PROFILE DEFAULT;\nGRANT CONNECT, RESOURCE TO FX_CU_USER_J;","execution_time":0.016344}

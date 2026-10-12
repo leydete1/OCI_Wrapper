@@ -526,6 +526,38 @@ static void end_shared_session(CURL *curl)
  * is kept as <baseline_dir>/<name>.current, beside <name>.baseline, so
  * a difference can be read with diff rather than guessed at. A PASS
  * removes any .current left by an earlier run. */
+/* 2026-10-10 (point 12): replaces every _YYYYMMDD_HHMMSS_ in s with
+ * _TS_, in place. LOB output file names carry the time they were
+ * written (BLOB_append_file_timestamp=1), so a SELECT returning BLOBs
+ * could never match its baseline. The result is never longer than s. */
+static void mask_lob_timestamps(char *s)
+{
+    /* pattern, one byte at a time: '_' 8 digits '_' 6 digits '_'
+     * (17 bytes). Checked left to right and stopped at the first
+     * mismatch, so the terminating NUL (not a digit, not '_') ends the
+     * check before anything past it is read. */
+    static const char shape[] = "_DDDDDDDD_DDDDDD_";
+    char *w = s;
+    const char *p = s;
+    while (*p)
+    {
+        int k = 0;
+        while (k < 17 &&
+               (shape[k] == 'D' ? (p[k] >= '0' && p[k] <= '9')
+                                : (p[k] == '_')))
+            k++;
+        if (k == 17)
+        {
+            memcpy(w, "_TS_", 4);
+            w += 4;
+            p += 17;
+            continue;
+        }
+        *w++ = *p++;
+    }
+    *w = '\0';
+}
+
 static void save_current(const fixture_t *fx, const dyn_buf_t *resp)
 {
     char path[720];
@@ -655,6 +687,8 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
 
     char *baseline_norm = normalize_execution_time(baseline);
     char *current_norm  = normalize_execution_time(resp.data);
+    mask_lob_timestamps(baseline_norm);   /* point 12 */
+    mask_lob_timestamps(current_norm);
     int identical = (strcmp(baseline_norm, current_norm) == 0);
     free(baseline_norm);
     free(current_norm);

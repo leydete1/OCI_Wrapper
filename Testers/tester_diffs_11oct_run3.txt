@@ -1,0 +1,811 @@
+--- baseline/Request_Test_Select_1_blobs.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Request_Test_Select_1_blobs.json.current	2026-10-11 16:58:22.995870565 +0100
+@@ -1 +1 @@
+-{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260817_220102_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260817_220102_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260817_220102_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260817_220102_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260817_220102_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260817_220102_5.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260817_220102_6.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260817_220102_7.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260817_220102_8.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260817_220102_9.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260817_220102_10.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260817_220102_11.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260817_220102_12.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260817_220102_13.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260817_220102_14.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
++{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_5.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_6.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_7.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_8.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_9.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_10.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_11.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_12.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_13.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_14.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
+--- baseline/Request_Test_Select_1_blobs.xml.baseline	2026-08-18 21:27:14.000000000 +0100
++++ baseline/Request_Test_Select_1_blobs.xml.current	2026-10-11 16:58:23.197987866 +0100
+@@ -9,46 +9,46 @@
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>1</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Adam enjoying pizza</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Adam_1.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260818_212713_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260818_212713_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260818_212713_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="2">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>2</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Big hug for Emily</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_big_hug.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260818_212713_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260818_212713_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260818_212713_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="3">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>3</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Football Team</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_Football.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260818_212713_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260818_212713_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260818_212713_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="4">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>4</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Cousin Sophie</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Sophi.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260818_212713_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260818_212713_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260818_212713_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="5">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>5</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>The kids</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>The_Gang.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260818_212713_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260818_212714_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260818_212714_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ </resultset>
+ <execution_envelope>
+ <num_rows>5</num_rows>
+-<execution_time_total>0.077031</execution_time_total>
++<execution_time_total>0.049955</execution_time_total>
+ <fetch_batch_size>5</fetch_batch_size>
+ <blobs_extracted>15</blobs_extracted>
+ <clobs_extracted>0</clobs_extracted>
+--- baseline/Request_Test_Select_1_clobs.xml.baseline	2026-08-18 21:27:14.000000000 +0100
++++ baseline/Request_Test_Select_1_clobs.xml.current	2026-10-11 16:58:23.460367868 +0100
+@@ -9,25 +9,25 @@
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>1</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>XML Import 1</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value></field_value></field>
+-<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https:/LARGE_CLOB_row1_clob0.txt</field_value></field>
++<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/LARGE_CLOB_row1_clob0.txt</field_value></field>
+ </row>
+ <row number="2">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>2</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>XML Import 2</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value></field_value></field>
+-<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https:/LARGE_CLOB_row2_clob1.txt</field_value></field>
++<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/LARGE_CLOB_row2_clob1.txt</field_value></field>
+ </row>
+ <row number="3">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>3</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>XML Import </field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value></field_value></field>
+-<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https:/LARGE_CLOB_row3_clob2.txt</field_value></field>
++<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/LARGE_CLOB_row3_clob2.txt</field_value></field>
+ </row>
+ <row number="4">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>4</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>XML Import </field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value></field_value></field>
+-<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https:/LARGE_CLOB_row4_clob3.txt</field_value></field>
++<field><field_name>LARGE_CLOB</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/LARGE_CLOB_row4_clob3.txt</field_value></field>
+ </row>
+ <row number="5">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>5</field_value></field>
+@@ -38,8 +38,8 @@
+ </resultset>
+ <execution_envelope>
+ <num_rows>5</num_rows>
+-<execution_time_total>0.003843</execution_time_total>
+-<fetch_batch_size>1</fetch_batch_size>
++<execution_time_total>0.010192</execution_time_total>
++<fetch_batch_size>5</fetch_batch_size>
+ <blobs_extracted>0</blobs_extracted>
+ <clobs_extracted>5</clobs_extracted>
+ </execution_envelope>
+--- baseline/Request_Test_Select_2_blobs.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Request_Test_Select_2_blobs.json.current	2026-10-11 16:58:29.085418258 +0100
+@@ -1 +1 @@
+-{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260817_220102_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260817_220102_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260817_220102_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260817_220102_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260817_220102_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
++{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165823_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165823_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165823_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165823_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165823_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
+--- baseline/Request_Test_Select_2_blobs.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Request_Test_Select_2_blobs.xml.current	2026-10-11 16:58:23.244196574 +0100
+@@ -9,36 +9,36 @@
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>1</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Adam enjoying pizza</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Adam_1.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260818_212713_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165823_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="2">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>2</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Big hug for Emily</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_big_hug.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260818_212713_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165823_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="3">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>3</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Football Team</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_Football.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260818_212713_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165823_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="4">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>4</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Cousin Sophie</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Sophi.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260818_212713_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165823_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="5">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>5</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>The kids</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>The_Gang.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260818_212713_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165823_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ </resultset>
+ <execution_envelope>
+ <num_rows>5</num_rows>
+-<execution_time_total>0.075417</execution_time_total>
++<execution_time_total>0.027883</execution_time_total>
+ <fetch_batch_size>5</fetch_batch_size>
+ <blobs_extracted>5</blobs_extracted>
+ <clobs_extracted>0</clobs_extracted>
+--- baseline/Request_Test_Select_2.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Request_Test_Select_2.json.current	2026-10-11 16:58:23.766616094 +0100
+@@ -1 +1 @@
+-{"resultset":[{"row_number":1,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"300"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":""},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":""},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CHAR_COL","field_type":"STRING","field_value":""},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":""},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"DATE_COL","field_type":"DATE","field_value":""},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":""},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":""},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]},{"row_number":2,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"300"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":""},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":""},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CHAR_COL","field_type":"STRING","field_value":""},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":""},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"DATE_COL","field_type":"DATE","field_value":""},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":""},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":""},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]},{"row_number":3,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"300"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":""},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":""},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CHAR_COL","field_type":"STRING","field_value":""},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":""},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"DATE_COL","field_type":"DATE","field_value":""},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":""},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":""},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]},{"row_number":4,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"300"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":""},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":""},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CHAR_COL","field_type":"STRING","field_value":""},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":""},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"DATE_COL","field_type":"DATE","field_value":""},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":""},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":""},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]},{"row_number":5,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"300"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":""},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":""},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CHAR_COL","field_type":"STRING","field_value":""},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":""},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":""},{"field_name":"DATE_COL","field_type":"DATE","field_value":""},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":""},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":""},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":""},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]}]}
+\ No newline at end of file
++{"resultset":[{"row_number":1,"fields":[{"field_name":"NUMBER_COL","field_type":"NUMBER","field_value":"4242"},{"field_name":"NUMBER_P_S_COL","field_type":"NUMBER","field_value":"4242.42"},{"field_name":"FLOAT_COL","field_type":"NUMBER","field_value":"4.25"},{"field_name":"BINARY_FLOAT_COL","field_type":"UNKNOWN","field_value":"2.5E+000"},{"field_name":"BINARY_DOUBLE_COL","field_type":"UNKNOWN","field_value":"1.4142135623000001E+000"},{"field_name":"CHAR_COL","field_type":"STRING","field_value":"SEED_4242 "},{"field_name":"VARCHAR2_COL","field_type":"STRING","field_value":"Seed row 4242 - every type"},{"field_name":"NCHAR_COL","field_type":"STRING","field_value":"SEED_4242 "},{"field_name":"NVARCHAR2_COL","field_type":"STRING","field_value":"Seed row 4242 NVARCHAR2"},{"field_name":"DATE_COL","field_type":"DATE","field_value":"02-JAN-30"},{"field_name":"TIMESTAMP_COL","field_type":"TIMESTAMP","field_value":"02-JAN-30 08.30.00.123456 AM"},{"field_name":"TIMESTAMP_TZ_COL","field_type":"UNKNOWN","field_value":"02-JAN-30 08.30.00.123456 AM +00:00"},{"field_name":"TIMESTAMP_LTZ_COL","field_type":"UNKNOWN","field_value":"02-JAN-30 08.30.00.123456 AM"},{"field_name":"INTERVAL_YM_COL","field_type":"UNKNOWN","field_value":"+0001-03"},{"field_name":"INTERVAL_DS_COL","field_type":"UNKNOWN","field_value":"+0002 03:04:05.000006"},{"field_name":"RAW_COL","field_type":"UNKNOWN","field_value":"CAFEBABE"},{"field_name":"CLOB_COL","field_type":"CLOB","field_value":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/CLOB_COL_row1_clob0.txt"},{"field_name":"NCLOB_COL","field_type":"CLOB","field_value":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/NCLOB_COL_row1_clob1.txt"},{"field_name":"BLOB_COL","field_type":"BLOB","field_value":"","blob":{"file_name":"blob_outp_0","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"8","mime_type":"application/octet-stream"}},{"field_name":"ROWID_COL","field_type":"UNKNOWN","field_value":""},{"field_name":"UROWID_COL","field_type":"UNKNOWN","field_value":""}]}]}
+\ No newline at end of file
+--- baseline/select_integration_tests.json.baseline	2026-09-14 21:04:28.000000000 +0100
++++ baseline/select_integration_tests.json.current	2026-10-11 16:58:23.484925149 +0100
+@@ -1 +1 @@
+-{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260914_210420_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260914_210420_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20260914_210420_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260914_210420_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260914_210420_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20260914_210420_5.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260914_210420_6.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260914_210420_7.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20260914_210420_8.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260914_210420_9.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260914_210420_10.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20260914_210420_11.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260914_210420_12.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260914_210420_13.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20260914_210420_14.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https:","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
++{"resultset":[{"row_number":1,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"1"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Adam enjoying pizza"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Adam_1.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_0.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_1.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Adam_1_20261011_165815_2.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"456547","mime_type":"image/jpeg"}}]},{"row_number":2,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"2"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Big hug for Emily"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_big_hug.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_3.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_4.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_big_hug_20261011_165815_5.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"72585","mime_type":"image/jpeg"}}]},{"row_number":3,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"3"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Football Team"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Emily_Football.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_6.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_7.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Emily_Football_20261011_165815_8.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"423891","mime_type":"image/jpeg"}}]},{"row_number":4,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"4"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"Cousin Sophie"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"Sophi.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_9.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_10.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"Sophi_20261011_165815_11.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"502790","mime_type":"image/jpeg"}}]},{"row_number":5,"fields":[{"field_name":"ID","field_type":"NUMBER","field_value":"5"},{"field_name":"DESCRIPTION","field_type":"STRING","field_value":"The kids"},{"field_name":"FILE_NAME","field_type":"STRING","field_value":"The_Gang.jpg"},{"field_name":"PHOTO","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_12.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"SECOND_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_13.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}},{"field_name":"THIRD_BLOB","field_type":"BLOB","field_value":"","blob":{"file_name":"The_Gang_20261011_165815_14.jpg","file_path":"/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_url":"https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs","file_size":"670535","mime_type":"image/jpeg"}}]}]}
+\ No newline at end of file
+--- baseline/select_integration_tests.xml.baseline	2026-09-13 21:21:33.000000000 +0100
++++ baseline/select_integration_tests.xml.current	2026-10-11 16:58:15.588290606 +0100
+@@ -9,46 +9,46 @@
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>1</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Adam enjoying pizza</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Adam_1.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260913_212132_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260913_212132_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20260913_212132_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_0.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_1.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Adam_1_20261011_165815_2.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>456547</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="2">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>2</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Big hug for Emily</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_big_hug.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260913_212132_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260913_212132_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20260913_212132_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_3.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_4.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_big_hug_20261011_165815_5.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>72585</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="3">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>3</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Football Team</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Emily_Football.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260913_212132_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260913_212132_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20260913_212132_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_6.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_7.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Emily_Football_20261011_165815_8.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>423891</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="4">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>4</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>Cousin Sophie</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>Sophi.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260913_212132_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260913_212132_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20260913_212132_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_9.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_10.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>Sophi_20261011_165815_11.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>502790</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ <row number="5">
+ <field><field_name>ID</field_name><field_type>NUMBER</field_type><field_value>5</field_value></field>
+ <field><field_name>DESCRIPTION</field_name><field_type>STRING</field_type><field_value>The kids</field_value></field>
+ <field><field_name>FILE_NAME</field_name><field_type>STRING</field_type><field_value>The_Gang.jpg</field_value></field>
+-<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260913_212132_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260913_212132_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+-<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20260913_212133_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https:</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>PHOTO</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_12.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>SECOND_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_13.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
++<field><field_name>THIRD_BLOB</field_name><field_type>BLOB</field_type><field_value/><blob><file_name>The_Gang_20261011_165815_14.jpg</file_name><file_path>/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_path><file_url>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_lobs</file_url><file_size>670535</file_size><mime_type>image/jpeg</mime_type></blob></field>
+ </row>
+ </resultset>
+ <execution_envelope>
+ <num_rows>5</num_rows>
+-<execution_time_total>0.052279</execution_time_total>
++<execution_time_total>0.049955</execution_time_total>
+ <fetch_batch_size>5</fetch_batch_size>
+ <blobs_extracted>15</blobs_extracted>
+ <clobs_extracted>0</clobs_extracted>
+--- baseline/Unit_Test_Authenticate_Round_5.xml.baseline	2026-08-29 10:54:19.000000000 +0100
++++ baseline/Unit_Test_Authenticate_Round_5.xml.current	2026-10-11 16:58:15.686322284 +0100
+@@ -1,7 +1,10 @@
+-<auth>
+-  <operation>AUTHENTICATE</operation>
+-  <status>SUCCESS</status>
+-  <session_id>afbef951-75ef-43f5-bd78-266b09be8e5f</session_id>
+-  <display_name>Auth Test Near-Lockout User</display_name>
+-  <ttl_seconds>1800</ttl_seconds>
+-</auth>
++<?xml version="1.0" encoding="UTF-8"?>
++<output_xml>
++<execution_envelope>
++<status>ERROR</status>
++<audit_id>audit_stub_authenticate_round_5</audit_id>
++<operation>AUTHENTICATE</operation>
++<error_code>DENIED</error_code>
++<error_text>Authentication failed</error_text>
++</execution_envelope>
++</output_xml>
+--- baseline/Unit_Test_CheckPermission_Round_1.json.baseline	2026-08-31 16:59:49.000000000 +0100
++++ baseline/Unit_Test_CheckPermission_Round_1.json.current	2026-10-11 16:58:15.473056698 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_check_permission_round_1","operation":"-","error_code":"LEVEL2_NOT_IMPLEMENTED","error_text":"Request aborted. Level 2 validation not yet implemented for this operation type."}
+\ No newline at end of file
++{"status":"ERROR","audit_id":"audit_stub_check_permission_round_1","operation":"SESSION_VALIDATION","error_code":"SESSION_NOT_FOUND","error_text":"The session_id on this request is missing, unknown, or expired - a valid session is required before this request can be processed."}
+\ No newline at end of file
+--- baseline/Unit_Test_CheckPermission_Round_2.json.baseline	2026-08-31 16:59:39.000000000 +0100
++++ baseline/Unit_Test_CheckPermission_Round_2.json.current	2026-10-11 16:58:23.783624238 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_check_permission_round_2","operation":"-","error_code":"LEVEL2_NOT_IMPLEMENTED","error_text":"Request aborted. Level 2 validation not yet implemented for this operation type."}
+\ No newline at end of file
++{"status":"ERROR","audit_id":"audit_stub_check_permission_round_2","operation":"SESSION_VALIDATION","error_code":"SESSION_NOT_FOUND","error_text":"The session_id on this request is missing, unknown, or expired - a valid session is required before this request can be processed."}
+\ No newline at end of file
+--- baseline/Unit_Test_CheckPermission_Round_3.json.baseline	2026-08-31 16:59:39.000000000 +0100
++++ baseline/Unit_Test_CheckPermission_Round_3.json.current	2026-10-11 16:58:15.472508001 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_check_permission_round_3","operation":"-","error_code":"LEVEL2_NOT_IMPLEMENTED","error_text":"Request aborted. Level 2 validation not yet implemented for this operation type."}
+\ No newline at end of file
++{"status":"ERROR","audit_id":"audit_stub_check_permission_round_3","operation":"SESSION_VALIDATION","error_code":"SESSION_NOT_FOUND","error_text":"The session_id on this request is missing, unknown, or expired - a valid session is required before this request can be processed."}
+\ No newline at end of file
+--- baseline/Unit_Test_CreateProcedure_Round_1.json.baseline	2026-09-06 21:42:14.000000000 +0100
++++ baseline/Unit_Test_CreateProcedure_Round_1.json.current	2026-10-11 16:58:29.098866316 +0100
+@@ -1 +1 @@
+-{"operation":"CREATE_PROCEDURE","status":"TEMPLATE_GENERATED","procedure_name":"LOG_MIGRATION_EVENT","parameter_count":2,"generated_ddl":"CREATE OR REPLACE PROCEDURE HR.LOG_MIGRATION_EVENT (\n  P_MESSAGE IN VARCHAR2,\n  P_LOG_ID OUT NUMBER\n)\nAS\nBEGIN\nINSERT INTO HR.MIGRATION_LOG (LOG_ID, LOG_MESSAGE) VALUES (MIGRATION_LOG_SEQ.NEXTVAL, P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;\nEND LOG_MIGRATION_EVENT;"}
+\ No newline at end of file
++{"operation":"CREATE_PROCEDURE","status":"SUCCESS","executed_ddl":"CREATE OR REPLACE PROCEDURE DATA_MANAGER.FX_CP_PROC_J (\n  P_MESSAGE IN VARCHAR2,\n  P_LOG_ID OUT NUMBER\n)\nAS\nBEGIN\nINSERT INTO DATA_MANAGER.FX_PROC_LOG (LOG_ID, LOG_MESSAGE) VALUES ((SELECT NVL(MAX(LOG_ID),0)+1 FROM DATA_MANAGER.FX_PROC_LOG), P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;\nEND FX_CP_PROC_J;","execution_time":0.011812}
+\ No newline at end of file
+--- baseline/Unit_Test_CreateProcedure_Round_1.xml.baseline	2026-09-06 21:42:13.000000000 +0100
++++ baseline/Unit_Test_CreateProcedure_Round_1.xml.current	2026-10-11 16:58:15.683462140 +0100
+@@ -1,28 +1,14 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Create_Procedure_Template>
++<DDL_Execution_Result>
+   <operation>CREATE_PROCEDURE</operation>
+-  <procedure_name>LOG_MIGRATION_EVENT</procedure_name>
+-  <owner>HR</owner>
+-  <replace>1</replace>
+-  <parameters count="2">
+-    <parameter>
+-      <name>P_MESSAGE</name>
+-      <data_type>VARCHAR2</data_type>
+-      <mode>IN</mode>
+-    </parameter>
+-    <parameter>
+-      <name>P_LOG_ID</name>
+-      <data_type>NUMBER</data_type>
+-      <mode>OUT</mode>
+-    </parameter>
+-  </parameters>
+-  <body>INSERT INTO HR.MIGRATION_LOG (LOG_ID, LOG_MESSAGE) VALUES (MIGRATION_LOG_SEQ.NEXTVAL, P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;</body>
+-  <generated_ddl>CREATE OR REPLACE PROCEDURE HR.LOG_MIGRATION_EVENT (
++  <status>SUCCESS</status>
++  <executed_ddl>CREATE OR REPLACE PROCEDURE DATA_MANAGER.FX_CP_PROC_X (
+   P_MESSAGE IN VARCHAR2,
+   P_LOG_ID OUT NUMBER
+ )
+ AS
+ BEGIN
+-INSERT INTO HR.MIGRATION_LOG (LOG_ID, LOG_MESSAGE) VALUES (MIGRATION_LOG_SEQ.NEXTVAL, P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;
+-END LOG_MIGRATION_EVENT;</generated_ddl>
+-</Create_Procedure_Template>
++INSERT INTO DATA_MANAGER.FX_PROC_LOG (LOG_ID, LOG_MESSAGE) VALUES ((SELECT NVL(MAX(LOG_ID),0)+1 FROM DATA_MANAGER.FX_PROC_LOG), P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;
++END FX_CP_PROC_X;</executed_ddl>
++  <execution_time>0.016155</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_CreateTable_Round_1.json.baseline	2026-09-06 11:30:10.000000000 +0100
++++ baseline/Unit_Test_CreateTable_Round_1.json.current	2026-10-11 16:58:29.001401720 +0100
+@@ -1 +1 @@
+-{"operation":"CREATE_TABLE","status":"TEMPLATE_GENERATED","table_name":"MIGRATION_LOG","column_count":3,"generated_ddl":"CREATE TABLE HR.MIGRATION_LOG (\n  LOG_ID NUMBER(10) NOT NULL,\n  LOG_MESSAGE VARCHAR2(4000),\n  CREATED_DATE DATE DEFAULT SYSDATE NOT NULL,\n  CONSTRAINT MIGRATION_LOG_PK PRIMARY KEY (LOG_ID)\n);"}
+\ No newline at end of file
++{"operation":"CREATE_TABLE","status":"SUCCESS","executed_ddl":"CREATE TABLE DATA_MANAGER.FX_CT_LOG_J (\n  LOG_ID NUMBER(10) NOT NULL,\n  LOG_MESSAGE VARCHAR2(4000),\n  CREATED_DATE DATE DEFAULT SYSDATE NOT NULL,\n  CONSTRAINT FX_CT_LOG_J_PK PRIMARY KEY (LOG_ID)\n);","execution_time":0.011529}
+\ No newline at end of file
+--- baseline/Unit_Test_CreateTable_Round_1.xml.baseline	2026-09-06 11:30:06.000000000 +0100
++++ baseline/Unit_Test_CreateTable_Round_1.xml.current	2026-10-11 16:58:15.471097515 +0100
+@@ -1,35 +1,12 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Create_Table_Template>
++<DDL_Execution_Result>
+   <operation>CREATE_TABLE</operation>
+-  <table_name>MIGRATION_LOG</table_name>
+-  <owner>HR</owner>
+-  <columns count="3">
+-    <column>
+-      <name>LOG_ID</name>
+-      <data_type>NUMBER</data_type>
+-      <precision>10</precision>
+-      <nullable>0</nullable>
+-    </column>
+-    <column>
+-      <name>LOG_MESSAGE</name>
+-      <data_type>VARCHAR2</data_type>
+-      <length>4000</length>
+-      <nullable>1</nullable>
+-    </column>
+-    <column>
+-      <name>CREATED_DATE</name>
+-      <data_type>DATE</data_type>
+-      <nullable>0</nullable>
+-      <default_value>SYSDATE</default_value>
+-    </column>
+-  </columns>
+-  <primary_key count="1">
+-    <column>LOG_ID</column>
+-  </primary_key>
+-  <generated_ddl>CREATE TABLE HR.MIGRATION_LOG (
++  <status>SUCCESS</status>
++  <executed_ddl>CREATE TABLE DATA_MANAGER.FX_CT_LOG_X (
+   LOG_ID NUMBER(10) NOT NULL,
+   LOG_MESSAGE VARCHAR2(4000),
+   CREATED_DATE DATE DEFAULT SYSDATE NOT NULL,
+-  CONSTRAINT MIGRATION_LOG_PK PRIMARY KEY (LOG_ID)
+-);</generated_ddl>
+-</Create_Table_Template>
++  CONSTRAINT FX_CT_LOG_X_PK PRIMARY KEY (LOG_ID)
++);</executed_ddl>
++  <execution_time>0.014610</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_CreateUser_Round_1.json.baseline	2026-09-07 19:31:33.000000000 +0100
++++ baseline/Unit_Test_CreateUser_Round_1.json.current	2026-10-11 16:58:23.819144679 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_createuser_round_1","operation":"CREATE_USER","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 922: ORA-00922: missing or invalid option\nHelp: https://docs.oracle.com/error-help/db/ora-00922/\n"}
+\ No newline at end of file
++{"operation":"CREATE_USER","status":"SUCCESS","executed_ddl":"CREATE USER FX_CU_USER_J IDENTIFIED BY Round1PlainPwd\n  DEFAULT TABLESPACE USERS\n  TEMPORARY TABLESPACE TEMP\n  QUOTA UNLIMITED ON USERS\n  PROFILE DEFAULT;\nGRANT CONNECT, RESOURCE TO FX_CU_USER_J;","execution_time":0.016344}
+\ No newline at end of file
+--- baseline/Unit_Test_CreateUser_Round_1.xml.baseline	2026-09-05 16:55:28.000000000 +0100
++++ baseline/Unit_Test_CreateUser_Round_1.xml.current	2026-10-11 16:58:23.300220718 +0100
+@@ -1,20 +1,12 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Create_User_Template>
++<DDL_Execution_Result>
+   <operation>CREATE_USER</operation>
+-  <username>MIGRATOR_USER</username>
+-  <default_tablespace>USERS</default_tablespace>
+-  <temp_tablespace>TEMP</temp_tablespace>
+-  <quota>UNLIMITED</quota>
+-  <quota_tablespace>USERS</quota_tablespace>
+-  <profile>DEFAULT</profile>
+-  <roles count="2">
+-    <role>CONNECT</role>
+-    <role>RESOURCE</role>
+-  </roles>
+-  <generated_ddl>CREATE USER MIGRATOR_USER IDENTIFIED BY Round1PlainPwd
++  <status>SUCCESS</status>
++  <executed_ddl>CREATE USER FX_CU_USER_X IDENTIFIED BY Round1PlainPwd
+   DEFAULT TABLESPACE USERS
+   TEMPORARY TABLESPACE TEMP
+   QUOTA UNLIMITED ON USERS
+   PROFILE DEFAULT;
+-GRANT CONNECT, RESOURCE TO MIGRATOR_USER;</generated_ddl>
+-</Create_User_Template>
++GRANT CONNECT, RESOURCE TO FX_CU_USER_X;</executed_ddl>
++  <execution_time>0.041168</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_CreateView_Round_1.json.baseline	2026-09-06 21:42:13.000000000 +0100
++++ baseline/Unit_Test_CreateView_Round_1.json.current	2026-10-11 16:58:23.211385146 +0100
+@@ -1 +1 @@
+-{"operation":"CREATE_VIEW","status":"TEMPLATE_GENERATED","view_name":"ACTIVE_EMPLOYEES","generated_ddl":"CREATE OR REPLACE VIEW HR.ACTIVE_EMPLOYEES (EMP_ID, EMP_NAME)\nAS\nSELECT EMPLOYEE_ID, FULL_NAME FROM HR.EMPLOYEES WHERE STATUS = 'ACTIVE';"}
+\ No newline at end of file
++{"operation":"CREATE_VIEW","status":"SUCCESS","executed_ddl":"CREATE OR REPLACE VIEW DATA_MANAGER.FX_CV_VIEW_J (NUM_VAL, TEXT_VAL)\nAS\nSELECT NUMBER_COL, VARCHAR2_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL IS NOT NULL;","execution_time":0.005801}
+\ No newline at end of file
+--- baseline/Unit_Test_CreateView_Round_1.xml.baseline	2026-09-06 21:42:13.000000000 +0100
++++ baseline/Unit_Test_CreateView_Round_1.xml.current	2026-10-11 16:58:15.374676409 +0100
+@@ -1,16 +1,9 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Create_View_Template>
++<DDL_Execution_Result>
+   <operation>CREATE_VIEW</operation>
+-  <view_name>ACTIVE_EMPLOYEES</view_name>
+-  <owner>HR</owner>
+-  <replace>1</replace>
+-  <force>0</force>
+-  <columns count="2">
+-    <column>EMP_ID</column>
+-    <column>EMP_NAME</column>
+-  </columns>
+-  <query>SELECT EMPLOYEE_ID, FULL_NAME FROM HR.EMPLOYEES WHERE STATUS = &apos;ACTIVE&apos;</query>
+-  <generated_ddl>CREATE OR REPLACE VIEW HR.ACTIVE_EMPLOYEES (EMP_ID, EMP_NAME)
++  <status>SUCCESS</status>
++  <executed_ddl>CREATE OR REPLACE VIEW DATA_MANAGER.FX_CV_VIEW_X (NUM_VAL, TEXT_VAL)
+ AS
+-SELECT EMPLOYEE_ID, FULL_NAME FROM HR.EMPLOYEES WHERE STATUS = &apos;ACTIVE&apos;;</generated_ddl>
+-</Create_View_Template>
++SELECT NUMBER_COL, VARCHAR2_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL IS NOT NULL;</executed_ddl>
++  <execution_time>0.014804</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_DDL_Sequence_Round_1.json.baseline	2026-09-07 21:24:10.000000000 +0100
++++ baseline/Unit_Test_DDL_Sequence_Round_1.json.current	2026-10-11 16:58:32.224671910 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_ddl_sequence_round_1","operation":"CREATE_PROCEDURE","error_code":"DDL_EXECUTION_FAILED","error_text":"OCI Error 24344: ORA-24344: A compilation error occurred while creating an object.\nHelp: https://docs.oracle.com/error-help/db/ora-24344/\n"}
+\ No newline at end of file
++{"operation":"CREATE_PROCEDURE","status":"SUCCESS","executed_ddl":"CREATE OR REPLACE PROCEDURE DATA_MANAGER.FX_SEQ_PROC_J (\n  P_MESSAGE IN VARCHAR2,\n  P_LOG_ID OUT NUMBER\n)\nAS\nBEGIN\nINSERT INTO DATA_MANAGER.FX_SEQ_LOG_J (LOG_ID, LOG_MESSAGE) VALUES ((SELECT NVL(MAX(LOG_ID),0)+1 FROM DATA_MANAGER.FX_SEQ_LOG_J), P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;\nEND FX_SEQ_PROC_J;","execution_time":0.010956}
+\ No newline at end of file
+--- baseline/Unit_Test_DDL_Sequence_Round_1.xml.baseline	2026-09-07 21:24:10.000000000 +0100
++++ baseline/Unit_Test_DDL_Sequence_Round_1.xml.current	2026-10-11 16:58:23.177049820 +0100
+@@ -1,12 +1,14 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<output_xml>
+-<execution_envelope>
+-<status>ERROR</status>
+-<audit_id>audit_stub_ddl_sequence_round_1</audit_id>
+-<operation>CREATE_PROCEDURE</operation>
+-<error_code>DDL_EXECUTION_FAILED</error_code>
+-<error_text>OCI Error 24344: ORA-24344: A compilation error occurred while creating an object.
+-Help: https://docs.oracle.com/error-help/db/ora-24344/
+-</error_text>
+-</execution_envelope>
+-</output_xml>
++<DDL_Execution_Result>
++  <operation>CREATE_PROCEDURE</operation>
++  <status>SUCCESS</status>
++  <executed_ddl>CREATE OR REPLACE PROCEDURE DATA_MANAGER.FX_SEQ_PROC_X (
++  P_MESSAGE IN VARCHAR2,
++  P_LOG_ID OUT NUMBER
++)
++AS
++BEGIN
++INSERT INTO DATA_MANAGER.FX_SEQ_LOG_X (LOG_ID, LOG_MESSAGE) VALUES ((SELECT NVL(MAX(LOG_ID),0)+1 FROM DATA_MANAGER.FX_SEQ_LOG_X), P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;
++END FX_SEQ_PROC_X;</executed_ddl>
++  <execution_time>0.009057</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_Delete_Round_1.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Delete_Round_1.json.current	2026-10-11 16:58:23.801775765 +0100
+@@ -1 +1 @@
+-{"operation":"DELETE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_deleted":3,"lobs_written":0,"execution_time":0.000900451}
+\ No newline at end of file
++{"operation":"DELETE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_deleted":2,"lobs_written":0,"execution_time":0.000990473}
+\ No newline at end of file
+--- baseline/Unit_Test_Delete_Round_1.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Unit_Test_Delete_Round_1.xml.current	2026-10-11 16:58:23.699576974 +0100
+@@ -4,8 +4,8 @@
+ <operation>DELETE</operation>
+ <table_name>OCI_FIELD_TEST</table_name>
+ <owner>DATA_MANAGER</owner>
+-<rows_deleted>0</rows_deleted>
++<rows_deleted>1</rows_deleted>
+ <lobs_written>0</lobs_written>
+-<execution_time>0.002619</execution_time>
++<execution_time>0.002171</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Unit_Test_Delete_Round_2.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Delete_Round_2.json.current	2026-10-11 16:58:23.754282782 +0100
+@@ -1 +1 @@
+-{"operation":"DELETE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_deleted":2,"lobs_written":0,"execution_time":0.00130662}
+\ No newline at end of file
++{"operation":"DELETE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_deleted":1,"lobs_written":0,"execution_time":0.000732433}
+\ No newline at end of file
+--- baseline/Unit_Test_Delete_Round_2.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Unit_Test_Delete_Round_2.xml.current	2026-10-11 16:58:23.188893367 +0100
+@@ -4,8 +4,8 @@
+ <operation>DELETE</operation>
+ <table_name>OCI_FIELD_TEST</table_name>
+ <owner>DATA_MANAGER</owner>
+-<rows_deleted>2</rows_deleted>
++<rows_deleted>0</rows_deleted>
+ <lobs_written>0</lobs_written>
+-<execution_time>0.003572</execution_time>
++<execution_time>0.001843</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Unit_Test_DropTable_Round_1.json.baseline	2026-09-06 18:33:25.000000000 +0100
++++ baseline/Unit_Test_DropTable_Round_1.json.current	2026-10-11 16:58:23.868437478 +0100
+@@ -1 +1 @@
+-{"operation":"DROP_TABLE","status":"TEMPLATE_GENERATED","table_name":"MIGRATION_LOG","generated_ddl":"DROP TABLE HR.MIGRATION_LOG CASCADE CONSTRAINTS;"}
+\ No newline at end of file
++{"operation":"DROP_TABLE","status":"SUCCESS","executed_ddl":"DROP TABLE DATA_MANAGER.FX_DROP_R1_J CASCADE CONSTRAINTS PURGE;","execution_time":0.019483}
+\ No newline at end of file
+--- baseline/Unit_Test_DropTable_Round_1.xml.baseline	2026-09-06 18:33:25.000000000 +0100
++++ baseline/Unit_Test_DropTable_Round_1.xml.current	2026-10-11 16:58:23.234023342 +0100
+@@ -1,9 +1,7 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Drop_Table_Template>
++<DDL_Execution_Result>
+   <operation>DROP_TABLE</operation>
+-  <table_name>MIGRATION_LOG</table_name>
+-  <owner>HR</owner>
+-  <cascade_constraints>1</cascade_constraints>
+-  <purge>0</purge>
+-  <generated_ddl>DROP TABLE HR.MIGRATION_LOG CASCADE CONSTRAINTS;</generated_ddl>
+-</Drop_Table_Template>
++  <status>SUCCESS</status>
++  <executed_ddl>DROP TABLE DATA_MANAGER.FX_DROP_R1_X CASCADE CONSTRAINTS PURGE;</executed_ddl>
++  <execution_time>0.032823</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_DropTable_Round_4_DESTRUCTIVE_Confirmed.json.baseline	2026-09-07 16:51:02.000000000 +0100
++++ baseline/Unit_Test_DropTable_Round_4_DESTRUCTIVE_Confirmed.json.current	2026-10-11 16:58:23.877490934 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_droptable_round_4_destructive","operation":"DROP_TABLE","error_code":"DDL_EXECUTION_FAILED","error_text":"Refusing to execute DROP_TABLE: a managed transaction is active (tx_id='ba6aa7cd-3549-4f20-a468-8bbcd532209b'). Oracle DDL implicitly commits, which would silently commit that transaction's pending work. Commit or roll back the active transaction first."}
+\ No newline at end of file
++{"operation":"DROP_TABLE","status":"SUCCESS","executed_ddl":"DROP TABLE DATA_MANAGER.FX_DROP_ME_J CASCADE CONSTRAINTS;","execution_time":0.008182}
+\ No newline at end of file
+--- baseline/Unit_Test_Grant_Round_1.json.baseline	2026-09-05 23:55:34.000000000 +0100
++++ baseline/Unit_Test_Grant_Round_1.json.current	2026-10-11 16:58:23.027083058 +0100
+@@ -1 +1 @@
+-{"operation":"GRANT","status":"TEMPLATE_GENERATED","grantee":"MIGRATOR_USER","object_name":"EMPLOYEES","privilege_count":2,"generated_ddl":"GRANT SELECT, INSERT ON HR.EMPLOYEES TO MIGRATOR_USER;"}
+\ No newline at end of file
++{"operation":"GRANT","status":"SUCCESS","executed_ddl":"GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO FX_GRANTEE;","execution_time":0.003672}
+\ No newline at end of file
+--- baseline/Unit_Test_Grant_Round_1.xml.baseline	2026-09-05 23:55:29.000000000 +0100
++++ baseline/Unit_Test_Grant_Round_1.xml.current	2026-10-11 16:58:15.470720822 +0100
+@@ -1,14 +1,7 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<Grant_Template>
++<DDL_Execution_Result>
+   <operation>GRANT</operation>
+-  <grantee>MIGRATOR_USER</grantee>
+-  <object_type>TABLE</object_type>
+-  <object_name>EMPLOYEES</object_name>
+-  <owner>HR</owner>
+-  <with_grant_option>0</with_grant_option>
+-  <privileges count="2">
+-    <privilege>SELECT</privilege>
+-    <privilege>INSERT</privilege>
+-  </privileges>
+-  <generated_ddl>GRANT SELECT, INSERT ON HR.EMPLOYEES TO MIGRATOR_USER;</generated_ddl>
+-</Grant_Template>
++  <status>SUCCESS</status>
++  <executed_ddl>GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO FX_GRANTEE;</executed_ddl>
++  <execution_time>0.017624</execution_time>
++</DDL_Execution_Result>
+--- baseline/Unit_Test_Insert_Round_5.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Insert_Round_5.json.current	2026-10-11 16:58:28.988027725 +0100
+@@ -1 +1 @@
+-{"operation":"INSERT","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_inserted":2,"lobs_written":1,"execution_time":0.011297319}
+\ No newline at end of file
++{"operation":"INSERT","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_inserted":2,"lobs_written":2,"execution_time":0.019823287}
+\ No newline at end of file
+--- baseline/Unit_Test_Insert_Round_5.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Unit_Test_Insert_Round_5.xml.current	2026-10-11 16:58:23.256234363 +0100
+@@ -5,7 +5,7 @@
+ <table_name>OCI_FIELD_TEST</table_name>
+ <owner>DATA_MANAGER</owner>
+ <rows_inserted>2</rows_inserted>
+-<lobs_written>1</lobs_written>
+-<execution_time>0.008738</execution_time>
++<lobs_written>2</lobs_written>
++<execution_time>0.008734</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Unit_Test_Procedure_Round_1.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Procedure_Round_1.json.current	2026-10-11 16:58:23.307646317 +0100
+@@ -1 +1 @@
+-{"procedure_name":"DATA_MANAGER.GET_DEPT_STATUS","execution_time":0.007315988,"out_parameters":[{"param_name":"P_STATUS","param_type":"INTEGER","param_value":"76"}],"resultsets":[]}
+\ No newline at end of file
++{"procedure_name":"DATA_MANAGER.GET_DEPT_STATUS","execution_time":0.003011301,"out_parameters":[{"param_name":"P_STATUS","param_type":"INTEGER","param_value":"2"}],"resultsets":[]}
+\ No newline at end of file
+--- baseline/Unit_Test_Procedure_Round_1.xml.baseline	2026-08-18 21:27:14.000000000 +0100
++++ baseline/Unit_Test_Procedure_Round_1.xml.current	2026-10-11 16:58:23.406922963 +0100
+@@ -3,9 +3,9 @@
+ <Procedure_Result>
+ <execution_envelope>
+ <procedure_name>DATA_MANAGER.GET_DEPT_STATUS</procedure_name>
+-<execution_time>0.001504</execution_time>
++<execution_time>0.001228</execution_time>
+ <out_parameters>
+-  <parameter><param_name>P_STATUS</param_name><param_type>INTEGER</param_type><param_value>83</param_value></parameter>
++  <parameter><param_name>P_STATUS</param_name><param_type>INTEGER</param_type><param_value>2</param_value></parameter>
+ </out_parameters>
+ </execution_envelope>
+ </Procedure_Result>
+--- baseline/Unit_Test_Procedure_Round_2.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Procedure_Round_2.json.current	2026-10-11 16:58:32.140989758 +0100
+@@ -1 +1 @@
+-{"procedure_name":"DATA_MANAGER.GET_FIELD_ROWS","execution_time":0.000684148,"out_parameters":[],"resultsets":[{"param_name":"P_RESULTS","resultset_xml":"<resultset param_name=\"P_RESULTS\">\n<row number=\"1\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"2\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"3\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"4\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"5\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n</resultset>\n"}]}
+\ No newline at end of file
++{"procedure_name":"DATA_MANAGER.GET_FIELD_ROWS","execution_time":0.002440868,"out_parameters":[],"resultsets":[{"param_name":"P_RESULTS","resultset_xml":"<resultset param_name=\"P_RESULTS\">\n<row number=\"1\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 1</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>\n</row>\n<row number=\"2\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"3\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>\n</row>\n<row number=\"4\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>\n</row>\n<row number=\"5\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>\n</row>\n<row number=\"6\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>200</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>BLOB updated by Test_XML_Runner</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"7\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"8\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"9\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>501</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 1</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"10\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"11\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"12\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>701</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 1</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"13\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>702</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"14\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>703</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 1 (json)</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"15\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>704</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 2 (json)</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"16\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>901</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 9 multi-row BLOB row 1</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"17\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>902</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 9 multi-row BLOB row 2</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>\n</row>\n<row number=\"18\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4242</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed row 4242 - every type</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>02-JAN-30</field_value></field>\n</row>\n<row number=\"19\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4243</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed BLOB row 4243</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>03-JAN-30</field_value></field>\n</row>\n<row number=\"20\">\n<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4244</field_value></field>\n<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed BLOB row 4244</field_value></field>\n<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>04-JAN-30</field_value></field>\n</row>\n</resultset>\n"}]}
+\ No newline at end of file
+--- baseline/Unit_Test_Procedure_Round_2.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Unit_Test_Procedure_Round_2.xml.current	2026-10-11 16:58:23.793194902 +0100
+@@ -3,7 +3,7 @@
+ <Procedure_Result>
+ <execution_envelope>
+ <procedure_name>DATA_MANAGER.GET_FIELD_ROWS</procedure_name>
+-<execution_time>0.002643</execution_time>
++<execution_time>0.002258</execution_time>
+ <resultset param_name="P_RESULTS">
+ <row number="1">
+ <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+@@ -16,19 +16,64 @@
+ <field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
+ </row>
+ <row number="3">
+-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>99</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 1 scalar test row 2</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>20-MAY-26</field_value></field>
+ </row>
+ <row number="4">
+-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>300</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
+ </row>
+ <row number="5">
+-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>42</field_value></field>
+-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Updated by Test_XML_Runner - scalar test</field_value></field>
+-<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>23-MAY-26</field_value></field>
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="6">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>400</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value></field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="7">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="8">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>701</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 1</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="9">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>702</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Transaction name test - row 2</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="10">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>901</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 9 multi-row BLOB row 1</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="11">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>902</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 9 multi-row BLOB row 2</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value></field_value></field>
++</row>
++<row number="12">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4242</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed row 4242 - every type</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>02-JAN-30</field_value></field>
++</row>
++<row number="13">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4243</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed BLOB row 4243</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>03-JAN-30</field_value></field>
++</row>
++<row number="14">
++<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>4244</field_value></field>
++<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Seed BLOB row 4244</field_value></field>
++<field><field_name>DATE_COL</field_name><field_type>DATE</field_type><field_value>04-JAN-30</field_value></field>
+ </row>
+ </resultset>
+ </execution_envelope>
+--- baseline/Unit_Test_Update_Blob.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Update_Blob.json.current	2026-10-11 16:58:29.063057154 +0100
+@@ -1 +1 @@
+-{"status":"ERROR","audit_id":"audit_stub_update_blob","operation":"UPDATE","error_code":"EXECUTE_FAILED","error_text":"execute_update_batch failed (rc=-1) - see update_Data_Manager.log"}
+\ No newline at end of file
++{"operation":"UPDATE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_updated":1,"lobs_written":1,"execution_time":0.021114309999999969}
+\ No newline at end of file
+--- baseline/Unit_Test_Update_Blob.xml.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Update_Blob.xml.current	2026-10-11 16:58:15.444310461 +0100
+@@ -1,10 +1,11 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <output_xml>
+ <execution_envelope>
+-<status>ERROR</status>
+-<audit_id>audit_stub_update_blob</audit_id>
+ <operation>UPDATE</operation>
+-<error_code>EXECUTE_FAILED</error_code>
+-<error_text>execute_update_batch failed (rc=-1) - see update_Data_Manager.log</error_text>
++<table_name>OCI_FIELD_TEST</table_name>
++<owner>DATA_MANAGER</owner>
++<rows_updated>1</rows_updated>
++<lobs_written>1</lobs_written>
++<execution_time>0.014197</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Unit_Test_Update_Clob.xml.baseline	2026-08-18 21:27:13.000000000 +0100
++++ baseline/Unit_Test_Update_Clob.xml.current	2026-10-11 16:58:15.390481482 +0100
+@@ -4,8 +4,8 @@
+ <operation>UPDATE</operation>
+ <table_name>OCI_FIELD_TEST</table_name>
+ <owner>DATA_MANAGER</owner>
+-<rows_updated>1</rows_updated>
+-<lobs_written>1</lobs_written>
+-<execution_time>0.022021</execution_time>
++<rows_updated>0</rows_updated>
++<lobs_written>0</lobs_written>
++<execution_time>0.002100</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Unit_Test_Update_Scalar.json.baseline	2026-08-17 22:01:02.000000000 +0100
++++ baseline/Unit_Test_Update_Scalar.json.current	2026-10-11 16:58:23.022613162 +0100
+@@ -1 +1 @@
+-{"operation":"UPDATE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_updated":1,"lobs_written":0,"execution_time":0.004485267}
+\ No newline at end of file
++{"operation":"UPDATE","table_name":"OCI_FIELD_TEST","owner":"DATA_MANAGER","rows_updated":2,"lobs_written":0,"execution_time":0.004748257}
+\ No newline at end of file
+--- baseline/Unit_Test_Update_Scalar.xml.baseline	2026-08-18 21:27:14.000000000 +0100
++++ baseline/Unit_Test_Update_Scalar.xml.current	2026-10-11 16:58:15.414461800 +0100
+@@ -4,8 +4,8 @@
+ <operation>UPDATE</operation>
+ <table_name>OCI_FIELD_TEST</table_name>
+ <owner>DATA_MANAGER</owner>
+-<rows_updated>1</rows_updated>
++<rows_updated>2</rows_updated>
+ <lobs_written>0</lobs_written>
+-<execution_time>0.003650</execution_time>
++<execution_time>0.006519</execution_time>
+ </execution_envelope>
+ </output_xml>
+--- baseline/Verify_Round_5_Clob.xml.baseline	2026-08-24 16:52:28.000000000 +0100
++++ baseline/Verify_Round_5_Clob.xml.current	2026-10-11 16:58:23.402087206 +0100
+@@ -8,24 +8,19 @@
+ <row number="1">
+ <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>501</field_value></field>
+ <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 1</field_value></field>
+-<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value></field_value></field>
++<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/CLOB_COL_row1_clob0.txt</field_value></field>
+ </row>
+ <row number="2">
+-<field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>501</field_value></field>
+-<field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 1</field_value></field>
+-<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value>https:/CLOB_COL_row2_clob1.txt</field_value></field>
+-</row>
+-<row number="3">
+ <field><field_name>NUMBER_COL</field_name><field_type>NUMBER</field_type><field_value>502</field_value></field>
+ <field><field_name>VARCHAR2_COL</field_name><field_type>STRING</field_type><field_value>Round 5 mixed row 2</field_value></field>
+-<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value>https:/CLOB_COL_row3_clob2.txt</field_value></field>
++<field><field_name>CLOB_COL</field_name><field_type>CLOB</field_type><field_value>https://localhost/home/leyden100/eclipse-workspace/OCI_Wrapper/output_clobs/CLOB_COL_row2_clob1.txt</field_value></field>
+ </row>
+ </resultset>
+ <execution_envelope>
+-<num_rows>3</num_rows>
+-<execution_time_total>0.005828</execution_time_total>
+-<fetch_batch_size>1</fetch_batch_size>
++<num_rows>2</num_rows>
++<execution_time_total>0.004436</execution_time_total>
++<fetch_batch_size>5</fetch_batch_size>
+ <blobs_extracted>0</blobs_extracted>
+-<clobs_extracted>3</clobs_extracted>
++<clobs_extracted>2</clobs_extracted>
+ </execution_envelope>
+ </output_xml>
