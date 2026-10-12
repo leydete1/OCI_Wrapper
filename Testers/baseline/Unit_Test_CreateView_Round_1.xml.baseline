@@ -1,16 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Create_View_Template>
+<DDL_Execution_Result>
   <operation>CREATE_VIEW</operation>
-  <view_name>ACTIVE_EMPLOYEES</view_name>
-  <owner>HR</owner>
-  <replace>1</replace>
-  <force>0</force>
-  <columns count="2">
-    <column>EMP_ID</column>
-    <column>EMP_NAME</column>
-  </columns>
-  <query>SELECT EMPLOYEE_ID, FULL_NAME FROM HR.EMPLOYEES WHERE STATUS = &apos;ACTIVE&apos;</query>
-  <generated_ddl>CREATE OR REPLACE VIEW HR.ACTIVE_EMPLOYEES (EMP_ID, EMP_NAME)
+  <status>SUCCESS</status>
+  <executed_ddl>CREATE OR REPLACE VIEW DATA_MANAGER.FX_CV_VIEW_X (NUM_VAL, TEXT_VAL)
 AS
-SELECT EMPLOYEE_ID, FULL_NAME FROM HR.EMPLOYEES WHERE STATUS = &apos;ACTIVE&apos;;</generated_ddl>
-</Create_View_Template>
+SELECT NUMBER_COL, VARCHAR2_COL FROM DATA_MANAGER.OCI_FIELD_TEST WHERE NUMBER_COL IS NOT NULL;</executed_ddl>
+  <execution_time>0.014804</execution_time>
+</DDL_Execution_Result>

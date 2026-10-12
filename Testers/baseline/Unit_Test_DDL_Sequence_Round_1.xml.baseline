@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<output_xml>
-<execution_envelope>
-<status>ERROR</status>
-<audit_id>audit_stub_ddl_sequence_round_1</audit_id>
-<operation>CREATE_PROCEDURE</operation>
-<error_code>DDL_EXECUTION_FAILED</error_code>
-<error_text>OCI Error 24344: ORA-24344: A compilation error occurred while creating an object.
-Help: https://docs.oracle.com/error-help/db/ora-24344/
-</error_text>
-</execution_envelope>
-</output_xml>
+<DDL_Execution_Result>
+  <operation>CREATE_PROCEDURE</operation>
+  <status>SUCCESS</status>
+  <executed_ddl>CREATE OR REPLACE PROCEDURE DATA_MANAGER.FX_SEQ_PROC_X (
+  P_MESSAGE IN VARCHAR2,
+  P_LOG_ID OUT NUMBER
+)
+AS
+BEGIN
+INSERT INTO DATA_MANAGER.FX_SEQ_LOG_X (LOG_ID, LOG_MESSAGE) VALUES ((SELECT NVL(MAX(LOG_ID),0)+1 FROM DATA_MANAGER.FX_SEQ_LOG_X), P_MESSAGE) RETURNING LOG_ID INTO P_LOG_ID;
+END FX_SEQ_PROC_X;</executed_ddl>
+  <execution_time>0.009057</execution_time>
+</DDL_Execution_Result>

@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <output_xml>
 <execution_envelope>
-<status>ERROR</status>
-<audit_id>audit_stub_update_blob</audit_id>
 <operation>UPDATE</operation>
-<error_code>EXECUTE_FAILED</error_code>
-<error_text>execute_update_batch failed (rc=-1) - see update_Data_Manager.log</error_text>
+<table_name>OCI_FIELD_TEST</table_name>
+<owner>DATA_MANAGER</owner>
+<rows_updated>1</rows_updated>
+<lobs_written>1</lobs_written>
+<execution_time>0.014197</execution_time>
 </execution_envelope>
 </output_xml>

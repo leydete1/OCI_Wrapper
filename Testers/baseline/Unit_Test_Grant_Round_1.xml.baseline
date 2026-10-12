@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Grant_Template>
+<DDL_Execution_Result>
   <operation>GRANT</operation>
-  <grantee>MIGRATOR_USER</grantee>
-  <object_type>TABLE</object_type>
-  <object_name>EMPLOYEES</object_name>
-  <owner>HR</owner>
-  <with_grant_option>0</with_grant_option>
-  <privileges count="2">
-    <privilege>SELECT</privilege>
-    <privilege>INSERT</privilege>
-  </privileges>
-  <generated_ddl>GRANT SELECT, INSERT ON HR.EMPLOYEES TO MIGRATOR_USER;</generated_ddl>
-</Grant_Template>
+  <status>SUCCESS</status>
+  <executed_ddl>GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO FX_GRANTEE;</executed_ddl>
+  <execution_time>0.017624</execution_time>
+</DDL_Execution_Result>

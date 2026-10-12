@@ -1,20 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Create_User_Template>
+<DDL_Execution_Result>
   <operation>CREATE_USER</operation>
-  <username>MIGRATOR_USER</username>
-  <default_tablespace>USERS</default_tablespace>
-  <temp_tablespace>TEMP</temp_tablespace>
-  <quota>UNLIMITED</quota>
-  <quota_tablespace>USERS</quota_tablespace>
-  <profile>DEFAULT</profile>
-  <roles count="2">
-    <role>CONNECT</role>
-    <role>RESOURCE</role>
-  </roles>
-  <generated_ddl>CREATE USER MIGRATOR_USER IDENTIFIED BY Round1PlainPwd
+  <status>SUCCESS</status>
+  <executed_ddl>CREATE USER FX_CU_USER_X IDENTIFIED BY Round1PlainPwd
   DEFAULT TABLESPACE USERS
   TEMPORARY TABLESPACE TEMP
   QUOTA UNLIMITED ON USERS
   PROFILE DEFAULT;
-GRANT CONNECT, RESOURCE TO MIGRATOR_USER;</generated_ddl>
-</Create_User_Template>
+GRANT CONNECT, RESOURCE TO FX_CU_USER_X;</executed_ddl>
+  <execution_time>0.041168</execution_time>
+</DDL_Execution_Result>

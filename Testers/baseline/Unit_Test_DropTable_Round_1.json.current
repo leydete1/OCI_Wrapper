@@ -1,1 +1,0 @@
-{"operation":"DROP_TABLE","status":"SUCCESS","executed_ddl":"DROP TABLE DATA_MANAGER.FX_DROP_R1_J CASCADE CONSTRAINTS PURGE;","execution_time":0.019483}

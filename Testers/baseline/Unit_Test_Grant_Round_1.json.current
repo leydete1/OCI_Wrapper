@@ -1,1 +1,0 @@
-{"operation":"GRANT","status":"SUCCESS","executed_ddl":"GRANT SELECT, INSERT ON DATA_MANAGER.OCI_FIELD_TEST TO FX_GRANTEE;","execution_time":0.003672}
