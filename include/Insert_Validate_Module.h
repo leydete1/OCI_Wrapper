@@ -1,11 +1,11 @@
 /*
  * OCI_Insert_Validate_Module.h
  *
- * Stage 2 - Insert Template Validator
- * -------------------------------------
- * Accepts a fully-formed <Insert Template> XML (produced by Stage 1
- * and then populated by the caller with <insert_value> entries) and
- * validates every value against its declared Oracle column metadata.
+ * validate_field() - checks one value against its column's metadata.
+ * Level 2 (level2_validate_insert/_update) builds a parsed_field_t
+ * from the request and metadata_cache and calls it for every field.
+ * (2026-10-13, fix-22 point 18: the Insert Template feature this
+ * header was written for had no callers and was removed.)
  *
  * Rules enforced per Oracle data type
  * ------------------------------------
@@ -46,10 +46,8 @@
  *     raised UNLESS field_default is non-empty (Oracle will supply it).
  *
  * Return value
- *   validate_insert_template() returns 0 on full success.
- *   On the first validation failure it returns -1 and writes a
- *   human-readable error description into the caller-supplied
- *   error_buf / error_buf_size.  All events are also logged.
+ *   validate_field() returns FIELD_VALID, or the failure kind with
+ *   a human-readable message in msg.
  */
 
 #ifndef OCI_INSERT_VALIDATE_MODULE_H
@@ -121,10 +119,8 @@ typedef struct {
  * Dispatches to the correct type-specific validator (validate_numeric,
  * validate_string, validate_date, etc.) based on f->field_type, after
  * the nullable check. Same rules documented in this header's own
- * top-level comment block - this is the single place both
- * validate_insert_template() (below, XML-string path) and
- * level2_validate_insert() (OCI_Level2_Parser.c, insert_request_t
- * path) ultimately call.
+ * top-level comment block. Called by Level 2 for every INSERT and
+ * UPDATE field.
  *
  * Does NOT check for an unknown column name or a missing required
  * column - see FIELD_UNKNOWN_COLUMN/FIELD_MISSING_REQUIRED_COLUMN
@@ -136,44 +132,5 @@ field_validation_result_t validate_field(oci_context_t        *ctx,
                                           const parsed_field_t *f,
                                           char                 *msg,
                                           size_t                msg_max);
-
-typedef struct {
-    int                       field_number;           /* 1-based          */
-    char                      field_name[128];
-    char                      field_type[128];
-    char                      insert_value[1024];
-    field_validation_result_t result;
-    char                      message[256];           /* human description*/
-} field_report_t;
-
-/* ------------------------------------------------------------------ */
-/*  Public API                                                          */
-/* ------------------------------------------------------------------ */
-
-/*
- * validate_insert_template()
- *
- * Parse the <Insert Template> XML produced by get_insert_template()
- * (and populated with <insert_value> entries by the caller), then
- * validate every field value against its declared Oracle metadata.
- *
- * Parameters
- *   ctx           - OCI context (for logger)
- *   template_xml  - NULL-terminated XML string to validate
- *   error_buf     - caller-supplied buffer for first error message
- *   error_buf_size- size of error_buf in bytes
- *
- * Returns
- *   0             - all fields valid
- *  -1             - one or more validation failures
- *                   (first failure written to error_buf)
- *
- * All field results (pass and fail) are written to the log at
- * LOG_DEBUG; failures are also written at LOG_ERROR.
- */
-int validate_insert_template(oci_context_t *ctx,
-                              const char    *template_xml,
-                              char          *error_buf,
-                              size_t         error_buf_size);
 
 #endif /* OCI_INSERT_VALIDATE_MODULE_H */

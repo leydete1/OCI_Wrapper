@@ -4,8 +4,8 @@
 <operation>UPDATE</operation>
 <table_name>OCI_FIELD_TEST</table_name>
 <owner>DATA_MANAGER</owner>
-<rows_updated>2</rows_updated>
+<rows_updated>3</rows_updated>
 <lobs_written>0</lobs_written>
-<execution_time>0.018262</execution_time>
+<execution_time>0.009029</execution_time>
 </execution_envelope>
 </output_xml>

@@ -357,7 +357,9 @@ typedef struct
     char BLOB_default_MIME_TYPE_col_4[10];
     char BLOB_default_MIME_TYPE_col_5[10];
     char BLOB_default_MIME_TYPE      [10];
-    char BLOB_default_file_name      [10];
+    char BLOB_default_file_name      [64];   /* fix-22 point 19 (2026-10-13):
+                                               was [10] - load_ini cut
+                                               'blob_output' to 'blob_outp' */
     int  BLOB_append_file_timestamp;
     int  query_fetch_batch_size;
     char clob_default_extension[16];

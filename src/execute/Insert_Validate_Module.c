@@ -1,16 +1,16 @@
 
 /*
- * OCI_Insert_Validate_Module.c
+ * Insert_Validate_Module.c
  *
- * Stage 2 - Insert Template Validator
- * -------------------------------------
- * Parses every <field> block in the <Insert Template> XML produced by
- * Stage 1 and validates the <insert_value> against the declared Oracle
- * column metadata.
+ * validate_field(): checks one value against its column's metadata
+ * (type, length, precision/scale, nullability). Level 2 calls it for
+ * every INSERT and UPDATE field (level2_validate_insert/_update, with
+ * metadata from metadata_cache). The rules are listed in the header.
+ * Makes no database calls.
  *
- * Validation rules per Oracle data type are documented in the header.
- * This module is completely self-contained; it does NOT make any OCI
- * calls at runtime (all metadata it needs is embedded in the XML).
+ * 2026-10-13 (fix-22 point 18): the Insert Template feature this file
+ * started in (validate_insert_template() and its XML helpers) had no
+ * callers and was removed, with Insert_Template_Module.c/.h.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -30,51 +30,6 @@
  * exposed there so level2_validate_insert() can build one from
  * insert_request_t + metadata_cache and reuse validate_field()
  * directly, rather than this being a private detail of this file. */
-
-/* ------------------------------------------------------------------ */
-/*  Static helpers                                                      */
-/* ------------------------------------------------------------------ */
-
-static void trim_inplace_v(char *s)
-{
-    if (!s) return;
-    char *p = s;
-    while (*p && isspace((unsigned char)*p)) p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    int len = (int)strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1]))
-    { s[len - 1] = '\0'; len--; }
-}
-
-/* Extract text between <tag> and </tag>; returns 1 on success */
-static int extract_tag(const char *src, const char *tag,
-                       char *dest, size_t dest_max)
-{
-    if (!src || !tag || !dest) return 0;
-    char open [132], close[132];
-    snprintf(open,  sizeof(open),  "<%s>",  tag);
-    snprintf(close, sizeof(close), "</%s>", tag);
-    const char *s = strstr(src, open);
-    if (!s) return 0;
-    s += strlen(open);
-    const char *e = strstr(s, close);
-    if (!e) return 0;
-    size_t len = (size_t)(e - s);
-    if (len >= dest_max) len = dest_max - 1;
-    memcpy(dest, s, len);
-    dest[len] = '\0';
-    trim_inplace_v(dest);
-    return 1;
-}
-
-/* Extract integer between <tag> and </tag>; returns 1 on success */
-static int extract_tag_int(const char *src, const char *tag, int *out)
-{
-    char buf[32] = {0};
-    if (!extract_tag(src, tag, buf, sizeof(buf))) return 0;
-    *out = atoi(buf);
-    return 1;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Type-family helpers                                                 */
@@ -489,179 +444,3 @@ validate_field(oci_context_t        *ctx,
     return FIELD_VALID;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Parse one <field> block into parsed_field_t                        */
-/*  Returns 1 on success, 0 on parse failure                           */
-/* ------------------------------------------------------------------ */
-static int parse_field_block(const char    *block,
-                              parsed_field_t *out)
-{
-    memset(out, 0, sizeof(*out));
-
-    char tmp[32] = {0};
-
-    if (!extract_tag(block, "field_number",   tmp,                 sizeof(tmp)))
-        return 0;
-    out->field_number = atoi(tmp);
-
-    if (!extract_tag(block, "field_name",     out->field_name,     sizeof(out->field_name)))
-        return 0;
-    if (!extract_tag(block, "field_type",     out->field_type,     sizeof(out->field_type)))
-        return 0;
-
-    memset(tmp, 0, sizeof(tmp));
-    if (!extract_tag(block, "field_length",   tmp,                 sizeof(tmp)))
-        return 0;
-    out->field_length = atoi(tmp);
-
-    memset(tmp, 0, sizeof(tmp));
-    if (!extract_tag(block, "field_precision",tmp,                 sizeof(tmp)))
-        return 0;
-    out->field_precision = atoi(tmp);
-
-    memset(tmp, 0, sizeof(tmp));
-    if (!extract_tag(block, "field_scale",    tmp,                 sizeof(tmp)))
-        return 0;
-    out->field_scale = atoi(tmp);
-
-    if (!extract_tag(block, "field_nullable", out->field_nullable, sizeof(out->field_nullable)))
-        return 0;
-
-    /* field_default may be absent / empty - that is fine */
-    extract_tag(block, "field_default",   out->field_default,  sizeof(out->field_default));
-
-    /* insert_value may be absent / empty */
-    extract_tag(block, "insert_value",    out->insert_value,   sizeof(out->insert_value));
-
-    return 1;
-}
-
-/* ==================================================================
- *  validate_insert_template - public entry point
- * ================================================================== */
-int validate_insert_template(oci_context_t *ctx,
-                              const char    *template_xml,
-                              char          *error_buf,
-                              size_t         error_buf_size)
-{
-    int failures    = 0;
-    int field_count = 0;
-
-    logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "Entering validate_insert_template");
-
-    if (!ctx || !template_xml)
-    {
-        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                     "Invalid arguments: ctx or template_xml is NULL");
-        return -1;
-    }
-
-    if (error_buf && error_buf_size > 0)
-        error_buf[0] = '\0';
-
-    /* ---- Walk every <field> block in the XML ---- */
-    const char *cursor = template_xml;
-    const char *OPEN  = "<field>";
-    const char *CLOSE = "</field>";
-    size_t      open_len  = strlen(OPEN);
-    size_t      close_len = strlen(CLOSE);
-
-    while ((cursor = strstr(cursor, OPEN)) != NULL)
-    {
-        const char *block_start = cursor;
-        const char *block_end   = strstr(cursor + open_len, CLOSE);
-
-        if (!block_end)
-        {
-            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "Malformed XML: <field> without </field> "
-                         "near offset %td",
-                         (ptrdiff_t)(cursor - template_xml));
-            if (error_buf && error_buf_size > 0)
-                snprintf(error_buf, error_buf_size,
-                         "Malformed XML: unclosed <field> tag");
-            return -1;
-        }
-
-        /* Extract the block content (including the tags) */
-        size_t block_len = (size_t)(block_end - block_start) + close_len;
-        char  *block     = malloc(block_len + 1);
-        if (!block)
-        {
-            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "malloc failed for field block");
-            return -1;
-        }
-        memcpy(block, block_start, block_len);
-        block[block_len] = '\0';
-
-        /* Parse the block */
-        parsed_field_t pf;
-        if (!parse_field_block(block, &pf))
-        {
-            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "Failed to parse <field> block #%d",
-                         field_count + 1);
-            free(block);
-            if (error_buf && error_buf_size > 0)
-                snprintf(error_buf, error_buf_size,
-                         "Failed to parse <field> block #%d",
-                         field_count + 1);
-            return -1;
-        }
-        free(block);
-
-        field_count++;
-
-        logger_write(ctx->insert_logger, LOG_DEBUG, __func__, 0,
-                     "Validating field %d: name='%s' type='%s' "
-                     "len=%d prec=%d scale=%d null='%s' value='%s'",
-                     pf.field_number,
-                     pf.field_name,
-                     pf.field_type,
-                     pf.field_length,
-                     pf.field_precision,
-                     pf.field_scale,
-                     pf.field_nullable,
-                     pf.insert_value);
-
-        char field_msg[512] = {0};
-        field_validation_result_t result =
-            validate_field(ctx, &pf, field_msg, sizeof(field_msg));
-
-        if (result == FIELD_VALID)
-        {
-            logger_write(ctx->insert_logger, LOG_DEBUG, __func__, 0,
-                         "Field '%s' VALID", pf.field_name);
-        }
-        else
-        {
-            failures++;
-            logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
-                         "Field '%s' FAILED (result=%d): %s",
-                         pf.field_name, result, field_msg);
-
-            /* Capture first failure into caller buffer */
-            if (failures == 1 && error_buf && error_buf_size > 0)
-                snprintf(error_buf, error_buf_size, "%s", field_msg);
-        }
-
-        /* Advance cursor past this block */
-        cursor = block_end + close_len;
-    }
-
-    if (field_count == 0)
-    {
-        logger_write(ctx->insert_logger, LOG_WARN, __func__, 0,
-                     "No <field> blocks found in template XML - "
-                     "nothing to validate");
-    }
-
-    logger_write(ctx->insert_logger, LOG_INFO, __func__, 0,
-                 "validate_insert_template complete: "
-                 "fields=%d failures=%d",
-                 field_count, failures);
-
-    return (failures > 0) ? -1 : 0;
-}

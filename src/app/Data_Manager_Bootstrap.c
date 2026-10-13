@@ -95,7 +95,6 @@
 #include "Update_Execute_Module.h"
 #include "Delete_Execute_Module.h"
 #include "Execute_Procedure_Module.h"
-#include "Insert_Template_Module.h"
 #include "Insert_Validate_Module.h"
 #include "logger.h"
 #include "ini_reader.h"
