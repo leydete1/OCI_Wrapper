@@ -40,7 +40,10 @@
  *       -lcurl -lpthread
  *
  * Usage:
- *   ./http_consumer_tester [base_url] [xml_dir] [json_dir] [num_threads] [baseline_dir]
+ *   ./http_consumer_tester [base_url] [xml_dir] [json_dir] [num_threads] [baseline_dir] [run_plan]
+ *
+ *   run_plan defaults to ./run_plan.txt; if it does not exist every
+ *   fixture runs in parallel (2026-10-14, point d1 - see load_run_plan()).
  *
  *   All arguments optional, in order, with sane defaults below. Example:
  *   ./http_consumer_tester https://localhost:8443 \
@@ -61,6 +64,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <ctype.h>      /* isspace() - run plan parser, point d1 */
 
 /* Safety net (2026-08-17) - bypasses curl.h's GCC-specific compile-time
  * type-checking macros (typecheck-gcc.h) entirely. Those macros are
@@ -81,6 +85,7 @@
 #define DEFAULT_JSON_DIR     "/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/consumers/file/Input_JSON"
 #define DEFAULT_NUM_THREADS  8
 #define DEFAULT_BASELINE_DIR "./baseline"
+#define DEFAULT_RUN_PLAN     "./run_plan.txt"   /* point d1 */
 
 static char g_base_url[512];
 static char g_baseline_dir[512];
@@ -94,6 +99,9 @@ typedef struct {
     char *path;       /* full path on disk                          */
     char *name;       /* basename, used as baseline key              */
     int   is_json;    /* 1 = .json, 0 = .xml                        */
+    int   planned;    /* 1 = listed in run_plan.txt (point d1)       */
+    int   strict;     /* 1 = a baseline difference is always a FAIL
+                         (planned, no 'variance' word - point d3)    */
 } fixture_t;
 
 static fixture_t *g_fixtures = NULL;
@@ -598,7 +606,10 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
     /* Captured now, while body is still alive - it's freed right after
      * the POST below, but is_expected_variance_fixture()'s result is
      * still needed later, at the baseline-compare point. */
-    int fixture_expects_variance = is_expected_variance_fixture(fx->name, body);
+    /* 2026-10-14 (point d3): a fixture in the run plan runs in a fixed
+     * order against fixed data, so any difference is a real one. */
+    int fixture_expects_variance =
+        fx->strict ? 0 : is_expected_variance_fixture(fx->name, body);
 
     char url[600];
     snprintf(url, sizeof(url), "%s/", g_base_url);
@@ -716,8 +727,10 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
     else
     {
         printf("[%s] FAIL - response differs from baseline (HTTP %ld) - "
-               "unexpected - no known source of variance for this "
-               "fixture\n", fx->name, status);
+               "%s\n", fx->name, status,
+               fx->strict ? "fixture is in run_plan.txt, compared strictly"
+                          : "unexpected - no known source of variance for "
+                            "this fixture");
         save_current(fx, &resp);   /* point 10 */
         pthread_mutex_lock(&g_stats_mutex);
         g_stat_fail++;
@@ -728,8 +741,225 @@ static void run_one_fixture(CURL *curl, const fixture_t *fx)
 }
 
 /* ---------------------------------------------------------------- */
-/*  Worker thread - index-strided over g_fixtures for real           */
-/*  concurrent load rather than a sequential per-thread chunk.       */
+/*  Run plan (2026-10-14, points d1-d3).                             */
+/*                                                                   */
+/*  run_plan.txt - '#' starts a comment, blank lines are ignored:    */
+/*                                                                   */
+/*    [solo]                 one at a time, in this order, before    */
+/*    <fixture file name>    anything else (database as the reset    */
+/*                           left it)                                */
+/*    [chain <name>]         in this order, one after the other, on  */
+/*    <fixture file name>    one thread; chains run alongside each   */
+/*    <fixture> variance     other and the unlisted fixtures         */
+/*                                                                   */
+/*  A listed fixture is compared strictly (point d3) unless its line */
+/*  ends with 'variance'. Unlisted fixtures run in parallel as       */
+/*  before.                                                          */
+/* ---------------------------------------------------------------- */
+#define PLAN_MAX_CHAINS 64
+
+typedef struct {
+    char  name[64];
+    int  *fx;           /* indexes into g_fixtures, in run order */
+    int   count;
+} plan_chain_t;
+
+static int          *g_solo = NULL;
+static int           g_solo_count = 0;
+static plan_chain_t  g_chains[PLAN_MAX_CHAINS];
+static int           g_chain_count = 0;
+static char        **g_plan_missing = NULL;   /* listed, no such fixture */
+static int           g_plan_missing_count = 0;
+
+static char *plan_trim(char *s)
+{
+    while (*s && isspace((unsigned char)*s)) s++;
+    size_t n = strlen(s);
+    while (n > 0 && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
+    return s;
+}
+
+static int find_fixture(const char *name)
+{
+    for (int i = 0; i < g_fixture_count; i++)
+        if (strcmp(g_fixtures[i].name, name) == 0)
+            return i;
+    return -1;
+}
+
+static int append_index(int **arr, int *count, int value)
+{
+    int *grown = realloc(*arr, sizeof(int) * (size_t)(*count + 1));
+    if (!grown) return -1;
+    grown[(*count)++] = value;
+    *arr = grown;
+    return 0;
+}
+
+/* Returns 0 (plan loaded, or no plan file), -1 on an error in the
+ * file - the tester then stops before it starts. */
+static int load_run_plan(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+    {
+        printf("No run plan (%s) - every fixture runs in parallel\n", path);
+        return 0;
+    }
+
+    enum { SEC_NONE, SEC_SOLO, SEC_CHAIN } sec = SEC_NONE;
+    plan_chain_t *chain = NULL;
+    char line[512];
+    int  lineno = 0;
+
+    while (fgets(line, sizeof(line), f))
+    {
+        lineno++;
+        char *hash = strchr(line, '#');
+        if (hash) *hash = '\0';
+        char *s = plan_trim(line);
+        if (!*s) continue;
+
+        if (*s == '[')
+        {
+            char *end = strchr(s, ']');
+            if (!end) goto bad_line;
+            *end = '\0';
+            char *sec_name = plan_trim(s + 1);
+
+            if (strcasecmp(sec_name, "solo") == 0)
+            {
+                sec = SEC_SOLO;
+                continue;
+            }
+            if (strncasecmp(sec_name, "chain", 5) == 0 &&
+                isspace((unsigned char)sec_name[5]))
+            {
+                char *cname = plan_trim(sec_name + 5);
+                if (!*cname || g_chain_count >= PLAN_MAX_CHAINS) goto bad_line;
+                chain = &g_chains[g_chain_count++];
+                memset(chain, 0, sizeof(*chain));
+                snprintf(chain->name, sizeof(chain->name), "%s", cname);
+                sec = SEC_CHAIN;
+                continue;
+            }
+            goto bad_line;
+        }
+
+        if (sec == SEC_NONE) goto bad_line;   /* fixture before a section */
+
+        /* "<name>" or "<name> variance" */
+        char *name = s;
+        char *rest = s;
+        while (*rest && !isspace((unsigned char)*rest)) rest++;
+        int variance = 0;
+        if (*rest)
+        {
+            *rest++ = '\0';
+            rest = plan_trim(rest);
+            if (strcasecmp(rest, "variance") == 0) variance = 1;
+            else goto bad_line;
+        }
+
+        int i = find_fixture(name);
+        if (i < 0)
+        {
+            char **grown = realloc(g_plan_missing,
+                                   sizeof(char *) * (size_t)(g_plan_missing_count + 1));
+            if (!grown) goto bad_line;
+            g_plan_missing = grown;
+            g_plan_missing[g_plan_missing_count++] = strdup(name);
+            continue;
+        }
+        if (g_fixtures[i].planned)
+        {
+            fprintf(stderr, "%s line %d: '%s' is listed twice\n",
+                    path, lineno, name);
+            fclose(f);
+            return -1;
+        }
+        g_fixtures[i].planned = 1;
+        g_fixtures[i].strict  = !variance;
+
+        int rc = (sec == SEC_SOLO)
+                     ? append_index(&g_solo, &g_solo_count, i)
+                     : append_index(&chain->fx, &chain->count, i);
+        if (rc != 0) goto bad_line;
+    }
+    fclose(f);
+
+    int planned = g_solo_count;
+    for (int c = 0; c < g_chain_count; c++) planned += g_chains[c].count;
+    printf("Run plan %s: %d solo, %d chain(s), %d fixture(s) planned, "
+           "%d not found\n", path, g_solo_count, g_chain_count, planned,
+           g_plan_missing_count);
+    return 0;
+
+bad_line:
+    fprintf(stderr, "%s line %d: not understood (expected [solo], "
+                    "[chain <name>], or '<fixture> [variance]' inside a "
+                    "section)\n", path, lineno);
+    fclose(f);
+    return -1;
+}
+
+/* A planned name with no fixture is a FAIL, so a renamed or deleted
+ * fixture cannot silently drop out of the run. */
+static void report_plan_missing(void)
+{
+    for (int k = 0; k < g_plan_missing_count; k++)
+    {
+        printf("[%s] FAIL - listed in run_plan.txt but no such fixture\n",
+               g_plan_missing[k]);
+        pthread_mutex_lock(&g_stats_mutex);
+        g_stat_total++;
+        g_stat_fail++;
+        pthread_mutex_unlock(&g_stats_mutex);
+    }
+}
+
+static void run_solo_phase(CURL *curl)
+{
+    if (g_solo_count == 0) return;
+    printf("--- Solo phase: %d fixture(s), one at a time ---\n", g_solo_count);
+    for (int k = 0; k < g_solo_count; k++)
+        run_one_fixture(curl, &g_fixtures[g_solo[k]]);
+    printf("--- Parallel phase ---\n");
+}
+
+/* Work queue: one unit per chain (chain >= 0), then one per unlisted
+ * fixture (chain = -1). Workers take the next unit until none is left. */
+typedef struct { int chain; int fx; } work_unit_t;
+
+static work_unit_t     *g_units = NULL;
+static int              g_unit_count = 0;
+static int              g_next_unit = 0;
+static pthread_mutex_t  g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int build_work_queue(void)
+{
+    g_units = malloc(sizeof(work_unit_t) *
+                     (size_t)(g_chain_count + g_fixture_count + 1));
+    if (!g_units) return -1;
+    for (int c = 0; c < g_chain_count; c++)
+        g_units[g_unit_count++] = (work_unit_t){ c, -1 };
+    for (int i = 0; i < g_fixture_count; i++)
+        if (!g_fixtures[i].planned)
+            g_units[g_unit_count++] = (work_unit_t){ -1, i };
+    return 0;
+}
+
+static int next_unit(void)
+{
+    pthread_mutex_lock(&g_queue_mutex);
+    int u = (g_next_unit < g_unit_count) ? g_next_unit++ : -1;
+    pthread_mutex_unlock(&g_queue_mutex);
+    return u;
+}
+
+/* ---------------------------------------------------------------- */
+/*  Worker thread - takes units from the shared queue (2026-10-14,   */
+/*  point d1; it used to stride over g_fixtures by thread index).    */
 /* ---------------------------------------------------------------- */
 typedef struct { int thread_index; } worker_arg_t;
 
@@ -746,8 +976,22 @@ static void *worker_main(void *arg_v)
         return NULL;
     }
 
-    for (int i = idx; i < g_fixture_count; i += g_num_threads)
-        run_one_fixture(curl, &g_fixtures[i]);
+    for (int u = next_unit(); u >= 0; u = next_unit())
+    {
+        const work_unit_t *w = &g_units[u];
+        if (w->chain >= 0)
+        {
+            const plan_chain_t *c = &g_chains[w->chain];
+            printf("--- chain %s: %d fixture(s) in order ---\n",
+                   c->name, c->count);
+            for (int k = 0; k < c->count; k++)
+                run_one_fixture(curl, &g_fixtures[c->fx[k]]);
+        }
+        else
+        {
+            run_one_fixture(curl, &g_fixtures[w->fx]);
+        }
+    }
 
     curl_easy_cleanup(curl);
     return NULL;
@@ -785,6 +1029,8 @@ static void collect_fixtures(const char *dir, int is_json)
 
         fx->name = strdup(entry->d_name);
         fx->is_json = is_json;
+        fx->planned = 0;
+        fx->strict  = 0;
 
         g_fixture_count++;
     }
@@ -799,6 +1045,7 @@ int main(int argc, char *argv[])
     const char *json_dir = argc > 3 ? argv[3] : DEFAULT_JSON_DIR;
     g_num_threads = argc > 4 ? atoi(argv[4]) : DEFAULT_NUM_THREADS;
     strncpy(g_baseline_dir, argc > 5 ? argv[5] : DEFAULT_BASELINE_DIR, sizeof(g_baseline_dir) - 1);
+    const char *plan_path = argc > 6 ? argv[6] : DEFAULT_RUN_PLAN;   /* d1 */
 
     if (g_num_threads < 1) g_num_threads = 1;
 
@@ -817,8 +1064,15 @@ int main(int argc, char *argv[])
     }
 
     printf("HTTP Consumer Tester - %d fixtures, %d threads, base_url=%s, "
-           "baseline_dir=%s\n\n", g_fixture_count, g_num_threads,
+           "baseline_dir=%s\n", g_fixture_count, g_num_threads,
            g_base_url, g_baseline_dir);
+
+    if (load_run_plan(plan_path) != 0 || build_work_queue() != 0)   /* d1 */
+    {
+        fprintf(stderr, "Aborting - run plan not usable.\n");
+        return 1;
+    }
+    printf("\n");
 
     CURL *setup_curl = curl_easy_init();
     if (!setup_curl || create_shared_session(setup_curl) != 0)
@@ -826,6 +1080,9 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Aborting - could not establish shared session.\n");
         return 1;
     }
+
+    report_plan_missing();         /* d1 */
+    run_solo_phase(setup_curl);    /* d1 - before any parallel work */
 
     pthread_t *threads = malloc(sizeof(pthread_t) * g_num_threads);
     for (int i = 0; i < g_num_threads; i++)
