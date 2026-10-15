@@ -269,6 +269,12 @@ struct db_select_cursor_t {
     int             blob_index;
     int             clob_index;
 
+    /* 2026-10-14 (point a1) - this SELECT's lob_output_tag(), taken in
+     * oracle_select_describe_and_define() when the result has a BLOB or
+     * CLOB column; it goes into every LOB file name the cursor writes,
+     * so two SELECTs never write the same file. */
+    char            lob_tag[LOB_OUTPUT_TAG_SIZE];
+
     /* Bug fix (2026-09-15, found via a real ORA-01002 storm under full
      * load - 31+ occurrences in one run, root-caused by tracing an
      * unfiltered log sequence rather than guessed at). A short fetch
@@ -792,6 +798,20 @@ static int oracle_select_describe_and_define(oci_context_t       *ctx,
         }
     }
 
+    /* 2026-10-14 (point a1) - one output tag per SELECT with a LOB
+     * column; logged so a file can be traced to its request. Both
+     * select_open() and select_open_from_cursor() come through here. */
+    for (ub4 i = 0; i < cur->col_count; i++)
+    {
+        if (cur->data_types[i] == SQLT_CLOB || cur->data_types[i] == SQLT_BLOB)
+        {
+            lob_output_tag(cur->lob_tag, sizeof(cur->lob_tag));
+            logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                         "LOB output tag %s for this SELECT", cur->lob_tag);
+            break;
+        }
+    }
+
     if (needs_execute)
     {
         /* Bug fix (found via Driver_Select_Test.c's first real run) -
@@ -1160,15 +1180,17 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
                                 ((size_t)row * cur->buf_sizes[name_col_idx]);
 
         if (ctx->ini->BLOB_append_file_timestamp == 1)
-            build_filename_with_timestamp(name_val, final_name,
+            build_filename_with_timestamp(name_val, cur->lob_tag, final_name,
                                           sizeof(final_name), blob_index, ctx);
         else
             snprintf(final_name, sizeof(final_name), "%s", name_val);
     }
     else
     {
-        snprintf(final_name, sizeof(final_name), "%s_%d",
-                 ctx->ini->BLOB_default_file_name, blob_index);
+        /* 2026-10-14 (point a2): tagged - was "<default>_<n>", which
+         * every SELECT shared (blob_output_0, blob_output_1 ...). */
+        snprintf(final_name, sizeof(final_name), "%s_%s_%d",
+                 ctx->ini->BLOB_default_file_name, cur->lob_tag, blob_index);
     }
 
     item.column_name = cur->col_names[col_idx];
@@ -1356,7 +1378,8 @@ static int oracle_fetch_clob_field(oci_context_t *ctx, db_select_cursor_t *cur,
     }
 
     char clob_filename[512];
-    build_clob_filename(cur->col_names[col_idx], cur->abs_rownum, clob_index,
+    build_clob_filename(cur->col_names[col_idx], cur->lob_tag,
+                         cur->abs_rownum, clob_index,
                          clob_filename, sizeof(clob_filename), ctx);
 
     char clob_filepath[768];

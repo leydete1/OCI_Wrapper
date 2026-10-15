@@ -14,16 +14,19 @@
 
 #include "Clob_Utils.h"
 
-void build_clob_filename(const char *col_name, unsigned int abs_rownum,
-                          int clob_index, char *output, size_t out_size,
+/* 2026-10-14 (point a2): the SELECT's tag goes after the column name -
+ * see Clob_Utils.h. */
+void build_clob_filename(const char *col_name, const char *tag,
+                          unsigned int abs_rownum, int clob_index,
+                          char *output, size_t out_size,
                           oci_context_t *ctx)
 {
     const char *ext = (ctx->ini->clob_default_extension[0] != '\0')
                       ? ctx->ini->clob_default_extension
                       : ".txt";
 
-    snprintf(output, out_size, "%s_row%u_clob%d%s",
-             col_name, abs_rownum, clob_index, ext);
+    snprintf(output, out_size, "%s_%s_row%u_clob%d%s",
+             col_name, tag, abs_rownum, clob_index, ext);
 }
 
 void build_clob_url(const char *filename, const char *filepath,

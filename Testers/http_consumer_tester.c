@@ -534,7 +534,12 @@ static void end_shared_session(CURL *curl)
  * is kept as <baseline_dir>/<name>.current, beside <name>.baseline, so
  * a difference can be read with diff rather than guessed at. A PASS
  * removes any .current left by an earlier run. */
-/* 2026-10-10 (point 12): replaces every _YYYYMMDD_HHMMSS_ in s with
+/* 2026-10-14 (point a4): also masks the gateway's LOB output tag,
+ * _YYYYMMDD_HHMMSS_NNNNNN_ (the time plus a per-SELECT counter), as one
+ * _TS_ - so a BLOB name taken from a name column compares exactly as it
+ * did before the tag, and a CLOB name compares as <col>_TS_row1_clob0.
+ *
+ * 2026-10-10 (point 12): replaces every _YYYYMMDD_HHMMSS_ in s with
  * _TS_, in place. LOB output file names carry the time they were
  * written (BLOB_append_file_timestamp=1), so a SELECT returning BLOBs
  * could never match its baseline. The result is never longer than s. */
@@ -556,9 +561,17 @@ static void mask_lob_timestamps(char *s)
             k++;
         if (k == 17)
         {
+            /* point a4: a 6-digit counter and '_' after it are part of
+             * the tag - checked the same way, stopping at the first
+             * byte that does not fit, so nothing past a NUL is read. */
+            int extra = 0;
+            while (extra < 7 &&
+                   (extra < 6 ? (p[17 + extra] >= '0' && p[17 + extra] <= '9')
+                              : (p[17 + extra] == '_')))
+                extra++;
             memcpy(w, "_TS_", 4);
             w += 4;
-            p += 17;
+            p += 17 + (extra == 7 ? 7 : 0);
             continue;
         }
         *w++ = *p++;

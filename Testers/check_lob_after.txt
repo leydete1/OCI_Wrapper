@@ -1,0 +1,33 @@
+session 35ec143b-45bb-46f8-92a1-cddda3b2b13a - 5 rounds x 3 SELECTs at once (rows 4242, 4243, 4244)
+  round 1 row 4242: CLOB CLOB_COL_20261015_215544_000004_row1_clob0.txt     OK
+  round 1 row 4242: BLOB blob_output_20261015_215544_000004_0               OK
+  round 1 row 4243: CLOB CLOB_COL_20261015_215544_000005_row1_clob0.txt     OK
+  round 1 row 4243: BLOB blob_output_20261015_215544_000005_0               OK
+  round 1 row 4244: CLOB CLOB_COL_20261015_215544_000003_row1_clob0.txt     OK
+  round 1 row 4244: BLOB blob_output_20261015_215544_000003_0               OK
+  round 2 row 4242: CLOB CLOB_COL_20261015_215544_000008_row1_clob0.txt     OK
+  round 2 row 4242: BLOB blob_output_20261015_215544_000008_0               OK
+  round 2 row 4243: CLOB CLOB_COL_20261015_215544_000007_row1_clob0.txt     OK
+  round 2 row 4243: BLOB blob_output_20261015_215544_000007_0               OK
+  round 2 row 4244: CLOB CLOB_COL_20261015_215544_000006_row1_clob0.txt     OK
+  round 2 row 4244: BLOB blob_output_20261015_215544_000006_0               OK
+  round 3 row 4242: CLOB CLOB_COL_20261015_215544_000010_row1_clob0.txt     OK
+  round 3 row 4242: BLOB blob_output_20261015_215544_000010_0               OK
+  round 3 row 4243: CLOB CLOB_COL_20261015_215544_000009_row1_clob0.txt     OK
+  round 3 row 4243: BLOB blob_output_20261015_215544_000009_0               OK
+  round 3 row 4244: CLOB CLOB_COL_20261015_215544_000011_row1_clob0.txt     OK
+  round 3 row 4244: BLOB blob_output_20261015_215544_000011_0               OK
+  round 4 row 4242: CLOB CLOB_COL_20261015_215544_000012_row1_clob0.txt     OK
+  round 4 row 4242: BLOB blob_output_20261015_215544_000012_0               OK
+  round 4 row 4243: CLOB CLOB_COL_20261015_215544_000014_row1_clob0.txt     OK
+  round 4 row 4243: BLOB blob_output_20261015_215544_000014_0               OK
+  round 4 row 4244: CLOB CLOB_COL_20261015_215544_000013_row1_clob0.txt     OK
+  round 4 row 4244: BLOB blob_output_20261015_215544_000013_0               OK
+  round 5 row 4242: CLOB CLOB_COL_20261015_215544_000016_row1_clob0.txt     OK
+  round 5 row 4242: BLOB blob_output_20261015_215544_000016_0               OK
+  round 5 row 4243: CLOB CLOB_COL_20261015_215544_000017_row1_clob0.txt     OK
+  round 5 row 4243: BLOB blob_output_20261015_215544_000017_0               OK
+  round 5 row 4244: CLOB CLOB_COL_20261015_215544_000015_row1_clob0.txt     OK
+  round 5 row 4244: BLOB blob_output_20261015_215544_000015_0               OK
+
+RESULT: 30 file(s) OK, 0 WRONG, 0 missing, 0 response(s) without file names

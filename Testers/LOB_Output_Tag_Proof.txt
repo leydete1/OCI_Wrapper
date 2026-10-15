@@ -1,0 +1,30 @@
+LOB output tag proof - fake OCI, real driver_oracle.c / Blob_Utils.c / Clob_Utils.c, ASan+UBSan, 14 Oct 2026
+OLD = 14 Oct project files   NEW = after apply_lob_output_tag.py
+
+=== OLD
+   WRONG CLOB_COL_row1_clob0.txt
+         holds 'A clob row 1', response expects 'B clob row 1 - different'
+   WRONG blob_output_0
+         holds 'A blob row 1', response expects 'B blob row 1 - different'
+   WRONG CLOB_COL_row2_clob1.txt
+         holds 'A clob row 2', response expects 'B clob row 2 - different'
+Part 2 four SELECTs x 300 on 4 threads: LOB values returned=3000, files on disk=5, file holds another request's data=1500, missing=0, .part left=0, logged errors=0
+   e.g. CLOB file: CLOB_COL_row1_clob0.txt
+
+=== NEW
+Part 1 lob_output_tag: 200000 tags on 8 threads, badly shaped=0, duplicates=0, e.g. 20261014_201525_100001
+Part 2 four SELECTs x 300 on 4 threads: LOB values returned=3000, files on disk=3000, file holds another request's data=0, missing=0, .part left=0, logged errors=0
+   e.g. CLOB file: CLOB_COL_20261014_201526_201200_row2_clob1.txt
+   select log: oracle_select_describe_and_define: LOB output tag 20261014_201525_200001 for this SELECT
+
+=== tester mask (point a4)
+OK    Adam_1_20261010_215252_0.jpg                         -> Adam_1_TS_0.jpg
+OK    Adam_1_20261014_201411_000042_0.jpg                  -> Adam_1_TS_0.jpg
+OK    CLOB_COL_20261014_201411_000042_row1_clob0.txt       -> CLOB_COL_TS_row1_clob0.txt
+OK    blob_output_20261014_201411_999999_3                 -> blob_output_TS_3
+OK    CLOB_COL_row1_clob0.txt                              -> CLOB_COL_row1_clob0.txt
+OK    x_20261014_201411_12345                              -> x_TS_12345
+OK    x_20261014_201411_123456                             -> x_TS_123456
+OK    end_20261014_201411_                                 -> end_TS_
+OK    two a_20261014_201411_000001_0 b_20261014_201411_000002_1 -> two a_TS_0 b_TS_1
+mask test: all OK

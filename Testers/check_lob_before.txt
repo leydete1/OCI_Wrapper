@@ -1,0 +1,33 @@
+session ae086592-dc5a-4ce0-b023-e404c18450ad - 5 rounds x 3 SELECTs at once (rows 4242, 4243, 4244)
+  round 1 row 4242: CLOB CLOB_COL_row1_clob0.txt                            OK
+  round 1 row 4242: BLOB blob_output_0                                      OK
+  round 1 row 4243: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 1 row 4243: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 1 row 4244: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 1 row 4244: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 2 row 4242: CLOB CLOB_COL_row1_clob0.txt                            OK
+  round 2 row 4242: BLOB blob_output_0                                      OK
+  round 2 row 4243: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 2 row 4243: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 2 row 4244: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 2 row 4244: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 3 row 4242: CLOB CLOB_COL_row1_clob0.txt                            OK
+  round 3 row 4242: BLOB blob_output_0                                      OK
+  round 3 row 4243: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 3 row 4243: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 3 row 4244: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 3 row 4244: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 4 row 4242: CLOB CLOB_COL_row1_clob0.txt                            OK
+  round 4 row 4242: BLOB blob_output_0                                      OK
+  round 4 row 4243: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 4 row 4243: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 4 row 4244: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 4 row 4244: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 5 row 4242: CLOB CLOB_COL_row1_clob0.txt                            OK
+  round 5 row 4242: BLOB blob_output_0                                      OK
+  round 5 row 4243: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 5 row 4243: BLOB blob_output_0                                      WRONG - holds row 4242's data
+  round 5 row 4244: CLOB CLOB_COL_row1_clob0.txt                            WRONG - holds row 4242's data
+  round 5 row 4244: BLOB blob_output_0                                      WRONG - holds row 4242's data
+
+RESULT: 10 file(s) OK, 20 WRONG, 0 missing, 0 response(s) without file names

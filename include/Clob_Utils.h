@@ -36,8 +36,13 @@
  * from ctx->ini->clob_default_extension, defaulting to ".txt" when
  * that's unset - same default the inline code already used.
  */
-void build_clob_filename(const char *col_name, unsigned int abs_rownum,
-                          int clob_index, char *output, size_t out_size,
+/* 2026-10-14 (point a2): the pattern is now
+ * "<col_name>_<tag>_row<abs_rownum>_clob<clob_index><ext>", tag being the
+ * SELECT's lob_output_tag() (Blob_Utils.h). Without it every SELECT on a
+ * column wrote <col>_row1_clob0.txt and overwrote the others' files. */
+void build_clob_filename(const char *col_name, const char *tag,
+                          unsigned int abs_rownum, int clob_index,
+                          char *output, size_t out_size,
                           oci_context_t *ctx);
 
 /*
