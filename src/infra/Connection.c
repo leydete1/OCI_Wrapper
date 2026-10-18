@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdarg.h>
+#include <oci.h>   /* M2 2026-10-17 (N1): Oracle side - Connection.h no longer pulls it in */
 #include "XML_Helper.h"
 #include "Connection.h"
 #include "logger.h"
@@ -79,7 +80,7 @@ int OCI_Connect_standalone(oci_context_t *ctx)
     sword status;
 
     logger_write(ctx->connection_logger, LOG_INFO, __func__, 0, "Calling OCIEnvCreate");
-    status = OCIEnvCreate(&ctx->envhp, OCI_DEFAULT, NULL, NULL, NULL, NULL, 0, NULL);
+    status = OCIEnvCreate((OCIEnv **)&ctx->envhp, OCI_DEFAULT, NULL, NULL, NULL, NULL, 0, NULL);
 
     if (status != OCI_SUCCESS)
     {

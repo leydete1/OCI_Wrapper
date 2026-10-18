@@ -67,6 +67,7 @@
 #include <string.h>
 #include <ctype.h>    /* oracle_describe_table() - Stage 4a */
 
+#include <oci.h>   /* M2 2026-10-17 (N1): Oracle side - Connection.h no longer pulls it in */
 #include "driver_oracle.h"
 #include "Connection.h"
 #include "Connection_Pool.h"
@@ -1088,7 +1089,7 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
 
     ORACLE_CHECK_OCI(ctx,
         OCILobLocatorAssign(ctx->svchp, ctx->errhp,
-                            cur->col_blob_locs[col_idx][row], &item.lob_loc));
+                            cur->col_blob_locs[col_idx][row], (OCILobLocator **)&item.lob_loc));
 
     ORACLE_CHECK_OCI(ctx,
         OCILobGetLength(ctx->svchp, ctx->errhp, item.lob_loc, &item.blob_size));

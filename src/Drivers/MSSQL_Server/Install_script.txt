@@ -1,0 +1,44 @@
+Install server
+
+docker pull mcr.microsoft.com/mssql/server:2022-CU27-GDR1-ubuntu-22.04
+docker volume create mssql2022_data
+
+docker run -d --name mssql2022 --hostname mssql2022 \
+  -e "ACCEPT_EULA=Y" -e "MSSQL_PID=Developer" \
+  -e 'MSSQL_SA_PASSWORD=ChangeMe_2026!' \
+  -p 1433:1433 -v mssql2022_data:/var/opt/mssql \
+  --restart unless-stopped \
+  mcr.microsoft.com/mssql/server:2022-CU27-GDR1-ubuntu-22.04
+
+# check it is up (the image ships sqlcmd; -C trusts its self-signed certificate)
+docker exec -it mssql2022 /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+  -P 'Resmanager_18' -C -Q "SELECT @@VERSION"
+  
+  
+  
+  
+  Install ODBC
+  
+   1. Remove the 25.04 repository package (this also removes its apt source file)
+sudo apt-get purge -y packages-microsoft-prod
+
+# 2. Add the 24.04 repository instead
+curl -sSL -O https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+rm packages-microsoft-prod.deb
+sudo apt-get update
+
+# 3. Check the packages are visible now, then install
+apt-cache policy msodbcsql18 mssql-tools18
+sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 mssql-tools18 unixodbc-dev
+
+
+Check ODBC
+
+leyden100@Terry-HP-Laptop-15-fd0xxx:~/Downloads$ dpkg -l msodbcsql18 unixodbc-dev | tail -2
+odbcinst -q -d                     # expect [ODBC Driver 18 for SQL Server]
+sqlcmd -S localhost -U sa -C -Q "SELECT @@VERSION"
+ii  msodbcsql18        18.7.1.1-1      amd64        ODBC Driver for Microsoft(R) SQL Server(R)
+ii  unixodbc-dev:amd64 2.3.12-2ubuntu1 amd64        ODBC libraries for Unix (development files)
+[ODBC Driver 18 for SQL Server]
+Pas

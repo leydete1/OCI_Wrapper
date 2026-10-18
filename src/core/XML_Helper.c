@@ -170,7 +170,7 @@ void xml_add_blob_field_old(
     const char *name,
     const char *file_name,
     const char *file_path,
-    ub8 file_size
+    uint64_t file_size
 )
 {
     char *e_name = xml_escape(name);
@@ -205,7 +205,7 @@ void xml_add_blob_field(
     const char *name,
     const char *file_name,
     const char *file_path,
-    ub8 file_size
+    uint64_t file_size
 )
 {
     char *e_name = xml_escape(name);

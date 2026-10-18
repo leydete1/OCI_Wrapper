@@ -52,7 +52,7 @@ char *response_write_xml(oci_context_t *ctx, const resultset_t *rs)
                 item.output_file_url          = fld->blob_detail.file_url[0]
                                                  ? (char *)fld->blob_detail.file_url
                                                  : NULL;
-                item.blob_size                = (ub4)fld->blob_detail.file_size;
+                item.blob_size                = (uint32_t)fld->blob_detail.file_size;
                 item.mime_type                = (char *)fld->blob_detail.mime_type;
 
                 xml_add_blob_field_1(xml, &item, ctx);

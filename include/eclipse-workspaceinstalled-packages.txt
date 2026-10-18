@@ -1696,6 +1696,8 @@ mokutil						install
 mount						install
 mousetweaks					install
 mscompress					install
+msodbcsql18					install
+mssql-tools18					install
 mtr-tiny					install
 mutter-common					install
 mutter-common-bin				install
@@ -1733,6 +1735,7 @@ node-popper2					install
 ntfs-3g						install
 numactl						install
 ocl-icd-libopencl1:amd64			install
+odbcinst					install
 openjdk-17-jdk:amd64				install
 openjdk-17-jdk-headless:amd64			install
 openjdk-17-jre:amd64				install
@@ -1750,6 +1753,7 @@ p11-kit						install
 p11-kit-modules:amd64				install
 packagekit					install
 packagekit-tools				install
+packages-microsoft-prod				install
 papers						install
 papers-common					install
 parted						install
@@ -2124,6 +2128,7 @@ ufw						install
 unattended-upgrades				install
 unixodbc					install
 unixodbc-common					install
+unixodbc-dev:amd64				install
 uno-libs-private				install
 unzip						install
 update-inetd					install

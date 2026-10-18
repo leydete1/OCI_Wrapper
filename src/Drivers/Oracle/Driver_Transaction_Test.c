@@ -171,6 +171,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <oci.h>   /* M2 2026-10-17 (N1): Oracle side - Connection.h no longer pulls it in */
 #include "Connection.h"
 #include "Connection_Pool.h"
 #include "Transaction_Manager.h"

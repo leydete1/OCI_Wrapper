@@ -22,7 +22,7 @@
 #include <stdint.h>
 #include "logger.h"
 #include "ini_reader.h"
-#include <oci.h>
+#include <stddef.h>   /* M2 2026-10-17: was <oci.h> - context is vendor-neutral */
 #include "cache.h"
 
 /* Metrics refactor (closure item 5), Stage 2 (2026-08-09) - forward
@@ -35,11 +35,14 @@
 typedef struct metrics_writer metrics_writer_t;
 
 typedef struct oci_context_t {
-    OCIEnv     *envhp;
-    OCIError   *errhp;
-    OCIServer  *srvhp;
-    OCISvcCtx  *svchp;
-    OCISession *authp;
+    /* M2 2026-10-17 (N1): driver-owned handles, opaque to core */
+    /* Oracle: OCIEnv*, OCIError*, OCIServer*, OCISvcCtx*,      */
+    /* OCISession* - the Oracle files cast them where needed.   */
+    void       *envhp;
+    void       *errhp;
+    void       *srvhp;
+    void       *svchp;
+    void       *authp;
 
     logger_t     *logger;
     logger_t     *select_logger;
@@ -258,12 +261,12 @@ typedef struct
     char          *mime_type;
     char          *output_file_url;
     char          *output_file_destination;
-    ub4            blob_size;
+    uint32_t       blob_size;        /* M2 2026-10-17 (N2): was ub4 */
     char          *start_extract_timestamp;
     char          *end_extract_timestamp;
     int            fetch_chunk_size;
     int            number_of_chunks;
-    OCILobLocator *lob_loc;
+    void          *lob_loc;          /* M2 2026-10-17 (N2): OCILobLocator* on Oracle */
     unsigned long  bytes_read;
     int            is_null;
     unsigned char *BLOB_buff;
