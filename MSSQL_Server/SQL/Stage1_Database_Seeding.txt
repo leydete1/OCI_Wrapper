@@ -1,0 +1,17 @@
+# 1. Photos into the container
+docker exec mssql2022 mkdir -p /var/opt/mssql/photos
+docker cp /home/leyden100/eclipse-workspace/OCI_Wrapper/Photos/. mssql2022:/var/opt/mssql/photos/
+
+# 2. Build (as sa - sqlcmd prompts for the sa password)
+read -s -p "DATA_MANAGER password: " DM_PW; echo
+sqlcmd -S localhost -U sa -C -b -i Create_MSSQL_Test_Objects.sql -v DM_PASSWORD="$DM_PW" RECREATE=NO
+unset DM_PW
+
+# 3. Proof (as DATA_MANAGER) - expect "failed 0"
+sqlcmd -S localhost -U DATA_MANAGER -d DataManager -C -i Check_MSSQL_Test_Objects.sql
+
+# 4. Reset twice, then step 3 again
+sqlcmd -S localhost -U DATA_MANAGER -d DataManager -C -b -i Reset_Tester_Objects_mssql.sql
+
+# 5. A second build must be refused
+sqlcmd -S localhost -U sa -C -b -i Create_MSSQL_Test_Objects.sql -v DM_PASSWORD=x RECREATE=NO
