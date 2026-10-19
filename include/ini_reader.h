@@ -292,6 +292,22 @@ typedef struct
                                      leave blank in production config  */
 
     /* ----------------------------------------------------------------
+     * driver_mssql Stage 2 (2026-10-18), P1/P2.
+     * db_type picks the driver: "oracle" or "mssql" (lower-cased by
+     * load_ini(), which refuses anything else). On SQL Server the
+     * database, user and password are dbname / username / password
+     * above (so Bootstrap's metrics-pool override works unchanged);
+     * these four add only what Oracle has no use for. Oracle ignores
+     * them; SQL Server ignores use_wallet and the nls_* keys.
+     * ---------------------------------------------------------------- */
+    char db_type       [16];            /* oracle | mssql             */
+    char mssql_server  [128];           /* host name or address       */
+    int  mssql_port;                    /* default 1433               */
+    int  mssql_trust_server_certificate;/* 1 = accept a self-signed
+                                           certificate (test only)    */
+    int  mssql_login_timeout;           /* seconds, default 15        */
+
+    /* ----------------------------------------------------------------
      * Metrics database - independent connection pool (response to
      * closure proposal, 13 Aug 2026). Mirrors the block above exactly -
      * the metrics DB writer thread used to borrow its session from the

@@ -1584,7 +1584,17 @@ int main(int argc, char *argv[])
                          "(metrics_finalise_and_enqueue() handles a NULL "
                          "writer safely everywhere it's called)");
 
-        if (ut_cfg.startup_self_test_enabled)
+        if (ut_cfg.startup_self_test_enabled &&
+            strcmp(config.db_type, "mssql") == 0)
+        {
+            /* driver_mssql Stage 2 (P8): Unit_Test_Module checks its
+             * results with direct OCI calls, so it can only run
+             * against Oracle (driver_mssql M8 - out of scope). */
+            logger_write(&logger, LOG_WARN, __func__, 0,
+                         "Startup self-test skipped: db_type=mssql - "
+                         "Unit_Test_Module is Oracle-only");
+        }
+        else if (ut_cfg.startup_self_test_enabled)
         {
             /* Dedicated log file for the self-test's own results - only
              * created when the self-test is actually enabled, matching

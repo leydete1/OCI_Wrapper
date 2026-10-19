@@ -1,0 +1,8 @@
+# LeakSanitizer suppressions for the SQL Server harnesses (driver_mssql
+# Stage 2). Only the ODBC driver manager and Microsoft's driver's own
+# one-time, process-lifetime allocations - the same idea as the Oracle
+# harnesses' suppressions for libclntsh. Anything allocated by our own
+# code is still reported.
+leak:libodbc.so
+leak:libodbcinst.so
+leak:libmsodbcsql

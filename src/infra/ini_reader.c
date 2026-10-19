@@ -56,6 +56,13 @@ static ctx_config_map_t ctx_map[] = {
     { "use_wallet",        CFG_BOOL,   offsetof(app_config_t, use_wallet),        NULL, 0   },
     { "wallet_location",   CFG_STRING, offsetof(app_config_t, wallet_location),   "/opt/data_manager/wallet", 0 },
 
+    /* driver_mssql Stage 2 (2026-10-18), P1/P2 - see ini_reader.h */
+    { "db_type",                        CFG_STRING, offsetof(app_config_t, db_type),                        "oracle",    0  },
+    { "mssql_server",                   CFG_STRING, offsetof(app_config_t, mssql_server),                   "localhost", 0  },
+    { "mssql_port",                     CFG_INT,    offsetof(app_config_t, mssql_port),                     NULL,        1433 },
+    { "mssql_trust_server_certificate", CFG_BOOL,   offsetof(app_config_t, mssql_trust_server_certificate), NULL,        0  },
+    { "mssql_login_timeout",            CFG_INT,    offsetof(app_config_t, mssql_login_timeout),            NULL,        15 },
+
     /* ----------------------------------------------------------------
      * Metrics database credentials - independent pool (13 Aug 2026
      * closure item). See ini_reader.h's own comment on this block.
@@ -853,6 +860,8 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                     else if (!strcmp(m->name,"password"))                   maxlen=sizeof(config->password);
                     else if (!strcmp(m->name,"dbname"))                     maxlen=sizeof(config->dbname);
                     else if (!strcmp(m->name,"wallet_location"))            maxlen=sizeof(config->wallet_location);
+                    else if (!strcmp(m->name,"db_type"))                    maxlen=sizeof(config->db_type);
+                    else if (!strcmp(m->name,"mssql_server"))               maxlen=sizeof(config->mssql_server);
 
                     /* Metrics DB credentials (13 Aug 2026 closure item) */
                     else if (!strcmp(m->name,"metrics_username"))           maxlen=sizeof(config->metrics_username);
@@ -1036,6 +1045,23 @@ int load_ini(const char *filename, app_config_t *config, oci_context_t *ctx)
                    unguarded_count - 32);
         printf("================================================================\n\n");
 
+        ini_free(&ini);
+        return -1;
+    }
+
+    /* ---------- driver_mssql Stage 2 (P1): db_type picks the driver ----------
+     * Lower-cased here so every later comparison is a plain strcmp.
+     * Anything other than oracle / mssql stops the gateway now rather
+     * than at the first database call.                              */
+    for (char *c = config->db_type; *c; c++)
+        *c = (char)tolower((unsigned char)*c);
+    if (strcmp(config->db_type, "oracle") != 0 &&
+        strcmp(config->db_type, "mssql")  != 0)
+    {
+        printf("\n================================================================\n");
+        printf("CONFIG FAILURE: db_type = '%s' in %s - must be oracle or mssql\n",
+               config->db_type, filename);
+        printf("================================================================\n\n");
         ini_free(&ini);
         return -1;
     }

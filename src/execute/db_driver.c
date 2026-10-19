@@ -24,14 +24,49 @@
 
 #include "db_driver.h"
 #include "driver_oracle.h"
+#include <strings.h>
 #include "logger.h"             /* db_select_int() logging      */
 #include "Resultset_Builder.h"  /* resultset_free()             */
 
+/*
+ * driver_mssql Stage 2 (2026-10-18), P1 - the real dispatch.
+ *
+ * ctx->ini->db_type (lower-cased and checked by load_ini(): "oracle"
+ * or "mssql") picks the driver. One db_type is active per process, so
+ * the last value seen is remembered for the rare caller whose ctx has
+ * no ini attached.
+ *
+ * mssql_driver_get() is a weak reference: a program that does not link
+ * driver_mssql.c (the Oracle harnesses) still builds unchanged, and
+ * asking it for SQL Server returns NULL with a message - every caller
+ * already treats a NULL driver as an error.
+ */
+extern const db_driver_t *mssql_driver_get(void) __attribute__((weak));
+
+static int g_last_db_is_mssql = 0;
+
 const db_driver_t *db_driver_get(const oci_context_t *ctx)
 {
-    (void)ctx;   /* unused until db_type dispatch exists - see above */
+    int is_mssql;
 
-    return oracle_driver_get();
+    if (ctx && ctx->ini && ctx->ini->db_type[0])
+    {
+        is_mssql = strcasecmp(ctx->ini->db_type, "mssql") == 0;
+        __atomic_store_n(&g_last_db_is_mssql, is_mssql, __ATOMIC_RELAXED);
+    }
+    else
+        is_mssql = __atomic_load_n(&g_last_db_is_mssql, __ATOMIC_RELAXED);
+
+    if (!is_mssql)
+        return oracle_driver_get();
+
+    if (!mssql_driver_get)
+    {
+        fprintf(stderr, "db_driver_get: db_type=mssql but driver_mssql.c "
+                        "is not linked into this program\n");
+        return NULL;
+    }
+    return mssql_driver_get();
 }
 
 /*
