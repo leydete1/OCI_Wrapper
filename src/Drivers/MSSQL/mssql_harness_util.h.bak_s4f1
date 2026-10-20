@@ -1,0 +1,208 @@
+/*
+ * mssql_harness_util.h   (driver_mssql Stage 4, harness support only)
+ *
+ * Shared by MSSQL_Driver_DML_Test.c, MSSQL_Driver_LOB_Write_Test.c and
+ * MSSQL_Driver_Transaction_Test.c: context setup from config_mssql.ini,
+ * a one-row query through the driver's own SELECT, and SHA-256 (to
+ * compare LOB content with HASHBYTES('SHA2_256', ...) on the server -
+ * reading LOBs back is Stage 5). Header-only; not part of the gateway.
+ */
+
+#ifndef MSSQL_HARNESS_UTIL_H
+#define MSSQL_HARNESS_UTIL_H
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <sql.h>
+#include <sqlext.h>
+
+#include "Connection.h"
+#include "db_driver.h"
+#include "driver_mssql.h"
+#include "mssql_select.h"
+#include "Resultset_Builder.h"
+#include "ini_reader.h"
+#include "logger.h"
+#include "MSSQL_Pool.h"
+
+/* Not every harness uses every helper. */
+#define H_FN static __attribute__((unused))
+
+#define CONFIG_INI_MSSQL "/home/leyden100/eclipse-workspace/OCI_Wrapper/Props/config_mssql.ini"
+
+typedef struct {
+    logger_t err, conn, pool, sel, meta, dml;
+} h_loggers_t;
+
+/* ctx + config from the ini, every logger the driver uses. dml goes to
+ * the update log. */
+H_FN int h_init(const char *ini_path, oci_context_t *ctx, app_config_t *config,
+                  h_loggers_t *L)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    memset(config, 0, sizeof(*config));
+    ctx->ini             = config;
+    ctx->pool_slot_index = -1;
+    if (load_ini(ini_path, config, ctx) != 0)
+    {
+        fprintf(stderr, "Failed to load ini file: %s\n", ini_path);
+        return -1;
+    }
+    if (strcmp(config->db_type, "mssql") != 0)
+    {
+        fprintf(stderr, "%s has db_type=%s - this harness needs db_type=mssql\n",
+                ini_path, config->db_type);
+        return -1;
+    }
+    if (logger_init_str(&L->err, config->error_log_file_name, config->error_log_file_max_size,
+                        config->error_log_file_rotation_number, config->error_log_level) != 0)
+        return -1;
+    ctx->error_logger = &L->err;
+#define H_LOG(lg, pfx, field) \
+    if (logger_init_str2(&L->lg, config->pfx##_log_file_name, config->pfx##_log_file_max_size, \
+                         config->pfx##_log_file_rotation_number, config->pfx##_log_level, \
+                         &L->err) != 0) return -1; \
+    ctx->field = &L->lg;
+    H_LOG(conn, connection, connection_logger)
+    H_LOG(pool, connectionpool, connectionpool_logger)
+    H_LOG(sel, select, select_logger)
+    H_LOG(meta, Metadata, Metadata_logger)
+    H_LOG(dml, update, update_logger)
+#undef H_LOG
+    config->use_connection_pool = 0;
+    return 0;
+}
+
+H_FN void h_close(h_loggers_t *L)
+{
+    logger_close(&L->dml);
+    logger_close(&L->meta);
+    logger_close(&L->sel);
+    logger_close(&L->pool);
+    logger_close(&L->conn);
+    logger_close(&L->err);
+}
+
+/* First row of a SELECT through the driver: up to ncols values, as
+ * text. Returns the number of rows (0 or more), -1 on failure. */
+H_FN int h_query(oci_context_t *ctx, const char *sql, int nbinds, const char **binds,
+                   char out[][256], int ncols)
+{
+    const db_driver_t *d = mssql_driver_get();
+    db_select_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql = sql;
+    req.fetch_array_size = 10;
+    req.bind_count = nbinds;
+    req.bind_values = binds;
+    db_select_cursor_t *cur = NULL;
+    db_column_meta_t   *cols = NULL;
+    int n = 0, b = 0, total = 0;
+    for (int c = 0; c < ncols; c++) out[c][0] = '\0';
+    if (d->select_open(ctx, &req, &cur, &cols, &n, &b) != 0)
+    {
+        fprintf(stderr, "    query failed: %s\n      %s\n", sql, mssql_select_last_error());
+        return -1;
+    }
+    for (;;)
+    {
+        resultset_t *rs = NULL;
+        int rows = 0;
+        if (d->select_fetch_batch(cur, &rs, &rows, NULL) != 0) { total = -1; break; }
+        if (rows == 0) break;
+        if (total == 0)
+            for (int c = 0; c < ncols && c < rs->records[0].field_count; c++)
+                snprintf(out[c], 256, "%.255s", rs->records[0].fields[c].value);
+        total += rows;
+        resultset_free(rs);
+    }
+    d->select_close(cur);
+    free(cols);
+    return total;
+}
+
+/* A statement sent as a plain batch (SQLExecDirect, no parameters) on
+ * ctx's connection. For what must outlive the statement: SET options and
+ * #temp tables. The driver's dml_execute prepares (sp_prepexec), and a
+ * SET or CREATE TABLE #x inside that ends with it. 0 or -1; the error
+ * text into err (if given). */
+H_FN int h_exec(oci_context_t *ctx, const char *sql, char *err, size_t errsz)
+{
+    SQLHSTMT st = SQL_NULL_HSTMT;
+    if (err && errsz) err[0] = '\0';
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, (SQLHDBC)ctx->svchp, &st))) return -1;
+    SQLRETURN r = SQLExecDirect(st, (SQLCHAR *)sql, SQL_NTS);
+    int rc = (SQL_SUCCEEDED(r) || r == SQL_NO_DATA) ? 0 : -1;
+    if (rc != 0)
+    {
+        char d[1024];
+        mssql_diag(SQL_HANDLE_STMT, st, d, sizeof(d));
+        fprintf(stderr, "    h_exec failed: %s -- %s\n", sql, d);
+        if (err && errsz) snprintf(err, errsz, "%s", d);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    return rc;
+}
+
+H_FN long h_count(oci_context_t *ctx, const char *sql, int nbinds, const char **binds)
+{
+    char v[1][256];
+    if (h_query(ctx, sql, nbinds, binds, v, 1) != 1) return -1;
+    return atol(v[0]);
+}
+
+/* ------------------------------------------------------------------ */
+/*  SHA-256, upper-case hex (as CONVERT(varchar(64), HASHBYTES(..), 2)) */
+/* ------------------------------------------------------------------ */
+static const uint32_t H_K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+#define H_ROR(x,n) (((x) >> (n)) | ((x) << (32 - (n))))
+H_FN void h_sha_block(uint32_t *h, const unsigned char *p)
+{
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++)
+        w[i] = (uint32_t)p[4*i] << 24 | (uint32_t)p[4*i+1] << 16 | (uint32_t)p[4*i+2] << 8 | p[4*i+3];
+    for (int i = 16; i < 64; i++)
+    {
+        uint32_t s0 = H_ROR(w[i-15], 7) ^ H_ROR(w[i-15], 18) ^ (w[i-15] >> 3);
+        uint32_t s1 = H_ROR(w[i-2], 17) ^ H_ROR(w[i-2], 19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
+    for (int i = 0; i < 64; i++)
+    {
+        uint32_t t1 = hh + (H_ROR(e,6) ^ H_ROR(e,11) ^ H_ROR(e,25)) + ((e & f) ^ (~e & g)) + H_K[i] + w[i];
+        uint32_t t2 = (H_ROR(a,2) ^ H_ROR(a,13) ^ H_ROR(a,22)) + ((a & b) ^ (a & c) ^ (b & c));
+        hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
+}
+H_FN void h_sha256_hex(const void *data, size_t len, char out[65])
+{
+    uint32_t h[8] = { 0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19 };
+    const unsigned char *p = data;
+    size_t i = 0;
+    for (; i + 64 <= len; i += 64) h_sha_block(h, p + i);
+    unsigned char tail[128] = {0};
+    size_t rem = len - i;
+    memcpy(tail, p + i, rem);
+    tail[rem] = 0x80;
+    size_t tl = rem + 1 + 8 <= 64 ? 64 : 128;
+    uint64_t bits = (uint64_t)len * 8;
+    for (int k = 0; k < 8; k++) tail[tl - 1 - k] = (unsigned char)(bits >> (8 * k));
+    h_sha_block(h, tail);
+    if (tl == 128) h_sha_block(h, tail + 64);
+    for (int k = 0; k < 8; k++) snprintf(out + 8 * k, 9, "%08X", h[k]);
+}
+
+#endif /* MSSQL_HARNESS_UTIL_H */

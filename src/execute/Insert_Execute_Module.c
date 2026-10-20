@@ -65,6 +65,7 @@
                                   own integrations.                    */
 #include "XML_Helper.h"
 #include "db_type_class.h"   /* db_type_lob_kind() - Stage 4b */
+#include "lob_text_bind.h"   /* lob_text_resolve() - driver_mssql Stage 4 */
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
@@ -428,7 +429,26 @@ static int build_insert_sql(oci_context_t        *ctx,
      * middle, "RETURNING ROWID INTO :n" at the end). */
     char loc_mid[512]  = {0};
     char loc_tail[512] = {0};
-    db_row_locator_ctx_t loc = { ic->table_name, ic->owner, NULL, 0 };
+    /* driver_mssql Stage 4 (U1): the driver names the column its row
+     * locator returns (SQL Server: OUTPUT inserted.<key>). Oracle has
+     * no table_key hook result - ROWID needs no column - so its SQL is
+     * unchanged. */
+    char        loc_key[128]  = {0};
+    const char *loc_keys[1]   = { loc_key };
+    int         loc_key_count = 0;
+    const db_driver_t *loc_drv = db_driver_get(ctx);
+    if (loc_drv->table_key &&
+        loc_drv->table_key(ctx, ic->owner, ic->table_name,
+                           loc_key, sizeof(loc_key), &loc_key_count) != 0)
+    {
+        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                     "driver could not look up the row key of '%s'",
+                     ic->table_name);
+        return -1;
+    }
+    db_row_locator_ctx_t loc = { ic->table_name, ic->owner,
+                                 loc_key_count ? loc_keys : NULL,
+                                 loc_key_count };
     if (dl->row_locator_clauses(DB_DML_INSERT, &loc, rowid_bind_pos,
                                 loc_mid, sizeof(loc_mid),
                                 loc_tail, sizeof(loc_tail)) != 0)
@@ -503,6 +523,10 @@ int execute_insert_batch(oci_context_t    *ctx,
                                              bind_hdls/indicators trio -
                                              see that stage's own comment */
     db_rowid_result_t rowid_result = {0};
+    char             **text_heap = NULL;   /* driver_mssql Stage 4 (U6):
+                                             file contents bound for text
+                                             LOBs, freed in Cleanup     */
+    int                text_heap_count = 0;
     int                rowid_result_valid = 0;   /* has it been populated
                                                      by a successful driver
                                                      call yet - Cleanup
@@ -780,6 +804,17 @@ int execute_insert_batch(oci_context_t    *ctx,
         goto Cleanup;
     }
 
+    /* driver_mssql Stage 4 (U6) - at most one file read per value. */
+    text_heap = calloc((size_t)execute_count * (size_t)ic->col_count + 1,
+                       sizeof(char *));
+    if (!text_heap)
+    {
+        logger_write(ctx->insert_logger, LOG_ERROR, __func__, 0,
+                     "calloc failed for text_heap");
+        rc = -1;
+        goto Cleanup;
+    }
+
     for (int r = 0; r < execute_count; r++)
     {
         int bind_pos = 0;
@@ -795,8 +830,28 @@ int execute_insert_batch(oci_context_t    *ctx,
 
             const insert_col_value_t *fv =
                 &ic->values[r * ic->col_count + c];
-            bind_values[(size_t)r * scalar_col_count + bind_pos] =
-                fv->is_empty ? NULL : fv->value;
+            const char *bv = fv->is_empty ? NULL : fv->value;
+
+            /* driver_mssql Stage 4 (U6): a text LOB the driver binds in
+             * the statement (SQL Server varchar(max) ...; never an
+             * Oracle type) takes its whole value - a file:// value is
+             * read from the file, as the CLOB write below does - and
+             * counts as a LOB written, so lobs_written matches Oracle. */
+            if (!fv->is_empty && db_type_text_bound(dtype))
+            {
+                char  *heap = NULL;
+                size_t tlen = 0;
+                if (lob_text_resolve(insert_col_value_get(fv), &bv, &heap,
+                                     &tlen, ctx->insert_logger) != 0)
+                {
+                    rc = -1;
+                    goto Cleanup;
+                }
+                if (heap) text_heap[text_heap_count++] = heap;
+                lob_count++;
+                clob_bytes += tlen;
+            }
+            bind_values[(size_t)r * scalar_col_count + bind_pos] = bv;
 
             logger_write(ctx->insert_logger, LOG_DEBUG, __func__, 0,
                          "Bind row=%d col=%d name='%s' bind_pos=%d (%s)",
@@ -1315,6 +1370,8 @@ Cleanup:
 
     if (rowid_result_valid) driver->rowid_result_free(&rowid_result);
     free(bind_values);
+    for (int t = 0; t < text_heap_count; t++) free(text_heap[t]);
+    free(text_heap);
 
     if (ic)
     {

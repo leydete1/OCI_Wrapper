@@ -1,5 +1,7 @@
 /*
- * mssql_dialect.c   (driver_mssql Stage 3, 2026-10-19, points T1/T2)
+ * mssql_dialect.c   (driver_mssql Stage 3, 2026-10-19, points T1/T2;
+ *                    Stage 4, 2026-10-20: row locator U2, text LOBs U6,
+ *                    binary values)
  *
  * SQL Server's db_dialect_t. See mssql_dialect.h for every form, and
  * db_driver.h (DIALECT) for the contract each hook follows: write into
@@ -258,42 +260,62 @@ static int ms_value_expr(const char *dtype, const char *operand,
         return ms_fmt(out, out_max, "CAST(%s AS datetimeoffset(7))", operand);
     if (ms_base_is(dtype, n, "TIME"))
         return ms_fmt(out, out_max, "CAST(%s AS time(7))", operand);
+    /* Stage 4: binary values arrive as hex text (as Oracle RAW); SQL
+     * Server will not convert nvarchar to varbinary implicitly. */
+    if (ms_base_is(dtype, n, "VARBINARY") || ms_base_is(dtype, n, "BINARY"))
+        return ms_fmt(out, out_max, "CONVERT(varbinary(max), %s, 2)", operand);
 
     return ms_fmt(out, out_max, "%s", operand);
 }
 
 /* Must agree with db_type_lob_kind() (db_type_class.c): a column gets
- * a placeholder exactly when it is written after the statement. */
+ * a placeholder exactly when it is written after the statement.
+ * Stage 4 (U6): only binary LOBs. Text LOBs (varchar(max),
+ * nvarchar(max), text, ntext, xml) are bound in the statement itself,
+ * so no table - AUDIT_TRAIL above all - ever needs an UPDATE to fill
+ * one in. */
 static const char *ms_lob_placeholder(const char *dtype)
 {
     if (!dtype) return NULL;
     while (isspace((unsigned char)*dtype)) dtype++;
     size_t n = ms_base_len(dtype);
 
-    if (ms_has_max(dtype + n))
-    {
-        if (ms_base_is(dtype, n, "VARBINARY")) return "0x";
-        if (ms_base_is(dtype, n, "VARCHAR"))   return "''";
-        if (ms_base_is(dtype, n, "NVARCHAR"))  return "N''";
-        return NULL;
-    }
+    if (ms_has_max(dtype + n) && ms_base_is(dtype, n, "VARBINARY")) return "0x";
     if (ms_base_is(dtype, n, "IMAGE")) return "0x";
-    if (ms_base_is(dtype, n, "TEXT"))  return "''";
-    if (ms_base_is(dtype, n, "NTEXT")) return "N''";
     return NULL;
 }
 
-/* Stage 4: OUTPUT inserted.<key> needs the key from describe_table
- * (5c). Until then core logs the failure and fails the statement. */
+/* Stage 4 (U2, 5c): "OUTPUT inserted.[KEY]" after the column list of an
+ * INSERT / the SET list of an UPDATE; nothing at the end. The key comes
+ * from the driver's table_key(), which core puts in loc. A table with no
+ * single-column key gets no OUTPUT clause: the statement still runs and
+ * its row count is reported, but it cannot take a LOB write (5d). pos
+ * (Oracle's RETURNING bind position) is not used. */
 static int ms_row_locator_clauses(db_dml_kind_t kind,
                                   const db_row_locator_ctx_t *loc, int pos,
                                   char *mid, size_t mid_max,
                                   char *tail, size_t tail_max)
 {
-    (void)kind; (void)loc; (void)pos;
-    if (mid && mid_max)   mid[0] = '\0';
-    if (tail && tail_max) tail[0] = '\0';
-    return -1;
+    (void)pos;
+    if (!mid || mid_max == 0 || !tail || tail_max == 0) return -1;
+    mid[0]  = '\0';
+    tail[0] = '\0';
+    if (kind != DB_DML_INSERT && kind != DB_DML_UPDATE) return -1;
+    if (!loc || loc->key_count == 0 || !loc->key_columns) return 0;
+    if (loc->key_count != 1 || !loc->key_columns[0] || !loc->key_columns[0][0]) return -1;
+
+    char q[300];
+    size_t u = 0;
+    q[u++] = '[';
+    for (const char *p = loc->key_columns[0]; *p; p++)
+    {
+        if (u + 3 >= sizeof(q)) return -1;
+        q[u++] = *p;
+        if (*p == ']') q[u++] = ']';
+    }
+    q[u++] = ']';
+    q[u] = '\0';
+    return ms_fmt(mid, mid_max, "OUTPUT inserted.%s", q);
 }
 
 static int ms_row_limit_sql(const char *sql, int max_rows,

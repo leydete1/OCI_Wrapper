@@ -189,19 +189,29 @@ db_lob_kind_t db_type_lob_kind(const char *type_name)
     if (base_is(type_name, n, "CLOB"))  return DB_LOB_TEXT;
     if (base_is(type_name, n, "NCLOB")) return DB_LOB_TEXT;
 
-    /* ---- SQL Server (driver_mssql Stage 3) - the columns
-     * driver_mssql's lob_placeholder() gives 0x / '' / N'' ---- */
-    if (has_max_suffix(type_name + n))
-    {
-        if (base_is(type_name, n, "VARBINARY")) return DB_LOB_BINARY;
-        if (base_is(type_name, n, "VARCHAR"))   return DB_LOB_TEXT;
-        if (base_is(type_name, n, "NVARCHAR"))  return DB_LOB_TEXT;
-        return DB_LOB_NONE;
-    }
+    /* ---- SQL Server - the columns driver_mssql's lob_placeholder()
+     * gives 0x. Since Stage 4 (U6) its text LOBs are bound in the
+     * statement instead (db_type_text_bound()), so none is TEXT. ---- */
+    if (has_max_suffix(type_name + n) && base_is(type_name, n, "VARBINARY"))
+        return DB_LOB_BINARY;
     if (base_is(type_name, n, "IMAGE")) return DB_LOB_BINARY;
-    if (base_is(type_name, n, "TEXT"))  return DB_LOB_TEXT;
-    if (base_is(type_name, n, "NTEXT")) return DB_LOB_TEXT;
 
     return DB_LOB_NONE;   /* includes BFILE and SQL Server XML - see
                              db_type_class.h */
+}
+
+int db_type_text_bound(const char *type_name)
+{
+    if (!type_name) return 0;
+
+    while (isspace((unsigned char)*type_name)) type_name++;
+
+    size_t n = base_name_len(type_name);
+    if (n == 0) return 0;
+
+    /* ---- SQL Server (driver_mssql Stage 4, U6) - Oracle has none ---- */
+    if (has_max_suffix(type_name + n))
+        return base_is(type_name, n, "VARCHAR") || base_is(type_name, n, "NVARCHAR");
+    return base_is(type_name, n, "TEXT") || base_is(type_name, n, "NTEXT") ||
+           base_is(type_name, n, "XML");
 }

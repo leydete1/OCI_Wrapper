@@ -28,6 +28,13 @@
  *   dialect                mssql_dialect.c - all hooks except
  *                          row_locator_clauses (stage 4)
  *
+ * Stage 4 (2026-10-20), points U1-U6:
+ *   dml_execute / dml_execute_returning_rowids / rowid_result_free /
+ *   lob_write_by_rowid / table_key
+ *                          mssql_dml.c
+ *   dialect                row_locator_clauses (OUTPUT inserted.<key>),
+ *                          text LOBs bound in the statement
+ *
  * Never includes an Oracle header: m2_compile_proof.py compiles this
  * file with every Oracle header blocked.
  */
@@ -45,6 +52,7 @@
 #include "mssql_dialect.h"     /* Stage 3 */
 #include "mssql_select.h"      /* Stage 3 */
 #include "mssql_metadata.h"    /* Stage 3 */
+#include "mssql_dml.h"         /* Stage 4 */
 #include "logger.h"
 
 /* ================================================================== */
@@ -126,43 +134,8 @@ static int mssql_rollback(oci_context_t *ctx, logger_t *logger)
 /* select_open / select_fetch_batch / select_close: mssql_select.c
  * (Stage 3). */
 
-static int mssql_dml_execute(oci_context_t *ctx, logger_t *logger, const db_dml_request_t *req,
-                             int *out_rows_affected, char *out_error_message,
-                             size_t out_error_message_size)
-{
-    (void)ctx; (void)req;
-    if (out_rows_affected) *out_rows_affected = 0;
-    if (out_error_message && out_error_message_size)
-        snprintf(out_error_message, out_error_message_size,
-                 "driver_mssql: dml_execute not implemented yet (stage 4)");
-    not_yet(logger, "dml_execute", 4);
-    return -1;
-}
-
-static int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
-                                              const db_dml_returning_request_t *req,
-                                              db_rowid_result_t *out_result)
-{
-    (void)ctx; (void)req;
-    if (out_result) memset(out_result, 0, sizeof(*out_result));
-    not_yet(logger, "dml_execute_returning_rowids", 4);
-    return -1;
-}
-
-static void mssql_rowid_result_free(db_rowid_result_t *result)
-{
-    (void)result;       /* nothing is ever allocated into it yet */
-}
-
-static int mssql_lob_write_by_rowid(oci_context_t *ctx, logger_t *logger,
-                                    const db_lob_write_request_t *req,
-                                    uint64_t *out_bytes_written)
-{
-    (void)ctx; (void)req;
-    if (out_bytes_written) *out_bytes_written = 0;
-    not_yet(logger, "lob_write_by_rowid", 4);
-    return -1;
-}
+/* dml_execute, dml_execute_returning_rowids, rowid_result_free,
+ * lob_write_by_rowid and table_key: mssql_dml.c (Stage 4). */
 
 static int mssql_dml_execute_procedure(oci_context_t *ctx, logger_t *logger,
                                        db_proc_execute_request_t *req)
@@ -207,7 +180,7 @@ static const db_driver_t g_mssql_driver = {
     .select_open                  = mssql_select_open,
     .select_fetch_batch           = mssql_select_fetch_batch,
     .select_close                 = mssql_select_close,
-    .dml_execute                  = mssql_dml_execute,
+    .dml_execute                  = mssql_dml_execute,           /* mssql_dml.c */
     .commit                       = mssql_commit,
     .rollback                     = mssql_rollback,
     .dml_execute_returning_rowids = mssql_dml_execute_returning_rowids,
@@ -217,6 +190,7 @@ static const db_driver_t g_mssql_driver = {
     .select_open_from_cursor      = mssql_select_open_from_cursor,
     .describe_table               = mssql_describe_table,
     .cursor_handle_free           = mssql_cursor_handle_free,
+    .table_key                    = mssql_table_key,             /* mssql_dml.c */
     .dialect                      = &mssql_dialect,   /* mssql_dialect.c */
 };
 

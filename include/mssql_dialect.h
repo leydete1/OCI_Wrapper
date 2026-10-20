@@ -11,12 +11,16 @@
  *                        CAST(? AS date)           date
  *                        CAST(? AS datetimeoffset(7))
  *                        CAST(? AS time(7))
+ *                        CONVERT(varbinary(max), ?, 2)  binary(n) /
+ *                                                  varbinary(n) - hex text
+ *                                                  (Stage 4)
  *                        operand unchanged         anything else
  *   lob_placeholder      0x   varbinary(max) / image
- *                        ''   varchar(max) / text
- *                        N''  nvarchar(max) / ntext
- *                        NULL anything else (xml binds as text)
- *   row_locator_clauses  stage 4 (needs the key lookup) - returns -1
+ *                        NULL anything else - text LOBs (varchar(max),
+ *                             nvarchar(max), text, ntext, xml) are bound
+ *                             in the statement itself (Stage 4, U6)
+ *   row_locator_clauses  mid "OUTPUT inserted.[KEY]", tail "" (Stage 4,
+ *                        U2); both "" when the table has no key
  *   row_limit_sql        SELECT TOP (n) * FROM (<sql>) AS dm_t
  *                        or, with a top-level ORDER BY (5a),
  *                        <sql> OFFSET 0 ROWS FETCH NEXT n ROWS ONLY

@@ -3455,6 +3455,19 @@ static void oracle_cursor_handle_free(void *cursor_handle)
         OCIHandleFree(cursor_handle, OCI_HTYPE_STMT);
 }
 
+/* driver_mssql Stage 4 (2026-10-20, U1) - see db_driver.h, table_key().
+ * Oracle locates a row by ROWID (RETURNING ROWID INTO), which needs no
+ * key column, so the row locator SQL is unchanged. */
+static int oracle_table_key(oci_context_t *ctx, const char *owner,
+                            const char *table_name, char *key_column,
+                            size_t key_column_size, int *key_count)
+{
+    (void)ctx; (void)owner; (void)table_name;
+    if (key_column && key_column_size) key_column[0] = '\0';
+    if (key_count) *key_count = 0;
+    return 0;
+}
+
 static const db_driver_t oracle_driver = {
     .driver_name          = "oracle",
     .connect              = oracle_connect,
@@ -3477,6 +3490,7 @@ static const db_driver_t oracle_driver = {
     .select_open_from_cursor      = oracle_select_open_from_cursor,
     .describe_table               = oracle_describe_table,
     .cursor_handle_free           = oracle_cursor_handle_free,
+    .table_key                    = oracle_table_key,
     .dialect                      = &oracle_dialect
 };
 

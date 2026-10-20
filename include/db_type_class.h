@@ -81,9 +81,11 @@ const char *db_type_class_name(db_type_class_t cls);
  * Must agree with the driver's dialect lob_placeholder(): a column is
  * written after the statement exactly when the SQL gives it a LOB
  * placeholder instead of a bind. For Oracle both cover exactly BLOB,
- * CLOB and NCLOB; for SQL Server VARBINARY(MAX) and IMAGE (binary),
- * VARCHAR(MAX), NVARCHAR(MAX), TEXT and NTEXT (text). SQL Server's
- * XML is LOB class but DB_LOB_NONE, like BFILE: it binds as text.
+ * CLOB and NCLOB; for SQL Server VARBINARY(MAX) and IMAGE (binary)
+ * only. SQL Server's text LOBs - VARCHAR(MAX), NVARCHAR(MAX), TEXT,
+ * NTEXT and XML - are LOB class but DB_LOB_NONE: they are bound in
+ * the statement itself (driver_mssql Stage 4, U6), see
+ * db_type_text_bound() below.
  */
 typedef enum {
     DB_LOB_NONE = 0,
@@ -92,6 +94,19 @@ typedef enum {
 } db_lob_kind_t;
 
 db_lob_kind_t db_type_lob_kind(const char *type_name);
+
+/*
+ * db_type_text_bound() - driver_mssql Stage 4 (2026-10-20, U6).
+ *
+ * 1 for a text LOB the driver binds in the INSERT/UPDATE statement
+ * itself rather than writing it afterwards: SQL Server's VARCHAR(MAX),
+ * NVARCHAR(MAX), TEXT, NTEXT and XML. Core then binds the whole value
+ * (a file:// value read from its file - lob_text_bind.h) and counts
+ * it as a LOB written. 0 for everything else, every Oracle type
+ * included - Oracle CLOBs are written after the statement as before.
+ * A SQL Server AUDIT_TRAIL row therefore never needs an UPDATE.
+ */
+int db_type_text_bound(const char *type_name);
 
 #ifdef __cplusplus
 }

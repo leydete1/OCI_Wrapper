@@ -1,5 +1,5 @@
 /*
- * MSSQL_Driver_Metadata_Test.c   (driver_mssql Stage 3, point T10)
+ * MSSQL_Driver_Metadata_Test.c   (driver_mssql Stage 3, point T10; Stage 4, U6)
  *
  * Checks driver_mssql's describe_table (mssql_metadata.c) against the
  * DataManager database that Create_MSSQL_Test_Objects.sql builds.
@@ -13,8 +13,9 @@
  *           columns that matter (IDENTITY key, decimal, char, nvarchar,
  *           datetime2, datetimeoffset, varbinary, the three (MAX) ones)
  *   Test 3  every OCI_FIELD_TEST column has a class (none OTHER), the
- *           (MAX) columns are LOB, and lob_kind agrees with the
- *           dialect's lob_placeholder
+ *           (MAX) columns are LOB, lob_kind agrees with the dialect's
+ *           lob_placeholder, and the two text LOBs are bound in the
+ *           statement (Stage 4, U6)
  *   Test 4  owner left empty: resolved to DATA_MANAGER (written back)
  *   Test 5  lower-case names are upper-cased in place and still found
  *   Test 6  a table that does not exist: -1, no columns
@@ -229,16 +230,18 @@ int main(int argc, char *argv[])
             if (c == DB_TYPE_CLASS_LOB) lobs++;
         }
         const col_metadata_t *c;
-        if ((c = find(cols, n, "CLOB_COL"))  && db_type_lob_kind(c->data_type) != DB_LOB_TEXT)
-            fail_line("CLOB_COL: want lob kind TEXT");
-        if ((c = find(cols, n, "NCLOB_COL")) && db_type_lob_kind(c->data_type) != DB_LOB_TEXT)
-            fail_line("NCLOB_COL: want lob kind TEXT");
+        if ((c = find(cols, n, "CLOB_COL"))  && (db_type_lob_kind(c->data_type) != DB_LOB_NONE ||
+                                                 !db_type_text_bound(c->data_type)))
+            fail_line("CLOB_COL: want a text LOB bound in the statement (U6)");
+        if ((c = find(cols, n, "NCLOB_COL")) && (db_type_lob_kind(c->data_type) != DB_LOB_NONE ||
+                                                 !db_type_text_bound(c->data_type)))
+            fail_line("NCLOB_COL: want a text LOB bound in the statement (U6)");
         if ((c = find(cols, n, "BLOB_COL"))  && db_type_lob_kind(c->data_type) != DB_LOB_BINARY)
             fail_line("BLOB_COL: want lob kind BINARY");
         if ((c = find(cols, n, "DATE_COL"))  && db_type_class(c->data_type) != DB_TYPE_CLASS_TIMESTAMP)
             fail_line("DATE_COL (datetime2(0)): want class TIMESTAMP");
         if (lobs != 3) fail_line("want 3 LOB columns, got %d", lobs);
-        if (!g_fail) printf("OK (no OTHER; 3 LOB columns, kinds match the placeholders)\n");
+        if (!g_fail) printf("OK (no OTHER; 3 LOB columns: BLOB written after, CLOB/NCLOB bound)\n");
     }
     failed |= g_fail;
 

@@ -891,6 +891,19 @@ typedef struct {
  *   other columns. SQL Server would read INFORMATION_SCHEMA.COLUMNS (or
  *   sys.columns) the same way; the signature carries nothing
  *   Oracle-specific.
+ *
+ * table_key()
+ *   Added in driver_mssql Stage 4 (2026-10-20, U1). The column whose
+ *   value locates a row after INSERT/UPDATE, for the dialect's
+ *   row_locator_clauses() (db_row_locator_ctx_t.key_columns) - the
+ *   dialect hooks have no ctx, so core asks here first. Writes the
+ *   column name into key_column and sets *key_count to 1, or sets
+ *   *key_count to 0 when the driver needs no column (Oracle: ROWID)
+ *   or the table has no usable single-column key (SQL Server: its
+ *   INSERT/UPDATE still run, but it cannot take a LOB write). owner
+ *   may be "". Returns 0, or -1 when the lookup itself failed (logged
+ *   on ctx->Metadata_logger). May be NULL in a driver that needs no key
+ *   - core then passes no key columns.
  */
 /* ================================================================== */
 /*  DIALECT (Oracle dialect extraction, Stage 2, 2026-10-02)           */
@@ -1075,6 +1088,11 @@ typedef struct db_driver_t {
 
     /* Stage 6 (2026-10-09) - see cursor_handle_free() above. */
     void (*cursor_handle_free)(void *cursor_handle);
+
+    /* driver_mssql Stage 4 (2026-10-20) - see table_key() above. */
+    int  (*table_key)(oci_context_t *ctx, const char *owner,
+                      const char *table_name, char *key_column,
+                      size_t key_column_size, int *key_count);
 
     /* Stage 2 (2026-10-02) - SQL fragments; see db_dialect_t above.
      * Never NULL for a real driver, and every hook in it is set. */

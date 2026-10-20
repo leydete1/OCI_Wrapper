@@ -1,6 +1,7 @@
 #!/bin/bash
 # ======================================================================
-# Build_MSSQL_Harnesses.sh  (driver_mssql Stage 2, P10; Stage 3, T10)
+# Build_MSSQL_Harnesses.sh  (driver_mssql Stage 2, P10; Stage 3, T10;
+#                            Stage 4, U8)
 #
 # Builds and runs the SQL Server driver harnesses with AddressSanitizer,
 # writing each run to logs/MSSQL_Driver_<name>_Test.log - the file names
@@ -11,6 +12,8 @@
 #   Connect, Pool          Stage 2 - connections, pool, commit/rollback
 #   Dialect                Stage 3 - SQL text only, no database
 #   Select, Metadata       Stage 3 - scalar SELECT, describe_table
+#   DML, LOB_Write,        Stage 4 - INSERT/UPDATE/DELETE with OUTPUT keys,
+#   Transaction                      LOB writes, deadlock and lock timeout
 #
 # Usage:  MSSQL_Server/Build_MSSQL_Harnesses.sh [config_mssql.ini]
 # Needs:  unixodbc-dev, msodbcsql18, the DataManager database
@@ -30,7 +33,7 @@ if grep -q '^ *password *= *CHANGE_ME' "$INI"; then
     exit 1
 fi
 
-# Core files the Stage 3 code links against, found by name wherever they
+# Core files the driver code links against, found by name wherever they
 # live under src/ (exactly one copy each).
 find_src() {
     local hits
@@ -53,7 +56,7 @@ for h in db_type_class.h Resultset_Builder.h; do
 done
 COMMON="$ROOT/src/execute/driver_mssql.c $ROOT/src/infra/MSSQL_Pool.c \
         $ROOT/src/execute/mssql_dialect.c $ROOT/src/execute/mssql_select.c \
-        $ROOT/src/execute/mssql_metadata.c \
+        $ROOT/src/execute/mssql_metadata.c $ROOT/src/execute/mssql_dml.c \
         $RESULTSET_BUILDER $DB_TYPE_CLASS \
         $ROOT/src/infra/ini_reader.c $ROOT/src/infra/logger.c $ROOT/src/core/ctx_utils.c"
 LIBS="-lodbc -lpthread -lm"
@@ -62,7 +65,7 @@ export ASAN_OPTIONS="detect_leaks=1"
 export LSAN_OPTIONS="suppressions=$ROOT/MSSQL_Server/lsan_mssql.supp:print_suppressions=1"
 
 rc=0
-for name in Connect Pool Dialect Select Metadata; do
+for name in Connect Pool Dialect Select Metadata DML LOB_Write Transaction; do
     src="$ROOT/src/Drivers/MSSQL/MSSQL_Driver_${name}_Test.c"
     exe="$BIN/MSSQL_Driver_${name}_Test"
     log="$LOGS/MSSQL_Driver_${name}_Test.log"

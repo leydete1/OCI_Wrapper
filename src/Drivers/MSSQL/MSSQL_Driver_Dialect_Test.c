@@ -1,13 +1,16 @@
 /*
- * MSSQL_Driver_Dialect_Test.c   (driver_mssql Stage 3, point T10)
+ * MSSQL_Driver_Dialect_Test.c   (driver_mssql Stage 3, point T10;
+ *                                 Stage 4: U2 row locator, U6 text LOBs)
  *
  * Checks driver_mssql's dialect (mssql_dialect.c) and the SQL Server
  * names in db_type_class.c. No database: every check compares exact
  * text, so this harness needs no ini file (an argument is ignored).
  *
  *   Test 1   bind_placeholder
- *   Test 2   value_expr - one CAST per date/time type, others unchanged
- *   Test 3   lob_placeholder - 0x / '' / N'' / NULL
+ *   Test 2   value_expr - one CAST per date/time type, CONVERT for
+ *            binary, others unchanged
+ *   Test 3   lob_placeholder - 0x for binary LOBs, NULL for text LOBs
+ *            (bound in the statement, U6) and everything else
  *   Test 4   now_expr, add_seconds_expr
  *   Test 5   procedure_call_sql
  *   Test 6   count_rows_sql without ORDER BY
@@ -18,10 +21,11 @@
  *   Test 10  row_limit_sql - TOP wrapper, or OFFSET/FETCH (5a)
  *   Test 11  text after a trailing -- comment starts on a new line
  *   Test 12  every hook returns -1 when the buffer is too small
- *   Test 13  row_locator_clauses is still -1 (stage 4)
- *   Test 14  db_type_class / db_type_lob_kind for SQL Server names, the
- *            Oracle names unchanged, and lob_kind agrees with
- *            lob_placeholder for every name tried
+ *   Test 13  row_locator_clauses: OUTPUT inserted.[KEY] (U2), nothing
+ *            without a key, -1 for a composite key
+ *   Test 14  db_type_class / db_type_lob_kind / db_type_text_bound for
+ *            SQL Server names, the Oracle names unchanged, and lob_kind
+ *            agrees with lob_placeholder for every name tried
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -138,6 +142,9 @@ int main(int argc, char *argv[])
             { "NVARCHAR",       "?" },
             { "BIGINT",         "?" },
             { "VARCHAR(MAX)",   "?" },
+            { "VARBINARY",      "CONVERT(varbinary(max), ?, 2)" },
+            { "BINARY",         "CONVERT(varbinary(max), ?, 2)" },
+            { "varbinary(50)",  "CONVERT(varbinary(max), ?, 2)" },
             { "",               "?" },
         };
         for (size_t i = 0; i < sizeof(V) / sizeof(V[0]); i++)
@@ -158,15 +165,15 @@ int main(int argc, char *argv[])
     expect_ptr("VARBINARY(MAX)",   d->lob_placeholder("VARBINARY(MAX)"), "0x");
     expect_ptr("varbinary( max )", d->lob_placeholder("varbinary( max )"), "0x");
     expect_ptr("IMAGE",            d->lob_placeholder("IMAGE"), "0x");
-    expect_ptr("VARCHAR(MAX)",     d->lob_placeholder("VARCHAR(MAX)"), "''");
-    expect_ptr("TEXT",             d->lob_placeholder("TEXT"), "''");
-    expect_ptr("NVARCHAR(MAX)",    d->lob_placeholder("NVARCHAR(MAX)"), "N''");
-    expect_ptr("NTEXT",            d->lob_placeholder("NTEXT"), "N''");
+    expect_ptr("VARCHAR(MAX)",     d->lob_placeholder("VARCHAR(MAX)"), NULL);
+    expect_ptr("TEXT",             d->lob_placeholder("TEXT"), NULL);
+    expect_ptr("NVARCHAR(MAX)",    d->lob_placeholder("NVARCHAR(MAX)"), NULL);
+    expect_ptr("NTEXT",            d->lob_placeholder("NTEXT"), NULL);
     expect_ptr("NVARCHAR",         d->lob_placeholder("NVARCHAR"), NULL);
     expect_ptr("VARBINARY",        d->lob_placeholder("VARBINARY"), NULL);
     expect_ptr("XML",              d->lob_placeholder("XML"), NULL);
     expect_ptr("NULL",             d->lob_placeholder(NULL), NULL);
-    end("0x / '' / N''");
+    end("0x for binary; text LOBs bound");
 
     /* ---- Test 4 ---- */
     begin("Test 4 (now_expr, add_seconds_expr)");
@@ -330,12 +337,31 @@ int main(int argc, char *argv[])
     begin("Test 13 (row_locator_clauses)");
     {
         char mid[64] = "x", tail[64] = "x";
-        db_row_locator_ctx_t loc = { "OCI_FIELD_TEST", "DATA_MANAGER", NULL, 0 };
+        const char *k1[] = { "FIELD_TEST_ID" };
+        db_row_locator_ctx_t loc = { "OCI_FIELD_TEST", "DATA_MANAGER", k1, 1 };
         rc = d->row_locator_clauses(DB_DML_INSERT, &loc, 3, mid, sizeof(mid), tail, sizeof(tail));
-        expect_rc("INSERT", rc, -1);
-        if (mid[0] || tail[0]) { printf("\n    mid/tail not emptied\n"); g_fail = 1; }
+        expect_str("INSERT mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID]");
+        expect_str("INSERT tail", rc, tail, "");
+        rc = d->row_locator_clauses(DB_DML_UPDATE, &loc, 9, mid, sizeof(mid), tail, sizeof(tail));
+        expect_str("UPDATE mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID]");
+        const char *k2[] = { "ODD]NAME" };
+        db_row_locator_ctx_t loc2 = { "T", "", k2, 1 };
+        rc = d->row_locator_clauses(DB_DML_INSERT, &loc2, 1, mid, sizeof(mid), tail, sizeof(tail));
+        expect_str("] doubled", rc, mid, "OUTPUT inserted.[ODD]]NAME]");
+        db_row_locator_ctx_t nokey = { "T", "", NULL, 0 };
+        strcpy(mid, "x"); strcpy(tail, "x");
+        rc = d->row_locator_clauses(DB_DML_INSERT, &nokey, 1, mid, sizeof(mid), tail, sizeof(tail));
+        expect_str("no key: mid", rc, mid, "");
+        expect_str("no key: tail", rc, tail, "");
+        const char *k3[] = { "A", "B" };
+        db_row_locator_ctx_t comp = { "T", "", k3, 2 };
+        expect_rc("composite", d->row_locator_clauses(DB_DML_INSERT, &comp, 1, mid, sizeof(mid),
+                                                      tail, sizeof(tail)), -1);
+        char tiny[8];
+        expect_rc("small buffer", d->row_locator_clauses(DB_DML_INSERT, &loc, 1, tiny, sizeof(tiny),
+                                                         tail, sizeof(tail)), -1);
     }
-    end("-1 until stage 4");
+    end("OUTPUT inserted.[KEY]");
 
     /* ---- Test 14 ---- */
     begin("Test 14 (db_type_class, lob_kind)");
@@ -371,11 +397,11 @@ int main(int argc, char *argv[])
             { "VARBINARY(MAX)",   DB_TYPE_CLASS_LOB,       DB_LOB_BINARY },
             { "varbinary(max)",   DB_TYPE_CLASS_LOB,       DB_LOB_BINARY },
             { "IMAGE",            DB_TYPE_CLASS_LOB,       DB_LOB_BINARY },
-            { "VARCHAR(MAX)",     DB_TYPE_CLASS_LOB,       DB_LOB_TEXT   },
-            { "NVARCHAR(MAX)",    DB_TYPE_CLASS_LOB,       DB_LOB_TEXT   },
-            { "NVARCHAR( MAX )",  DB_TYPE_CLASS_LOB,       DB_LOB_TEXT   },
-            { "TEXT",             DB_TYPE_CLASS_LOB,       DB_LOB_TEXT   },
-            { "NTEXT",            DB_TYPE_CLASS_LOB,       DB_LOB_TEXT   },
+            { "VARCHAR(MAX)",     DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
+            { "NVARCHAR(MAX)",    DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
+            { "NVARCHAR( MAX )",  DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
+            { "TEXT",             DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
+            { "NTEXT",            DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
             { "XML",              DB_TYPE_CLASS_LOB,       DB_LOB_NONE   },
             { "ROWVERSION",       DB_TYPE_CLASS_OTHER,     DB_LOB_NONE   },
             { "SQL_VARIANT",      DB_TYPE_CLASS_OTHER,     DB_LOB_NONE   },
@@ -420,6 +446,21 @@ int main(int argc, char *argv[])
                 }
             }
         }
+        /* U6: text LOBs bound in the statement - SQL Server only */
+        static const struct { const char *t; int b; } TB[] = {
+            { "VARCHAR(MAX)", 1 }, { "nvarchar(max)", 1 }, { "TEXT", 1 }, { "NTEXT", 1 },
+            { "XML", 1 }, { "VARBINARY(MAX)", 0 }, { "IMAGE", 0 }, { "VARCHAR", 0 },
+            { "NVARCHAR", 0 }, { "CLOB", 0 }, { "NCLOB", 0 }, { "BLOB", 0 },
+            { "VARCHAR2", 0 }, { "", 0 },
+        };
+        for (size_t i = 0; i < sizeof(TB) / sizeof(TB[0]); i++)
+            if (db_type_text_bound(TB[i].t) != TB[i].b)
+            {
+                if (!g_fail) printf("\n");
+                printf("    %s: db_type_text_bound want %d\n", TB[i].t, TB[i].b);
+                g_fail = 1;
+            }
+        if (db_type_text_bound(NULL) != 0) { printf("\n    NULL: want 0\n"); g_fail = 1; }
         char note[64];
         snprintf(note, sizeof(note), "%d names", n);
         end(note);

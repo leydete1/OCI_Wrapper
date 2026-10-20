@@ -51,6 +51,7 @@
 #include <Audit_Trail_Manager.h>
 #include "XML_Helper.h"
 #include "db_type_class.h"   /* db_type_lob_kind() - Stage 4b */
+#include "lob_text_bind.h"   /* lob_text_resolve() - driver_mssql Stage 4 */
 #include "logger.h"
 #include "metrics.h"
 #include "metrics_writer.h"   /* metrics_finalise_and_enqueue() - closure item 5, Stage 2 */
@@ -390,7 +391,26 @@ static int build_update_sql(oci_context_t        *ctx,
      * middle, "RETURNING ROWID INTO :n" at the end). */
     char loc_mid[512]  = {0};
     char loc_tail[512] = {0};
-    db_row_locator_ctx_t loc = { uc->table_name, uc->owner, NULL, 0 };
+    /* driver_mssql Stage 4 (U1): the driver names the column its row
+     * locator returns (SQL Server: OUTPUT inserted.<key>). Oracle has
+     * no table_key hook result - ROWID needs no column - so its SQL is
+     * unchanged. */
+    char        loc_key[128]  = {0};
+    const char *loc_keys[1]   = { loc_key };
+    int         loc_key_count = 0;
+    const db_driver_t *loc_drv = db_driver_get(ctx);
+    if (loc_drv->table_key &&
+        loc_drv->table_key(ctx, uc->owner, uc->table_name,
+                           loc_key, sizeof(loc_key), &loc_key_count) != 0)
+    {
+        logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
+                     "driver could not look up the row key of '%s'",
+                     uc->table_name);
+        return -1;
+    }
+    db_row_locator_ctx_t loc = { uc->table_name, uc->owner,
+                                 loc_key_count ? loc_keys : NULL,
+                                 loc_key_count };
     if (dl->row_locator_clauses(DB_DML_UPDATE, &loc, rowid_bind_pos,
                                 loc_mid, sizeof(loc_mid),
                                 loc_tail, sizeof(loc_tail)) != 0)
@@ -467,6 +487,10 @@ int execute_update_batch(oci_context_t     *ctx,
     uint64_t       clob_bytes   = 0;   /* total CLOB bytes written    */
     struct timespec ts_start, ts_end;
     audit_old_value_t *old_values    = NULL;  /* before-image for audit */
+    char             **text_heap       = NULL; /* driver_mssql Stage 4 (U6) */
+    int                text_heap_count = 0;
+    int                text_bound_cols = 0;
+    uint64_t           text_bound_bytes = 0;
     int                old_row_count = 0;
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
@@ -668,7 +692,8 @@ int execute_update_batch(oci_context_t     *ctx,
 
     int total_bind_cols = uc->col_count + uc->key_count;
     bind_values = calloc((size_t)total_bind_cols, sizeof(char *));
-    if (!bind_values)
+    text_heap   = calloc((size_t)uc->col_count + 1, sizeof(char *));
+    if (!bind_values || !text_heap)
     {
         logger_write(ctx->update_logger, LOG_ERROR, __func__, 0,
                      "calloc failed for bind_values");
@@ -694,7 +719,27 @@ int execute_update_batch(oci_context_t     *ctx,
             continue;
 
         const upd_field_value_t *fv = &uc->values[c];
-        bind_values[scalar_bind_pos] = fv->is_empty ? NULL : upd_field_value_get(fv);
+        const char *bv = fv->is_empty ? NULL : upd_field_value_get(fv);
+
+        /* driver_mssql Stage 4 (U6) - see execute_insert_batch(): a
+         * text LOB bound in the statement takes a file:// value's
+         * contents; counted per updated row below, as the CLOB write
+         * further down counts it on Oracle. */
+        if (!fv->is_empty && db_type_text_bound(dtype))
+        {
+            char  *heap = NULL;
+            size_t tlen = 0;
+            if (lob_text_resolve(upd_field_value_get(fv), &bv, &heap,
+                                 &tlen, ctx->update_logger) != 0)
+            {
+                rc = -1;
+                goto Cleanup;
+            }
+            if (heap) text_heap[text_heap_count++] = heap;
+            text_bound_cols++;
+            text_bound_bytes += tlen;
+        }
+        bind_values[scalar_bind_pos] = bv;
 
         logger_write(ctx->update_logger, LOG_DEBUG, __func__, 0,
                      "Bind SET col=%d name='%s' bind_pos=%d (%s)",
@@ -855,6 +900,8 @@ int execute_update_batch(oci_context_t     *ctx,
      * invented. */
     rows_updated = rowid_result.count;
     metrics.rows_affected = (uint64_t)rows_updated;
+    lob_count  += text_bound_cols * rows_updated;            /* Stage 4 (U6) */
+    clob_bytes += text_bound_bytes * (uint64_t)rows_updated;
 
     logger_write(ctx->update_logger, LOG_INFO, __func__, 0,
                  "driver dml_execute_returning_rowids OK rows_updated=%d",
@@ -1282,6 +1329,8 @@ Cleanup:
     }
 
     free(bind_values);
+    for (int t = 0; t < text_heap_count; t++) free(text_heap[t]);
+    free(text_heap);
 
     if (old_values) { free(old_values); old_values = NULL; }
 
