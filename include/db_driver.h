@@ -976,11 +976,12 @@ typedef struct db_dialect_t {
     /* Single-column, single-row query giving the row count of sql. Must
      * work when sql selects LOB columns.
      *   Oracle "SELECT COUNT(*) FROM (SELECT 1 FROM (<sql>))"
-     *   SQL Server needs derived-table aliases: "... (<sql>) a) b"      */
+     *   SQL Server "SELECT COUNT(*) FROM (SELECT 1 AS dm_c FROM (<sql>)
+     *              AS dm_a) AS dm_b" (driver_mssql; ORDER BY - 5a)  */
     int (*count_rows_sql)(const char *sql, char *out, size_t out_max);
 
     /* The database server's current time.
-     *   Oracle "SYSTIMESTAMP"   SQL Server "SYSDATETIMEOFFSET()"         */
+     *   Oracle "SYSTIMESTAMP"   SQL Server "SYSDATETIME()" (D7)          */
     const char *(*now_expr)(void);
 
     /* base_expr + seconds_expr seconds (both SQL expressions).

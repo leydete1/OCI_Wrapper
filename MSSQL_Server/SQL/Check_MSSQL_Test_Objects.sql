@@ -1,5 +1,6 @@
 -- ======================================================================
--- Check_MSSQL_Test_Objects.sql   (driver_mssql Stage 1 proof)
+-- Check_MSSQL_Test_Objects.sql   (driver_mssql Stage 1 proof; V1 checks
+-- added in Stage 3, 2026-10-20 - 42 checks)
 --
 -- Run as DATA_MANAGER after Create_MSSQL_Test_Objects.sql:
 --
@@ -35,6 +36,17 @@ INSERT #r (ok, what, got)
 SELECT CASE WHEN USER_NAME(s.principal_id) = 'dbo' THEN 1 ELSE 0 END,
        'schema DATA_MANAGER owned by dbo', USER_NAME(s.principal_id)
   FROM sys.schemas s WHERE s.name = 'DATA_MANAGER';
+-- driver_mssql Stage 3 (V1): describe_table needs the default texts
+INSERT #r (ok, what, got)
+SELECT CASE WHEN HAS_PERMS_BY_NAME('DATA_MANAGER', 'SCHEMA', 'VIEW DEFINITION') = 1 THEN 1 ELSE 0 END,
+       'VIEW DEFINITION on schema DATA_MANAGER (V1)',
+       CAST(HAS_PERMS_BY_NAME('DATA_MANAGER', 'SCHEMA', 'VIEW DEFINITION') AS nvarchar(5));
+INSERT #r (ok, what, got)
+SELECT CASE WHEN OBJECT_DEFINITION(c.default_object_id) = N'(''Y'')' THEN 1 ELSE 0 END,
+       'APP_USER.ENABLED default text visible (V1)',
+       COALESCE(OBJECT_DEFINITION(c.default_object_id), N'NULL')
+  FROM sys.columns c
+ WHERE c.object_id = OBJECT_ID('DATA_MANAGER.APP_USER') AND c.name = 'ENABLED';
 GO
 
 -- ---- Row counts (S7, S8, S10, S11) -------------------------------------

@@ -20,6 +20,14 @@
  *                          "driver_mssql: <hook> not implemented yet
  *                          (stage N)" - stages 3-6 fill these in.
  *
+ * Stage 3 (2026-10-19), points T1-T10:
+ *   select_open / select_fetch_batch / select_close
+ *                          mssql_select.c - scalar columns; a long
+ *                          (max/text/xml) column is refused until stage 5
+ *   describe_table         mssql_metadata.c
+ *   dialect                mssql_dialect.c - all hooks except
+ *                          row_locator_clauses (stage 4)
+ *
  * Never includes an Oracle header: m2_compile_proof.py compiles this
  * file with every Oracle header blocked.
  */
@@ -34,6 +42,9 @@
 #include "db_driver.h"
 #include "Connection.h"
 #include "MSSQL_Pool.h"
+#include "mssql_dialect.h"     /* Stage 3 */
+#include "mssql_select.h"      /* Stage 3 */
+#include "mssql_metadata.h"    /* Stage 3 */
 #include "logger.h"
 
 /* ================================================================== */
@@ -112,33 +123,8 @@ static int mssql_rollback(oci_context_t *ctx, logger_t *logger)
 /* ================================================================== */
 /*  Hooks for later stages (P8)                                         */
 /* ================================================================== */
-static int mssql_select_open(oci_context_t *ctx, const db_select_request_t *req,
-                             db_select_cursor_t **out_cursor, db_column_meta_t **out_columns,
-                             int *out_column_count, int *out_batch_size)
-{
-    (void)req;
-    if (out_cursor)       *out_cursor = NULL;
-    if (out_columns)      *out_columns = NULL;
-    if (out_column_count) *out_column_count = 0;
-    if (out_batch_size)   *out_batch_size = 0;
-    not_yet(ctx ? ctx->select_logger : NULL, "select_open", 3);
-    return -1;
-}
-
-static int mssql_select_fetch_batch(db_select_cursor_t *cursor, resultset_t **out_rs,
-                                    int *out_rows_fetched, db_fetch_batch_stats_t *out_stats)
-{
-    (void)cursor; (void)out_stats;
-    if (out_rs)           *out_rs = NULL;
-    if (out_rows_fetched) *out_rows_fetched = 0;
-    not_yet(NULL, "select_fetch_batch", 3);
-    return -1;
-}
-
-static void mssql_select_close(db_select_cursor_t *cursor)
-{
-    (void)cursor;       /* select_open never hands out a cursor yet */
-}
+/* select_open / select_fetch_batch / select_close: mssql_select.c
+ * (Stage 3). */
 
 static int mssql_dml_execute(oci_context_t *ctx, logger_t *logger, const db_dml_request_t *req,
                              int *out_rows_affected, char *out_error_message,
@@ -200,70 +186,14 @@ static int mssql_select_open_from_cursor(oci_context_t *ctx, void *cursor_handle
     return -1;
 }
 
-static int mssql_describe_table(oci_context_t *ctx, metadata_request_t *req,
-                                col_metadata_t *cols, int *col_count, int max_cols)
-{
-    (void)req; (void)cols; (void)max_cols;
-    if (col_count) *col_count = 0;
-    not_yet(ctx ? ctx->Metadata_logger : NULL, "describe_table", 3);
-    return -1;
-}
+/* describe_table: mssql_metadata.c (Stage 3). */
 
 static void mssql_cursor_handle_free(void *cursor_handle)
 {
     (void)cursor_handle;    /* no cursor handle is ever handed out yet */
 }
 
-/* ---- Dialect (M5) - stage 3. No ctx/logger in these hooks; core
- * logs the failure where it calls them. ---------------------------- */
-static int d_bind_placeholder(int pos, char *out, size_t out_max)
-{ (void)pos; if (out && out_max) out[0] = '\0'; return -1; }
-
-static int d_value_expr(const char *dtype, const char *operand, char *out, size_t out_max)
-{ (void)dtype; (void)operand; if (out && out_max) out[0] = '\0'; return -1; }
-
-static const char *d_lob_placeholder(const char *dtype)
-{ (void)dtype; return NULL; }
-
-static int d_row_locator_clauses(db_dml_kind_t kind, const db_row_locator_ctx_t *loc, int pos,
-                                 char *mid, size_t mid_max, char *tail, size_t tail_max)
-{
-    (void)kind; (void)loc; (void)pos;
-    if (mid && mid_max)   mid[0] = '\0';
-    if (tail && tail_max) tail[0] = '\0';
-    return -1;
-}
-
-static int d_row_limit_sql(const char *sql, int max_rows, char *out, size_t out_max)
-{ (void)sql; (void)max_rows; if (out && out_max) out[0] = '\0'; return -1; }
-
-static int d_count_rows_sql(const char *sql, char *out, size_t out_max)
-{ (void)sql; if (out && out_max) out[0] = '\0'; return -1; }
-
-/* now_expr is plain text with no inputs, so it is real already (it
- * never returns NULL to a caller that formats it straight into SQL). */
-static const char *d_now_expr(void)
-{ return "SYSDATETIME()"; }
-
-static int d_add_seconds_expr(const char *base_expr, const char *seconds_expr,
-                              char *out, size_t out_max)
-{ (void)base_expr; (void)seconds_expr; if (out && out_max) out[0] = '\0'; return -1; }
-
-static int d_procedure_call_sql(const char *proc_name, const char * const *param_names,
-                                int count, char *out, size_t out_max)
-{ (void)proc_name; (void)param_names; (void)count; if (out && out_max) out[0] = '\0'; return -1; }
-
-static const db_dialect_t g_mssql_dialect = {
-    .bind_placeholder    = d_bind_placeholder,
-    .value_expr          = d_value_expr,
-    .lob_placeholder     = d_lob_placeholder,
-    .row_locator_clauses = d_row_locator_clauses,
-    .row_limit_sql       = d_row_limit_sql,
-    .count_rows_sql      = d_count_rows_sql,
-    .now_expr            = d_now_expr,
-    .add_seconds_expr    = d_add_seconds_expr,
-    .procedure_call_sql  = d_procedure_call_sql,
-};
+/* Dialect (M5): mssql_dialect.c (Stage 3). */
 
 static const db_driver_t g_mssql_driver = {
     .driver_name                  = "mssql",
@@ -287,7 +217,7 @@ static const db_driver_t g_mssql_driver = {
     .select_open_from_cursor      = mssql_select_open_from_cursor,
     .describe_table               = mssql_describe_table,
     .cursor_handle_free           = mssql_cursor_handle_free,
-    .dialect                      = &g_mssql_dialect,
+    .dialect                      = &mssql_dialect,   /* mssql_dialect.c */
 };
 
 const db_driver_t *mssql_driver_get(void)

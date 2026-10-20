@@ -10,11 +10,18 @@
  * never vendor type names - so a DATE check in Level 2 does not need
  * to know that Oracle spells its types differently from SQL Server.
  *
- * Today only Oracle's names are listed. driver_mssql adds its own
- * names here (DATETIME2, NVARCHAR, VARBINARY ...) when it arrives;
- * nothing that calls db_type_class() has to change for that.
+ * Oracle's names and, since driver_mssql Stage 3 (2026-10-19), SQL
+ * Server's (NVARCHAR, DATETIME2, VARBINARY ...) are listed; nothing
+ * that calls db_type_class() had to change for that. SQL Server's
+ * classes: char, varchar, nchar, nvarchar, uniqueidentifier and time
+ * STRING; int, bigint, smallint, tinyint, bit, decimal, numeric,
+ * money, smallmoney, float and real NUMERIC; date and smalldatetime
+ * DATE; datetime, datetime2 and datetimeoffset TIMESTAMP; binary(n)
+ * and varbinary(n) BINARY; any "(MAX)" type, text, ntext, image and
+ * xml LOB.
  *
  * Matching is case-insensitive and ignores any "(n)" / "(p,s)" suffix
+ * (but not SQL Server's "(MAX)", which makes the column LOB)
  * and trailing qualifiers, so "TIMESTAMP(6) WITH LOCAL TIME ZONE" is
  * classed as TIMESTAMP - exactly today's strncmp(type, "TIMESTAMP", 9)
  * behaviour (proposal 0.9: time-zone columns are timestamps, zone-less).
@@ -74,7 +81,9 @@ const char *db_type_class_name(db_type_class_t cls);
  * Must agree with the driver's dialect lob_placeholder(): a column is
  * written after the statement exactly when the SQL gives it a LOB
  * placeholder instead of a bind. For Oracle both cover exactly BLOB,
- * CLOB and NCLOB.
+ * CLOB and NCLOB; for SQL Server VARBINARY(MAX) and IMAGE (binary),
+ * VARCHAR(MAX), NVARCHAR(MAX), TEXT and NTEXT (text). SQL Server's
+ * XML is LOB class but DB_LOB_NONE, like BFILE: it binds as text.
  */
 typedef enum {
     DB_LOB_NONE = 0,

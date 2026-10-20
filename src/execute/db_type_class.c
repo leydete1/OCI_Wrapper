@@ -2,7 +2,8 @@
  * db_type_class.c
  *
  * See db_type_class.h. Oracle dialect extraction, Stage 1 (2026-09-30);
- * extended in Stage 4b (2026-10-06).
+ * extended in Stage 4b (2026-10-06). SQL Server names added in
+ * driver_mssql Stage 3 (2026-10-19).
  */
 
 #include <ctype.h>
@@ -53,6 +54,35 @@ static const type_map_t TYPE_MAP[] = {
     { "CLOB",          DB_TYPE_CLASS_LOB       },
     { "NCLOB",         DB_TYPE_CLASS_LOB       },
     { "BFILE",         DB_TYPE_CLASS_LOB       },
+
+    /* ---- SQL Server (driver_mssql Stage 3, 2026-10-19) ----
+     * Names as driver_mssql's describe_table reports them. CHAR,
+     * VARCHAR, NCHAR, INT, SMALLINT, DECIMAL, NUMERIC, FLOAT, REAL and
+     * DATE are spelled as Oracle's and are listed above. A "(MAX)"
+     * suffix makes any of them LOB - see db_type_class(). SQL Server's
+     * own "timestamp" is rowversion; describe_table reports it as
+     * ROWVERSION, which is not listed (OTHER). */
+    { "NVARCHAR",         DB_TYPE_CLASS_STRING    },
+    { "UNIQUEIDENTIFIER", DB_TYPE_CLASS_STRING    },
+    { "TIME",             DB_TYPE_CLASS_STRING    },   /* time of day only -
+                                                          not a date      */
+    { "BIGINT",           DB_TYPE_CLASS_NUMERIC   },
+    { "TINYINT",          DB_TYPE_CLASS_NUMERIC   },
+    { "BIT",              DB_TYPE_CLASS_NUMERIC   },
+    { "MONEY",            DB_TYPE_CLASS_NUMERIC   },
+    { "SMALLMONEY",       DB_TYPE_CLASS_NUMERIC   },
+    { "SMALLDATETIME",    DB_TYPE_CLASS_DATE      },
+    { "DATETIME",         DB_TYPE_CLASS_TIMESTAMP },
+    { "DATETIME2",        DB_TYPE_CLASS_TIMESTAMP },
+    { "DATETIMEOFFSET",   DB_TYPE_CLASS_TIMESTAMP },
+    { "BINARY",           DB_TYPE_CLASS_BINARY    },
+    { "VARBINARY",        DB_TYPE_CLASS_BINARY    },
+    { "TEXT",             DB_TYPE_CLASS_LOB       },
+    { "NTEXT",            DB_TYPE_CLASS_LOB       },
+    { "IMAGE",            DB_TYPE_CLASS_LOB       },
+    { "XML",              DB_TYPE_CLASS_LOB       },   /* LOB class, but not
+                                                          db_type_lob_kind():
+                                                          binds as text  */
 };
 
 /* Length of the leading type word: stops at '(' or whitespace, so
@@ -81,6 +111,21 @@ static int base_is(const char *s, size_t n, const char *name)
     return strlen(name) == n && strncasecmp(name, s, n) == 0;
 }
 
+/* driver_mssql Stage 3: "(MAX)" straight after the base name, spaces
+ * allowed - SQL Server's VARCHAR(MAX), NVARCHAR(MAX), VARBINARY(MAX). */
+static int has_max_suffix(const char *after_base)
+{
+    const char *p = after_base;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != '(') return 0;
+    p++;
+    while (isspace((unsigned char)*p)) p++;
+    if (strncasecmp(p, "MAX", 3) != 0) return 0;
+    p += 3;
+    while (isspace((unsigned char)*p)) p++;
+    return *p == ')';
+}
+
 db_type_class_t db_type_class(const char *type_name)
 {
     if (!type_name) return DB_TYPE_CLASS_OTHER;
@@ -89,6 +134,10 @@ db_type_class_t db_type_class(const char *type_name)
 
     size_t n = base_name_len(type_name);
     if (n == 0) return DB_TYPE_CLASS_OTHER;
+
+    /* SQL Server "(MAX)" (driver_mssql Stage 3): up to 2 GB, read and
+     * written as a LOB whatever the base name's own class. */
+    if (has_max_suffix(type_name + n)) return DB_TYPE_CLASS_LOB;
 
     /* INTERVAL YEAR(p) TO MONTH / INTERVAL DAY(p) TO SECOND(s): the
      * class is in the qualifier. MONTH is checked first, matching the
@@ -140,5 +189,19 @@ db_lob_kind_t db_type_lob_kind(const char *type_name)
     if (base_is(type_name, n, "CLOB"))  return DB_LOB_TEXT;
     if (base_is(type_name, n, "NCLOB")) return DB_LOB_TEXT;
 
-    return DB_LOB_NONE;   /* includes BFILE - see db_type_class.h */
+    /* ---- SQL Server (driver_mssql Stage 3) - the columns
+     * driver_mssql's lob_placeholder() gives 0x / '' / N'' ---- */
+    if (has_max_suffix(type_name + n))
+    {
+        if (base_is(type_name, n, "VARBINARY")) return DB_LOB_BINARY;
+        if (base_is(type_name, n, "VARCHAR"))   return DB_LOB_TEXT;
+        if (base_is(type_name, n, "NVARCHAR"))  return DB_LOB_TEXT;
+        return DB_LOB_NONE;
+    }
+    if (base_is(type_name, n, "IMAGE")) return DB_LOB_BINARY;
+    if (base_is(type_name, n, "TEXT"))  return DB_LOB_TEXT;
+    if (base_is(type_name, n, "NTEXT")) return DB_LOB_TEXT;
+
+    return DB_LOB_NONE;   /* includes BFILE and SQL Server XML - see
+                             db_type_class.h */
 }

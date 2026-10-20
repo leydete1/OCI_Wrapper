@@ -74,8 +74,15 @@ GO
 -- DML and EXECUTE only. No CREATE / ALTER rights (DDL is out of scope on
 -- SQL Server, M8). The schema is owned by dbo, so DENY works (S6).
 GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON SCHEMA::DATA_MANAGER TO DATA_MANAGER;
+-- PREREQUISITE (driver_mssql Stage 3, V1, 2026-10-20): read-only right
+-- to see definitions in this schema. Without it SQL Server hides every
+-- default constraint's text from DATA_MANAGER, describe_table reports
+-- no defaults, and Level 2 refuses INSERTs that leave a NOT NULL
+-- column with a default (APP_USER.ENABLED ...) to that default. On
+-- Oracle DATA_MANAGER owns the tables and sees them anyway.
+GRANT VIEW DEFINITION ON SCHEMA::DATA_MANAGER TO DATA_MANAGER;
 GO
-PRINT 'ok      user DATA_MANAGER, schema DATA_MANAGER (owner dbo)';
+PRINT 'ok      user DATA_MANAGER, schema DATA_MANAGER (owner dbo), VIEW DEFINITION';
 GO
 
 -- ----------------------------------------------------------------------
