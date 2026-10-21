@@ -1,5 +1,6 @@
 /*
- * MSSQL_Driver_Select_Test.c   (driver_mssql Stage 3, point T10)
+ * MSSQL_Driver_Select_Test.c   (driver_mssql Stage 3, point T10;
+ *                               Stage 5, W1 - Test 10; Stage 5 Fixes 1-2)
  *
  * Checks driver_mssql's scalar SELECT (mssql_select.c) against a real
  * SQL Server, on one standalone connection. Reads only: it needs the
@@ -19,7 +20,12 @@
  *            ORDER BY)
  *   Test 9   D6: unnamed / duplicate column in a wrapped query -> the
  *            "add an alias" message
- *   Test 10  long columns (max, xml) refused until stage 5
+ *   Tests 4, 8 and 14 need exactly the four seed rows NUMBER_COL 42, 4242,
+ *   4243 and 4244 in OCI_FIELD_TEST (Reset_Tester_Objects_mssql.sql); with
+ *   other rows of those values they fail saying so.
+ *
+ *   Test 10  a CLR type (hierarchyid) is refused with a clear error (long
+ *            columns are read since Stage 5 - MSSQL_Driver_LOB_Select_Test)
  *   Test 11  query_timeout 1 s stops a 5 s query; connection still works
  *   Test 12  a statement with no result set fails cleanly
  *   Test 13  database errors come back as SQLSTATE text
@@ -291,8 +297,19 @@ int main(int argc, char *argv[])
     failed |= g_fail;
 
     /* ---- Test 4 ---- */
+    /* Tests 4, 8 and 14 count rows of the four seed values. */
+    long seed_rows = -1;
+    run(&R, "SELECT NUMBER_COL FROM " T_FIELD " WHERE NUMBER_COL IN (42, 4242, 4243, 4244)",
+        10, 0, 0, NULL);
+    if (R.rc == 0) seed_rows = R.nrows;
+    char seed_msg[200];
+    snprintf(seed_msg, sizeof(seed_msg),
+             "OCI_FIELD_TEST has %ld rows with NUMBER_COL 42/4242/4243/4244, want the 4 "
+             "seed rows - run Reset_Tester_Objects_mssql.sql", seed_rows);
+
     printf("Test 4 (batches of 2)                ... ");
     g_fail = 0;
+    if (seed_rows != 4) bad("%s%s", seed_msg, "");
     run(&R, "SELECT NUMBER_COL FROM " T_FIELD
             " WHERE NUMBER_COL IN (42, 4242, 4243, 4244) ORDER BY NUMBER_COL", 2, 0, 0, NULL);
     if (R.rc != 0) bad("select failed: %s%s", R.error, "");
@@ -385,6 +402,7 @@ int main(int argc, char *argv[])
     /* ---- Test 8 ---- */
     printf("Test 8 (5a: row limit and count run) ... ");
     g_fail = 0;
+    if (seed_rows != 4) bad("%s%s", seed_msg, "");
     {
         const char *ordered = "SELECT NUMBER_COL FROM " T_FIELD
                               " WHERE NUMBER_COL IN (42, 4242, 4243, 4244) ORDER BY NUMBER_COL DESC";
@@ -438,27 +456,28 @@ int main(int argc, char *argv[])
     failed |= g_fail;
 
     /* ---- Test 10 ---- */
-    printf("Test 10 (long columns refused)       ... ");
+    printf("Test 10 (CLR type refused)           ... ");
     g_fail = 0;
     {
-        static const struct { const char *sql, *col; } L[] = {
-            { "SELECT NUMBER_COL, CLOB_COL FROM " T_FIELD,  "CLOB_COL (varchar(max))" },
-            { "SELECT NCLOB_COL FROM " T_FIELD,             "NCLOB_COL (nvarchar(max))" },
-            { "SELECT BLOB_COL FROM " T_FIELD,              "BLOB_COL (varbinary(max))" },
-            { "SELECT CAST('<a/>' AS xml) AS X",            "X (xml)" },
-        };
-        for (size_t i = 0; i < sizeof(L) / sizeof(L[0]); i++)
+        const char *sql = "SELECT NUMBER_COL, CAST(NULL AS hierarchyid) AS H FROM " T_FIELD;
+        run(&R, sql, 2, 0, 0, NULL);
+        if (R.rc == 0) bad("%s: want a refusal%s", sql, "");
+        else
         {
-            run(&R, L[i].sql, 2, 0, 0, NULL);
-            if (R.rc == 0) bad("%s: want a refusal%s", L[i].sql, "");
-            else
-            {
-                has(L[i].sql, R.error, L[i].col);
-                has(L[i].sql, R.error, "not implemented yet (stage 5)");
-            }
+            /* the CLR type's own name, or the driver's generic "udt" -
+             * never anything else (Fix 2: the catalog name came back) */
+            if (!strstr(R.error, "column H is a CLR type (hierarchyid)") &&
+                !strstr(R.error, "column H is a CLR type (udt)"))
+                bad("want 'CLR type (hierarchyid)' or '(udt)', got '%s'%s", R.error, "");
+            has(sql, R.error, "not supported");
         }
     }
-    if (!g_fail) printf("OK (varchar/nvarchar/varbinary(max), xml)\n");
+    if (!g_fail)
+    {
+        const char *t = strstr(R.error, "CLR type (") + 10;   /* checked above */
+        const char *e = strchr(t, ')');
+        printf("OK (%.*s)\n", e ? (int)(e - t) : 0, t);
+    }
     failed |= g_fail;
 
     /* ---- Test 11 ---- */
@@ -502,6 +521,7 @@ int main(int argc, char *argv[])
     /* ---- Test 14 ---- */
     printf("Test 14 (second SELECT while open)   ... ");
     g_fail = 0;
+    if (seed_rows != 4) bad("%s%s", seed_msg, "");
     {
         db_select_request_t ra;
         memset(&ra, 0, sizeof(ra));

@@ -9,8 +9,7 @@
 --
 -- Run as DATA_MANAGER before every tester run against SQL Server:
 --
---   sqlcmd -S localhost -U DATA_MANAGER -d DataManager -C -b \
---          -i Reset_Tester_Objects_mssql.sql
+--   sqlcmd -S localhost -U DATA_MANAGER -d DataManager -C -b -i Reset_Tester_Objects_mssql.sql
 --
 -- Safe to run any number of times. All of it runs in one transaction:
 -- any error rolls everything back and stops the script.

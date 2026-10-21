@@ -42,7 +42,7 @@ FILES=(
   Insert_Execute_Module.c Response_Writer.c resultset_cache.c
   generic_queue.c DDL_Modules.c DDL_Execute_Module.c
   sql_dependency_extractor.c Insert_Validate_Module.c
-  date_normalize.c db_type_class.c
+  date_normalize.c db_type_class.c lob_text_bind.c
 )
 
 PATHS=()

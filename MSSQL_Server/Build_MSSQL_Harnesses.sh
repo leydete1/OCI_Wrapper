@@ -1,7 +1,7 @@
 #!/bin/bash
 # ======================================================================
 # Build_MSSQL_Harnesses.sh  (driver_mssql Stage 2, P10; Stage 3, T10;
-#                            Stage 4, U8)
+#                            Stage 4, U8; Stage 5, W7)
 #
 # Builds and runs the SQL Server driver harnesses with AddressSanitizer,
 # writing each run to logs/MSSQL_Driver_<name>_Test.log - the file names
@@ -14,6 +14,7 @@
 #   Select, Metadata       Stage 3 - scalar SELECT, describe_table
 #   DML, LOB_Write,        Stage 4 - INSERT/UPDATE/DELETE with OUTPUT keys,
 #   Transaction                      LOB writes, deadlock and lock timeout
+#   LOB_Select             Stage 5 - long columns in SELECT (files, inline)
 #
 # Usage:  MSSQL_Server/Build_MSSQL_Harnesses.sh [config_mssql.ini]
 # Needs:  unixodbc-dev, msodbcsql18, the DataManager database
@@ -46,18 +47,46 @@ find_src() {
 }
 RESULTSET_BUILDER=$(find_src Resultset_Builder.c) || exit 1
 DB_TYPE_CLASS=$(find_src db_type_class.c) || exit 1
+BLOB_UTILS=$(find_src Blob_Utils.c) || exit 1
+CLOB_UTILS=$(find_src Clob_Utils.c) || exit 1
+
+# get_mime_type() for the harness binaries (Stage 5). The gateway links the
+# real one from XML_Helper.c; the harnesses do not link the XML layer, so
+# a copy of its extension table is written into bin/ here - generated, so
+# no second definition ever sits in the source tree. Keep in step with
+# XML_Helper.c.
+MIME_SHIM="$BIN/mssql_harness_mime.c"
+cat > "$MIME_SHIM" <<'EOF_MIME'
+#include <string.h>
+#include <strings.h>
+const char *get_mime_type(const char *filename);
+const char *get_mime_type(const char *filename)
+{
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return "application/octet-stream";
+    ext++;
+    if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0) return "image/jpeg";
+    if (strcasecmp(ext, "png") == 0) return "image/png";
+    if (strcasecmp(ext, "gif") == 0) return "image/gif";
+    if (strcasecmp(ext, "bmp") == 0) return "image/bmp";
+    if (strcasecmp(ext, "pdf") == 0) return "application/pdf";
+    return "application/octet-stream";
+}
+EOF_MIME
 
 CFLAGS="-g -O0 -Wall -Wextra -std=gnu11 -fsanitize=address -fno-omit-frame-pointer"
 INC="-I$ROOT/include"
 # Their headers too, in case either is kept outside include/.
-for h in db_type_class.h Resultset_Builder.h; do
+for h in db_type_class.h Resultset_Builder.h Blob_Utils.h Clob_Utils.h; do
     hp=$(find "$ROOT/include" "$ROOT/src" -name "$h" -not -path '*/Drivers/*' | head -1)
     [ -n "$hp" ] && [ "$(dirname "$hp")" != "$ROOT/include" ] && INC="$INC -I$(dirname "$hp")"
 done
 COMMON="$ROOT/src/execute/driver_mssql.c $ROOT/src/infra/MSSQL_Pool.c \
         $ROOT/src/execute/mssql_dialect.c $ROOT/src/execute/mssql_select.c \
         $ROOT/src/execute/mssql_metadata.c $ROOT/src/execute/mssql_dml.c \
-        $RESULTSET_BUILDER $DB_TYPE_CLASS \
+        $ROOT/src/execute/mssql_text.c \
+        $RESULTSET_BUILDER $DB_TYPE_CLASS $BLOB_UTILS $CLOB_UTILS \
+        $MIME_SHIM \
         $ROOT/src/infra/ini_reader.c $ROOT/src/infra/logger.c $ROOT/src/core/ctx_utils.c"
 LIBS="-lodbc -lpthread -lm"
 
@@ -65,7 +94,7 @@ export ASAN_OPTIONS="detect_leaks=1"
 export LSAN_OPTIONS="suppressions=$ROOT/MSSQL_Server/lsan_mssql.supp:print_suppressions=1"
 
 rc=0
-for name in Connect Pool Dialect Select Metadata DML LOB_Write Transaction; do
+for name in Connect Pool Dialect Select Metadata DML LOB_Write Transaction LOB_Select; do
     src="$ROOT/src/Drivers/MSSQL/MSSQL_Driver_${name}_Test.c"
     exe="$BIN/MSSQL_Driver_${name}_Test"
     log="$LOGS/MSSQL_Driver_${name}_Test.log"

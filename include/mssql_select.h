@@ -1,14 +1,16 @@
 /*
- * mssql_select.h   (driver_mssql Stage 3, 2026-10-19, points T3-T5)
+ * mssql_select.h   (driver_mssql Stage 3, 2026-10-19, points T3-T5;
+ *                   Stage 5, 2026-10-21, points W1-W6)
  *
- * The scalar SELECT cursor behind driver_mssql's select_open /
+ * The SELECT cursor behind driver_mssql's select_open /
  * select_fetch_batch / select_close (db_driver.h has the contract).
  *
  *   select_open    one ODBC statement per SELECT on ctx->svchp (the
  *                  session's connection). query_timeout > 0 sets
  *                  SQL_ATTR_QUERY_TIMEOUT. Binds every value as text
  *                  (SQL_C_CHAR -> nvarchar, so nothing depends on the
- *                  database's code page); a NULL entry binds SQL NULL.
+ *                  database's code page; nvarchar(max) beyond 4000
+ *                  UTF-16 units - W6); a NULL entry binds SQL NULL.
  *                  Prepares, executes, describes the columns and binds
  *                  a column-wise array of req->fetch_array_size rows.
  *   fetch_batch    one SQLFetch per call - up to the batch size rows -
@@ -22,11 +24,19 @@
  * driver_oracle, core bounds the query itself (count_rows_sql /
  * row_limit_sql) before it opens the cursor.
  *
- * Not yet (T4): a result with a long column - varchar(max),
- * nvarchar(max), varbinary(max), text, ntext, image or xml - is refused
- * by select_open with "driver_mssql: long column <name> (<type>) in
- * SELECT not implemented yet (stage 5)". Stage 5 reads those with
- * SQLGetData.
+ * Long columns (Stage 5):
+ *   CLOB  varchar(max), nvarchar(max), text, ntext, xml
+ *   BLOB  varbinary(max), image
+ * A result with one is fetched a row at a time with SQLGetData (the
+ * batch is still the requested size), as driver_oracle does for its
+ * LOBs: a BLOB is written to BLOB_output_dir and described in the field
+ * (file name, path, URL, size, MIME type); a CLOB is written to
+ * CLOB_output_dir with its URL in the field, or put in the field itself
+ * with text_lobs_inline (a value longer than the field fails the
+ * fetch). File names, URLs and ini keys are driver_oracle's (Blob_Utils,
+ * Clob_Utils). out_stats counts them (CLOB bytes are UTF-8 bytes). A
+ * BLOB file that cannot be written fails the fetch. A CLR type
+ * (geometry, geography, hierarchyid) is refused by select_open.
  *
  * D6 (T5): when SQL Server rejects a wrapped query because a column
  * has no name (error 8155) or a duplicate one (8156), the error text

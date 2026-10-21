@@ -9,6 +9,10 @@
  * Errors are logged on the caller's logger in the M7 form
  * ("SQLSTATE x [native n]: text"), with the SQL.
  *
+ * Stage 5 Fix 1 (2026-10-21): statement text goes as UTF-16
+ * (mssql_text.h) - non-ASCII text in a statement was garbled by the
+ * narrow ODBC calls. Bound values were never affected.
+ *
  * Fix 1 (2026-10-20, first live run): text longer than nvarchar(4000)
  * is bound as SQL_WVARCHAR with column size SQL_SS_LENGTH_UNLIMITED -
  * nvarchar(max), as Microsoft documents for SQLBindParameter - never as
@@ -34,6 +38,7 @@
 #include <sqlext.h>
 
 #include "mssql_dml.h"
+#include "mssql_text.h"          /* statement text as UTF-16 - Stage 5 Fix 1 */
 #include "MSSQL_Pool.h"          /* mssql_diag()                         */
 #include "logger.h"
 
@@ -291,7 +296,7 @@ int mssql_dml_execute(oci_context_t *ctx, logger_t *logger,
                  out_error_message, out_error_message_size);
         return -1;
     }
-    if (!SQL_SUCCEEDED(SQLPrepare(stmt, (SQLCHAR *)req->sql, SQL_NTS)))
+    if (!SQL_SUCCEEDED(mssql_prepare_utf8(stmt, req->sql)))
     {
         dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLPrepare", req->sql,
                  out_error_message, out_error_message_size);
@@ -449,7 +454,7 @@ int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
         dml_fail(logger, __func__, SQL_HANDLE_DBC, ctx->svchp, "SQLAllocHandle", req->sql, NULL, 0);
         return -1;
     }
-    if (!SQL_SUCCEEDED(SQLPrepare(stmt, (SQLCHAR *)req->sql, SQL_NTS)))
+    if (!SQL_SUCCEEDED(mssql_prepare_utf8(stmt, req->sql)))
     {
         dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLPrepare", req->sql, NULL, 0);
         goto Done;
@@ -601,7 +606,7 @@ int mssql_lob_write_by_rowid(oci_context_t *ctx, logger_t *logger,
         goto Done;
     }
 
-    r = SQLExecDirect(stmt, (SQLCHAR *)sql, SQL_NTS);
+    r = mssql_exec_direct_utf8(stmt, sql);
     if (r != SQL_NEED_DATA)
     {
         dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLExecDirect (expected NEED_DATA)",

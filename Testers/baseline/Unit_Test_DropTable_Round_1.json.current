@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_droptable_round_1","operation":"DROP_TABLE","error_code":"DDL_EXECUTION_FAILED","error_text":"SQLSTATE 42000 [native 156]: Incorrect syntax near the keyword 'CASCADE'. | SQLSTATE 42000 [native 8180]: Statement(s) could not be prepared."}

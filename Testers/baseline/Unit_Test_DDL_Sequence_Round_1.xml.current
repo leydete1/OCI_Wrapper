@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_ddl_sequence_round_1</audit_id>
+<operation>CREATE_PROCEDURE</operation>
+<error_code>DDL_EXECUTION_FAILED</error_code>
+<error_text>SQLSTATE 42000 [native 102]: Incorrect syntax near &apos;REPLACE&apos;. | SQLSTATE 42000 [native 195]: &apos;NVL&apos; is not a recognized built-in function name. | SQLSTATE 42000 [native 102]: Incorrect syntax near &apos;FX_SEQ_PROC_X&apos;. | SQLSTATE 42000 [native 8180]: Statement(s) could not be prepared.</error_text>
+</execution_envelope>
+</output_xml>

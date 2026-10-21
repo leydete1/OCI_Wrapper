@@ -1,0 +1,611 @@
+/*
+ * MSSQL_Driver_Select_Test.c   (driver_mssql Stage 3, point T10)
+ *
+ * Checks driver_mssql's scalar SELECT (mssql_select.c) against a real
+ * SQL Server, on one standalone connection. Reads only: it needs the
+ * OCI_FIELD_TEST seed rows 42, 4242, 4243, 4244 that
+ * Reset_Tester_Objects_mssql.sql writes, and changes nothing.
+ *
+ * Usage:  MSSQL_Driver_Select_Test [config_mssql.ini]
+ *
+ *   Test 1   standalone connect
+ *   Test 2   columns: names and field types of a seed-row SELECT
+ *   Test 3   values of rows 4242-4244, NULL as ""
+ *   Test 4   batches: 4 rows at fetch_array_size 2 -> 2, 2, then 0
+ *   Test 5   binds by position, and a NULL bind
+ *   Test 6   UTF-8 round trip through nvarchar and varchar
+ *   Test 7   value_expr's CASTs run on the server with ISO values
+ *   Test 8   row_limit_sql / count_rows_sql run (5a, with and without
+ *            ORDER BY)
+ *   Test 9   D6: unnamed / duplicate column in a wrapped query -> the
+ *            "add an alias" message
+ *   Test 10  long columns (max, xml) refused until stage 5
+ *   Test 11  query_timeout 1 s stops a 5 s query; connection still works
+ *   Test 12  a statement with no result set fails cleanly
+ *   Test 13  database errors come back as SQLSTATE text
+ *   Test 14  a second SELECT while one is open (T6): refused without
+ *            MARS, and the first cursor is not disturbed
+ *   Test 15  200 open/fetch/close cycles, fully read, partly read and
+ *            unread - no leaks (ASan), connection still answers
+ *   Test 16  add_seconds_expr with a bigint column as the seconds (as
+ *            session_reconcile_orphans uses OCI_SESSION.TTL_SECONDS)
+ *
+ * Prints PASS or FAIL as the last line; exit code 0 / 1.
+ */
+
+#define _POSIX_C_SOURCE 200809L
+
+#define CONFIG_INI_MSSQL "/home/leyden100/eclipse-workspace/OCI_Wrapper/Props/config_mssql.ini"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "Connection.h"
+#include "db_driver.h"
+#include "driver_mssql.h"
+#include "MSSQL_Pool.h"
+#include "mssql_select.h"
+#include "Resultset_Builder.h"
+#include "ini_reader.h"
+#include "logger.h"
+
+#define T_FIELD "DATA_MANAGER.OCI_FIELD_TEST"
+
+static int init_ctx(const char *ini_path, oci_context_t *ctx, app_config_t *config,
+                    logger_t *err_l, logger_t *conn_l, logger_t *pool_l,
+                    logger_t *sel_l, logger_t *meta_l)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    memset(config, 0, sizeof(*config));
+    ctx->ini             = config;
+    ctx->pool_slot_index = -1;
+
+    if (load_ini(ini_path, config, ctx) != 0)
+    {
+        fprintf(stderr, "Failed to load ini file: %s\n", ini_path);
+        return -1;
+    }
+    if (strcmp(config->db_type, "mssql") != 0)
+    {
+        fprintf(stderr, "%s has db_type=%s - this harness needs db_type=mssql\n",
+                ini_path, config->db_type);
+        return -1;
+    }
+    if (logger_init_str(err_l, config->error_log_file_name, config->error_log_file_max_size,
+                        config->error_log_file_rotation_number, config->error_log_level) != 0)
+        return -1;
+    ctx->error_logger = err_l;
+    if (logger_init_str2(conn_l, config->connection_log_file_name, config->connection_log_file_max_size,
+                         config->connection_log_file_rotation_number, config->connection_log_level,
+                         err_l) != 0)
+        return -1;
+    ctx->connection_logger = conn_l;
+    if (logger_init_str2(pool_l, config->connectionpool_log_file_name,
+                         config->connectionpool_log_file_max_size,
+                         config->connectionpool_log_file_rotation_number,
+                         config->connectionpool_log_level, err_l) != 0)
+        return -1;
+    ctx->connectionpool_logger = pool_l;
+    if (logger_init_str2(sel_l, config->select_log_file_name, config->select_log_file_max_size,
+                         config->select_log_file_rotation_number, config->select_log_level,
+                         err_l) != 0)
+        return -1;
+    ctx->select_logger = sel_l;
+    if (logger_init_str2(meta_l, config->Metadata_log_file_name, config->Metadata_log_file_max_size,
+                         config->Metadata_log_file_rotation_number, config->Metadata_log_level,
+                         err_l) != 0)
+        return -1;
+    ctx->Metadata_logger = meta_l;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  A whole query read through the driver into one flat table          */
+/* ------------------------------------------------------------------ */
+#define MAXR 64
+#define MAXC 16
+typedef struct {
+    int  rc;                  /* select_open / fetch result          */
+    int  ncols, nrows, batch;
+    int  batches[16];         /* rows per fetch, ended by a 0         */
+    int  nbatches;
+    char names[MAXC][128];
+    char types[MAXC][32];
+    char v[MAXR][MAXC][256];
+    char error[2048];
+} result_t;
+
+static const db_driver_t *g_drv;
+static oci_context_t     *g_ctx;
+
+static void run(result_t *res, const char *sql, int fetch_size, int timeout,
+                int nbinds, const char **binds)
+{
+    memset(res, 0, sizeof(*res));
+    db_select_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.sql              = sql;
+    req.fetch_array_size = fetch_size;
+    req.query_timeout    = timeout;
+    req.bind_count       = nbinds;
+    req.bind_values      = binds;
+
+    db_select_cursor_t *cur  = NULL;
+    db_column_meta_t   *cols = NULL;
+    res->rc = g_drv->select_open(g_ctx, &req, &cur, &cols, &res->ncols, &res->batch);
+    if (res->rc != 0)
+    {
+        snprintf(res->error, sizeof(res->error), "%s", mssql_select_last_error());
+        return;
+    }
+    for (int c = 0; c < res->ncols && c < MAXC; c++)
+    {
+        snprintf(res->names[c], sizeof(res->names[c]), "%s", cols[c].field_name);
+        snprintf(res->types[c], sizeof(res->types[c]), "%s", cols[c].field_type);
+    }
+    for (;;)
+    {
+        resultset_t *rs = NULL;
+        int rows = 0;
+        db_fetch_batch_stats_t st;
+        if (g_drv->select_fetch_batch(cur, &rs, &rows, &st) != 0)
+        {
+            res->rc = -2;
+            snprintf(res->error, sizeof(res->error), "%s", mssql_select_last_error());
+            break;
+        }
+        if (res->nbatches < 16) res->batches[res->nbatches++] = rows;
+        if (rows == 0) break;
+        for (int r = 0; r < rows; r++, res->nrows++)
+            for (int c = 0; c < rs->records[r].field_count && c < MAXC; c++)
+                if (res->nrows < MAXR)
+                    snprintf(res->v[res->nrows][c], sizeof(res->v[0][0]), "%.255s",
+                             rs->records[r].fields[c].value);
+        resultset_free(rs);
+    }
+    g_drv->select_close(cur);
+    free(cols);
+}
+
+/* ------------------------------------------------------------------ */
+static int g_fail;
+static void bad(const char *fmt, const char *a, const char *b)
+{
+    if (!g_fail) printf("FAILED\n");
+    printf("    ");
+    printf(fmt, a, b);
+    printf("\n");
+    g_fail = 1;
+}
+static void eq(const char *what, const char *got, const char *want)
+{
+    if (strcmp(got, want) != 0)
+    {
+        char line[600];
+        snprintf(line, sizeof(line), "%s: want '%s'", what, want);
+        bad("%s, got '%s'", line, got);
+    }
+}
+static void has(const char *what, const char *text, const char *needle)
+{
+    if (!strstr(text, needle))
+    {
+        char line[600];
+        snprintf(line, sizeof(line), "%s: want text containing '%s'", what, needle);
+        bad("%s, got '%s'", line, text);
+    }
+}
+
+static double now_s(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+int main(int argc, char *argv[])
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    const char *ini_path = argc > 1 ? argv[1] : CONFIG_INI_MSSQL;
+    int failed = 0;
+
+    oci_context_t ctx; app_config_t config;
+    logger_t err_l, conn_l, pool_l, sel_l, meta_l;
+    if (init_ctx(ini_path, &ctx, &config, &err_l, &conn_l, &pool_l, &sel_l, &meta_l) != 0)
+    {
+        printf("INIT FAILED\nFAIL\n");
+        return 1;
+    }
+    config.use_connection_pool = 0;
+
+    g_drv = mssql_driver_get();
+    g_ctx = &ctx;
+    const db_dialect_t *dl = g_drv->dialect;
+    static result_t R, R2;     /* large - not on the stack */
+    char sql[2048];
+
+    /* ---- Test 1 ---- */
+    printf("Test 1 (standalone connect)          ... ");
+    if (g_drv->connect(&ctx) != 0 || !ctx.svchp)
+    {
+        printf("FAILED - connect(); see %s\nFAIL\n", config.connection_log_file_name);
+        return 1;
+    }
+    printf("OK\n");
+
+    /* ---- Test 2 ---- */
+    const char *SEED_SQL =
+        "SELECT NUMBER_COL, NUMBER_P_S_COL, CHAR_COL, VARCHAR2_COL, NVARCHAR2_COL, "
+        "DATE_COL, TIMESTAMP_COL, TIMESTAMP_TZ_COL, INTERVAL_DS_COL, RAW_COL "
+        "FROM " T_FIELD " WHERE NUMBER_COL IN (4242, 4243, 4244) ORDER BY NUMBER_COL";
+    printf("Test 2 (columns and field types)     ... ");
+    g_fail = 0;
+    run(&R, SEED_SQL, 10, 0, 0, NULL);
+    if (R.rc != 0) bad("select failed: %s%s", R.error, "");
+    else
+    {
+        static const char *N[] = { "NUMBER_COL", "NUMBER_P_S_COL", "CHAR_COL", "VARCHAR2_COL",
+                                   "NVARCHAR2_COL", "DATE_COL", "TIMESTAMP_COL",
+                                   "TIMESTAMP_TZ_COL", "INTERVAL_DS_COL", "RAW_COL" };
+        static const char *T[] = { "NUMBER", "NUMBER", "STRING", "STRING", "STRING",
+                                   "TIMESTAMP", "TIMESTAMP", "TIMESTAMP", "STRING", "UNKNOWN" };
+        if (R.ncols != 10) bad("%s columns, want %s", R.ncols == 0 ? "0" : "not 10", "10");
+        for (int c = 0; c < 10 && c < R.ncols; c++)
+        {
+            eq("name", R.names[c], N[c]);
+            eq(N[c], R.types[c], T[c]);
+        }
+        if (R.batch != 10) bad("batch_size %s, want %s", "not 10", "10");
+    }
+    if (!g_fail) printf("OK (10 columns, batch_size=%d)\n", R.batch);
+    failed |= g_fail;
+
+    /* ---- Test 3 ---- */
+    printf("Test 3 (values, NULL as \"\")          ... ");
+    g_fail = 0;
+    if (R.rc != 0 || R.nrows != 3)
+        bad("want 3 rows (seed rows 4242-4244 - run Reset_Tester_Objects_mssql.sql)%s%s", "", "");
+    else
+    {
+        eq("4242 NUMBER_COL",      R.v[0][0], "4242");
+        eq("4242 NUMBER_P_S_COL",  R.v[0][1], "4242.42");
+        eq("4242 CHAR_COL",        R.v[0][2], "SEED_4242 ");
+        eq("4242 VARCHAR2_COL",    R.v[0][3], "Seed row 4242 - every type");
+        eq("4242 NVARCHAR2_COL",   R.v[0][4], "Seed row 4242 NVARCHAR2");
+        eq("4242 DATE_COL",        R.v[0][5], "2030-01-02 00:00:00");
+        eq("4242 TIMESTAMP_COL",   R.v[0][6], "2030-01-02 08:30:00.123456");
+        has("4242 TIMESTAMP_TZ_COL", R.v[0][7], "2030-01-02 08:30:00.123456");
+        eq("4242 INTERVAL_DS_COL", R.v[0][8], "+0002 03:04:05.000006");
+        eq("4242 RAW_COL",         R.v[0][9], "CAFEBABE");
+        eq("4243 NUMBER_COL",      R.v[1][0], "4243");
+        eq("4243 NUMBER_P_S_COL",  R.v[1][1], "");
+        eq("4243 CHAR_COL",        R.v[1][2], "");
+        eq("4243 VARCHAR2_COL",    R.v[1][3], "Seed BLOB row 4243");
+        eq("4243 DATE_COL",        R.v[1][5], "2030-01-03 00:00:00");
+        eq("4243 RAW_COL",         R.v[1][9], "");
+        eq("4244 NUMBER_COL",      R.v[2][0], "4244");
+    }
+    if (!g_fail) printf("OK (3 rows; TIMESTAMP_TZ_COL='%s')\n", R.v[0][7]);
+    failed |= g_fail;
+
+    /* ---- Test 4 ---- */
+    printf("Test 4 (batches of 2)                ... ");
+    g_fail = 0;
+    run(&R, "SELECT NUMBER_COL FROM " T_FIELD
+            " WHERE NUMBER_COL IN (42, 4242, 4243, 4244) ORDER BY NUMBER_COL", 2, 0, 0, NULL);
+    if (R.rc != 0) bad("select failed: %s%s", R.error, "");
+    else
+    {
+        char got[64];
+        snprintf(got, sizeof(got), "%d:%d,%d,%d", R.batch, R.batches[0], R.batches[1],
+                 R.nbatches > 2 ? R.batches[2] : -1);
+        eq("batch_size:batches", got, "2:2,2,0");
+        eq("row 1", R.v[0][0], "42");
+        eq("row 4", R.v[3][0], "4244");
+    }
+    if (!g_fail) printf("OK (2 + 2 rows, then 0)\n");
+    failed |= g_fail;
+
+    /* ---- Test 5 ---- */
+    printf("Test 5 (binds, NULL bind)            ... ");
+    g_fail = 0;
+    {
+        const char *b2[] = { "4242", "Seed row 4242 - every type" };
+        run(&R, "SELECT FIELD_TEST_ID, NUMBER_COL FROM " T_FIELD
+                " WHERE NUMBER_COL = ? AND VARCHAR2_COL = ?", 5, 0, 2, b2);
+        if (R.rc != 0) bad("bound select failed: %s%s", R.error, "");
+        else
+        {
+            if (R.nrows != 1) bad("bound select: want 1 row%s%s", "", "");
+            eq("bound NUMBER_COL", R.v[0][1], "4242");
+        }
+        const char *bn[] = { NULL, "x" };
+        run(&R, "SELECT CASE WHEN ? IS NULL THEN 'null' ELSE 'value' END AS A, "
+                "CASE WHEN ? IS NULL THEN 'null' ELSE 'value' END AS B", 1, 0, 2, bn);
+        if (R.rc != 0) bad("NULL bind failed: %s%s", R.error, "");
+        else
+        {
+            eq("NULL bind", R.v[0][0], "null");
+            eq("value bind", R.v[0][1], "value");
+        }
+    }
+    if (!g_fail) printf("OK (1 row; NULL binds SQL NULL)\n");
+    failed |= g_fail;
+
+    /* ---- Test 6 ---- */
+    printf("Test 6 (UTF-8 round trip)            ... ");
+    g_fail = 0;
+    {
+        const char *u = "Gr\xc3\xbc\xc3\x9f" "e \xe2\x80\x93 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x98\x80";
+        const char *b3[] = { u, u, u };
+        run(&R, "SELECT CAST(? AS nvarchar(100)) AS U, CAST(? AS varchar(100)) AS V, "
+                "LEN(?) AS L", 1, 0, 3, b3);
+        if (R.rc != 0) bad("select failed: %s%s", R.error, "");
+        else
+        {
+            eq("nvarchar", R.v[0][0], u);
+            eq("varchar (UTF-8 collation)", R.v[0][1], u);
+            eq("LEN (characters)", R.v[0][2], "12");
+        }
+    }
+    if (!g_fail) printf("OK (nvarchar and varchar, 12 characters)\n");
+    failed |= g_fail;
+
+    /* ---- Test 7 ---- */
+    printf("Test 7 (value_expr CASTs on server)  ... ");
+    g_fail = 0;
+    {
+        char e1[64], e2[64], e3[64], e4[64];
+        if (dl->value_expr("DATE", "?", e1, sizeof(e1)) ||
+            dl->value_expr("DATETIME2", "?", e2, sizeof(e2)) ||
+            dl->value_expr("TIME", "?", e3, sizeof(e3)) ||
+            dl->value_expr("DATETIMEOFFSET", "?", e4, sizeof(e4)))
+            bad("value_expr failed%s%s", "", "");
+        snprintf(sql, sizeof(sql), "SELECT %s AS D, %s AS T, %s AS TM, %s AS O, %s AS D2",
+                 e1, e2, e3, e4, e2);
+        const char *b4[] = { "2030-01-02 08:30:00", "2030-01-02 08:30:00.123456",
+                             "2030-01-02 08:30:00.123456", "2030-01-02 08:30:00.123456",
+                             "2030-01-02 08:30:00" };
+        run(&R, sql, 1, 0, 5, b4);
+        if (R.rc != 0) bad("select failed: %s%s", R.error, "");
+        else
+        {
+            eq("date", R.v[0][0], "2030-01-02");
+            eq("datetime2(7)", R.v[0][1], "2030-01-02 08:30:00.1234560");
+            has("time(7)", R.v[0][2], "08:30:00.123456");
+            has("datetimeoffset(7)", R.v[0][3], "2030-01-02 08:30:00.123456");
+            eq("datetime2(7) no fraction", R.v[0][4], "2030-01-02 08:30:00.0000000");
+        }
+    }
+    if (!g_fail) printf("OK (date, datetime2, time, datetimeoffset)\n");
+    failed |= g_fail;
+
+    /* ---- Test 8 ---- */
+    printf("Test 8 (5a: row limit and count run) ... ");
+    g_fail = 0;
+    {
+        const char *ordered = "SELECT NUMBER_COL FROM " T_FIELD
+                              " WHERE NUMBER_COL IN (42, 4242, 4243, 4244) ORDER BY NUMBER_COL DESC";
+        const char *plain   = "SELECT NUMBER_COL FROM " T_FIELD
+                              " WHERE NUMBER_COL IN (42, 4242, 4243, 4244)";
+        if (dl->row_limit_sql(ordered, 2, sql, sizeof(sql)) != 0) bad("row_limit_sql%s%s", "", "");
+        run(&R, sql, 5, 0, 0, NULL);
+        if (R.rc != 0) bad("ordered limit failed: %s%s", R.error, "");
+        else
+        {
+            if (R.nrows != 2) bad("ordered limit: want 2 rows%s%s", "", "");
+            eq("ordered limit row 1", R.v[0][0], "4244");
+            eq("ordered limit row 2", R.v[1][0], "4243");
+        }
+        if (dl->row_limit_sql(plain, 2, sql, sizeof(sql)) != 0) bad("row_limit_sql%s%s", "", "");
+        run(&R, sql, 5, 0, 0, NULL);
+        if (R.rc != 0) bad("plain limit failed: %s%s", R.error, "");
+        else if (R.nrows != 2) bad("plain limit: want 2 rows%s%s", "", "");
+
+        if (dl->count_rows_sql(ordered, sql, sizeof(sql)) != 0) bad("count_rows_sql%s%s", "", "");
+        run(&R, sql, 2, 0, 0, NULL);
+        if (R.rc != 0) bad("ordered count failed: %s%s", R.error, "");
+        else eq("ordered count", R.v[0][0], "4");
+        if (dl->count_rows_sql(plain, sql, sizeof(sql)) != 0) bad("count_rows_sql%s%s", "", "");
+        run(&R, sql, 2, 0, 0, NULL);
+        if (R.rc != 0) bad("plain count failed: %s%s", R.error, "");
+        else eq("plain count", R.v[0][0], "4");
+    }
+    if (!g_fail) printf("OK (4244, 4243 in order; counts 4 and 4)\n");
+    failed |= g_fail;
+
+    /* ---- Test 9 ---- */
+    printf("Test 9 (D6: unnamed/duplicate column)... ");
+    g_fail = 0;
+    {
+        if (dl->count_rows_sql("SELECT COUNT(*) FROM " T_FIELD, sql, sizeof(sql)) != 0)
+            bad("count_rows_sql%s%s", "", "");
+        run(&R, sql, 2, 0, 0, NULL);
+        if (R.rc == 0) bad("unnamed column: want a failure%s%s", "", "");
+        else { has("unnamed", R.error, "[native 8155]"); has("unnamed", R.error, MSSQL_D6_HINT); }
+
+        if (dl->row_limit_sql("SELECT a.NUMBER_COL, b.NUMBER_COL FROM " T_FIELD " a JOIN "
+                              T_FIELD " b ON b.FIELD_TEST_ID = a.FIELD_TEST_ID",
+                              1, sql, sizeof(sql)) != 0)
+            bad("row_limit_sql%s%s", "", "");
+        run(&R, sql, 2, 0, 0, NULL);
+        if (R.rc == 0) bad("duplicate column: want a failure%s%s", "", "");
+        else { has("duplicate", R.error, "[native 8156]"); has("duplicate", R.error, MSSQL_D6_HINT); }
+    }
+    if (!g_fail) printf("OK (8155 and 8156 ask for an alias)\n");
+    failed |= g_fail;
+
+    /* ---- Test 10 ---- */
+    printf("Test 10 (long columns refused)       ... ");
+    g_fail = 0;
+    {
+        static const struct { const char *sql, *col; } L[] = {
+            { "SELECT NUMBER_COL, CLOB_COL FROM " T_FIELD,  "CLOB_COL (varchar(max))" },
+            { "SELECT NCLOB_COL FROM " T_FIELD,             "NCLOB_COL (nvarchar(max))" },
+            { "SELECT BLOB_COL FROM " T_FIELD,              "BLOB_COL (varbinary(max))" },
+            { "SELECT CAST('<a/>' AS xml) AS X",            "X (xml)" },
+        };
+        for (size_t i = 0; i < sizeof(L) / sizeof(L[0]); i++)
+        {
+            run(&R, L[i].sql, 2, 0, 0, NULL);
+            if (R.rc == 0) bad("%s: want a refusal%s", L[i].sql, "");
+            else
+            {
+                has(L[i].sql, R.error, L[i].col);
+                has(L[i].sql, R.error, "not implemented yet (stage 5)");
+            }
+        }
+    }
+    if (!g_fail) printf("OK (varchar/nvarchar/varbinary(max), xml)\n");
+    failed |= g_fail;
+
+    /* ---- Test 11 ---- */
+    printf("Test 11 (query_timeout 1 s)          ... ");
+    g_fail = 0;
+    {
+        double t0 = now_s();
+        run(&R, "WAITFOR DELAY '00:00:05'; SELECT 1 AS X", 1, 1, 0, NULL);
+        double took = now_s() - t0;
+        if (R.rc == 0) bad("want a timeout%s%s", "", "");
+        else has("timeout", R.error, "HYT00");
+        if (took > 4.0) bad("took too long%s%s", "", "");
+        run(&R2, "SELECT 1 AS X", 1, 0, 0, NULL);
+        if (R2.rc != 0 || strcmp(R2.v[0][0], "1") != 0)
+            bad("connection unusable after the timeout: %s%s", R2.error, "");
+        if (!g_fail) printf("OK (-1 after %.2f s, SQLSTATE HYT00; SELECT 1 still answers)\n", took);
+    }
+    failed |= g_fail;
+
+    /* ---- Test 12 ---- */
+    printf("Test 12 (no result set)              ... ");
+    g_fail = 0;
+    run(&R, "DECLARE @x int = 1", 1, 0, 0, NULL);
+    if (R.rc == 0) bad("want a failure%s%s", "", "");
+    else has("no result set", R.error, "no result set");
+    if (!g_fail) printf("OK\n");
+    failed |= g_fail;
+
+    /* ---- Test 13 ---- */
+    printf("Test 13 (errors as SQLSTATE text)    ... ");
+    g_fail = 0;
+    run(&R, "SELEC 1", 1, 0, 0, NULL);
+    if (R.rc == 0) bad("syntax error: want a failure%s%s", "", "");
+    else has("syntax error", R.error, "SQLSTATE 42000");
+    run(&R2, "SELECT X FROM DATA_MANAGER.NO_SUCH_TABLE", 1, 0, 0, NULL);
+    if (R2.rc == 0) bad("missing table: want a failure%s%s", "", "");
+    else has("missing table", R2.error, "SQLSTATE 42S02");
+    if (!g_fail) printf("OK (42000, 42S02)\n");
+    failed |= g_fail;
+
+    /* ---- Test 14 ---- */
+    printf("Test 14 (second SELECT while open)   ... ");
+    g_fail = 0;
+    {
+        db_select_request_t ra;
+        memset(&ra, 0, sizeof(ra));
+        ra.sql = "SELECT NUMBER_COL FROM " T_FIELD
+                 " WHERE NUMBER_COL IN (42, 4242, 4243, 4244) ORDER BY NUMBER_COL";
+        ra.fetch_array_size = 1;
+        db_select_cursor_t *a = NULL; db_column_meta_t *ac = NULL; int an = 0, ab = 0;
+        int second_refused = -1;
+        int total = 0;
+        if (g_drv->select_open(&ctx, &ra, &a, &ac, &an, &ab) != 0)
+            bad("first open failed: %s%s", mssql_select_last_error(), "");
+        else
+        {
+            resultset_t *rs = NULL; int rows = 0;
+            if (g_drv->select_fetch_batch(a, &rs, &rows, NULL) != 0 || rows != 1)
+                bad("first fetch failed%s%s", "", "");
+            total += rows;
+            resultset_free(rs);
+
+            run(&R, "SELECT 1 AS X", 1, 0, 0, NULL);
+            second_refused = (R.rc != 0);
+
+            for (;;)
+            {
+                rs = NULL; rows = 0;
+                if (g_drv->select_fetch_batch(a, &rs, &rows, NULL) != 0)
+                {
+                    bad("first cursor disturbed: %s%s", mssql_select_last_error(), "");
+                    break;
+                }
+                if (rows == 0) break;
+                total += rows;
+                resultset_free(rs);
+            }
+            g_drv->select_close(a);
+            free(ac);
+            if (!g_fail && total != 4) bad("first cursor: want 4 rows in total%s%s", "", "");
+        }
+        run(&R2, "SELECT 1 AS X", 1, 0, 0, NULL);
+        if (R2.rc != 0) bad("SELECT after closing the first failed: %s%s", R2.error, "");
+        if (!g_fail)
+            printf("OK (second %s; first read all 4 rows)\n",
+                   second_refused ? "refused - no MARS, as expected" : "ran (MARS on?)");
+        if (second_refused == 1)
+            printf("    refusal text: %.200s\n", R.error);
+    }
+    failed |= g_fail;
+
+    /* ---- Test 15 ---- */
+    printf("Test 15 (200 open/fetch/close)       ... ");
+    g_fail = 0;
+    {
+        int errors = 0;
+        for (int i = 0; i < 200 && !errors; i++)
+        {
+            db_select_request_t rq;
+            memset(&rq, 0, sizeof(rq));
+            rq.sql = "SELECT NUMBER_COL, VARCHAR2_COL FROM " T_FIELD " ORDER BY NUMBER_COL";
+            rq.fetch_array_size = 1 + i % 3;
+            db_select_cursor_t *c = NULL; db_column_meta_t *cc = NULL; int n = 0, b = 0;
+            if (g_drv->select_open(&ctx, &rq, &c, &cc, &n, &b) != 0) { errors++; break; }
+            int mode = i % 3;      /* 0 read all, 1 read one batch, 2 read none */
+            for (int k = 0; mode != 2; k++)
+            {
+                resultset_t *rs = NULL; int rows = 0;
+                if (g_drv->select_fetch_batch(c, &rs, &rows, NULL) != 0) { errors++; break; }
+                resultset_free(rs);
+                if (rows == 0 || mode == 1) break;
+            }
+            g_drv->select_close(c);
+            free(cc);
+        }
+        if (errors) bad("a cycle failed: %s%s", mssql_select_last_error(), "");
+        run(&R, "SELECT 1 AS X", 1, 0, 0, NULL);
+        if (R.rc != 0) bad("SELECT 1 after the cycles failed: %s%s", R.error, "");
+    }
+    if (!g_fail) printf("OK (200 cycles; SELECT 1 still answers)\n");
+    failed |= g_fail;
+
+    /* ---- Test 16 ---- */
+    printf("Test 16 (add_seconds_expr, bigint)   ... ");
+    g_fail = 0;
+    {
+        char e[256];
+        if (dl->add_seconds_expr("CAST('2030-01-02 00:00:00' AS datetime2(0))", "NUMBER_COL",
+                                 e, sizeof(e)) != 0)
+            bad("add_seconds_expr failed%s%s", "", "");
+        snprintf(sql, sizeof(sql), "SELECT %s AS A FROM " T_FIELD " WHERE NUMBER_COL = 42", e);
+        run(&R, sql, 1, 0, 0, NULL);
+        if (R.rc != 0) bad("select failed: %s%s", R.error, "");
+        else eq("CAST('2030-01-02 00:00:00') + 42 s", R.v[0][0], "2030-01-02 00:00:42");
+    }
+    if (!g_fail) printf("OK (NUMBER_COL bigint 42 -> 00:00:42)\n");
+    failed |= g_fail;
+
+    mssql_end_tran(ctx.svchp, 0, &conn_l, "harness end");
+    g_drv->disconnect(&ctx);
+
+    printf("%s\n", failed ? "FAIL" : "PASS");
+
+    logger_close(&meta_l);
+    logger_close(&sel_l);
+    logger_close(&pool_l);
+    logger_close(&conn_l);
+    logger_close(&err_l);
+    return failed ? 1 : 0;
+}
