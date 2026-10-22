@@ -1,0 +1,766 @@
+/*
+ * MSSQL_Driver_Procedure_Test.c   (driver_mssql Stage 6, points X1-X8)
+ *
+ * Checks driver_mssql's stored procedure calls (mssql_proc.c) against a
+ * real SQL Server on one standalone connection, the way core calls
+ * them (Execute_Procedure_Module.c): the call text from the dialect's
+ * procedure_call_sql(), then dml_execute_procedure(), then each CURSOR
+ * parameter through select_open_from_cursor() / select_fetch_batch() /
+ * select_close(). Every expected value comes from a separate query
+ * through the driver's SELECT, not from the procedure call itself.
+ *
+ * Usage:  MSSQL_Driver_Procedure_Test [config_mssql.ini]
+ *
+ * Needs the Stage 1 procedures (Create_MSSQL_Test_Objects.sql, S9), the
+ * MS_TEST_ procedures (MSSQL_Server/SQL/Create_Test_Procedures_mssql.sql)
+ * and the seed photo ID 2 in OCI_LOB_TEST. Reserved rows:
+ * OCI_FIELD_TEST.NUMBER_COL and UNIT_TEST_FIELD_TEST.NUMBER_COL
+ * 999701-999799 - removed at start and end. PURGE_OLD_ROWS is not
+ * called (it deletes across the whole table), as in the Oracle harness.
+ *
+ *   Test 1   standalone connect; test rows written
+ *   Test 2   no parameters (UNIT_TEST_NOOP_PROC): call text {CALL name}
+ *   Test 3   scalar IN + OUT (GET_DEPT_STATUS): 0 for no match, the
+ *            server's count for a match
+ *   Test 4   IN + OUT + CURSOR (UNIT_TEST_SAMPLE_PROC): OUT = IN * 2; the
+ *            CURSOR's "?" is not in the call text; the cursor has the
+ *            seeded row
+ *   Test 5   OUT count = rows in the CURSOR = the server's count
+ *            (GET_ROWS_WITH_STATUS)
+ *   Test 6   a CURSOR the procedure returns nothing for: NULL, not an
+ *            error (UNIT_TEST_CURSOR_PROC 0)
+ *   Test 7   a CURSOR it does return (UNIT_TEST_CURSOR_PROC 1)
+ *   Test 8   two result sets into two CURSORs, a row count between them
+ *            skipped; batches of query_fetch_batch_size (2: 2 + 1)
+ *   Test 9   more result sets than CURSORs: the extra one discarded, WARN
+ *   Test 10  an error after the first result set: the call fails, no
+ *            handle, the connection still answers
+ *   Test 11  non-ASCII string OUT (100 x U+00E9)
+ *   Test 12  a string OUT longer than its buffer fails - not cut short
+ *            (as UTF-16 and as UTF-8)
+ *   Test 13  IN_OUT text and int; NULL in gives NULL out; an IN_OUT int
+ *            that is not a whole number is refused; UNIT_TEST_INOUT_PROC
+ *   Test 14  a BLOB column in a CURSOR: written to a file, size and
+ *            SHA-256 match the server
+ *   Test 15  more rows than query_max_record_count fails the call
+ *   Test 16  server errors: a bad IN value, an unknown procedure
+ *   Test 17  50 calls with two CURSORs, one opened and one released
+ *            with cursor_handle_free; a failed open releases its handle
+ *            - no leaks (ASan); connection still answers
+ *   Test 18  (Fix 1) a read, then a procedure that commits its own work,
+ *            with no managed transaction: no error 266, its COMMIT holds
+ *   Test 19  (Fix 1) the same inside a managed transaction: the driver
+ *            leaves the transaction alone and 266 is reported
+ *
+ * Prints PASS or FAIL as the last line; exit code 0 / 1.
+ */
+
+#define _POSIX_C_SOURCE 200809L
+
+#include <strings.h>
+#include <unistd.h>
+
+#include "mssql_harness_util.h"
+#include "mssql_proc.h"
+
+#define T_FIELD "DATA_MANAGER.OCI_FIELD_TEST"
+#define T_UNIT  "DATA_MANAGER.UNIT_TEST_FIELD_TEST"
+#define T_LOB   "DATA_MANAGER.OCI_LOB_TEST"
+#define OWNER   "DATA_MANAGER."
+
+static const db_driver_t *D;
+static oci_context_t     *C;
+static app_config_t      *CFG;
+static h_loggers_t        L;
+static logger_t           PL;          /* procedure log */
+static int                g_fail;
+
+static void bad(const char *fmt, const char *a)
+{
+    if (!g_fail) printf("FAILED\n");
+    printf("    ");
+    printf(fmt, a);
+    printf("\n");
+    g_fail = 1;
+}
+
+static void badl(const char *fmt, long a, long b)
+{
+    if (!g_fail) printf("FAILED\n");
+    printf("    ");
+    printf(fmt, a, b);
+    printf("\n");
+    g_fail = 1;
+}
+
+static int exec_sql(const char *sql, int nb, const char **b)
+{
+    db_dml_request_t r = { sql, nb, b };
+    int  n = 0;
+    char err[1024];
+    int  rc = D->dml_execute(C, &L.dml, &r, &n, err, sizeof(err));
+    if (rc != 0) fprintf(stderr, "    exec failed: %s\n      %s\n", sql, err);
+    return rc;
+}
+
+/* ---- one procedure call, as Execute_Procedure_Module.c makes it ---- */
+#define MAXPP 8
+#define OUTSZ 32768
+
+typedef struct {
+    int              n;
+    db_proc_param_t  p[MAXPP];
+    char             out[MAXPP][OUTSZ];
+    int              rc;
+    char             error[2048];
+    char             call[1024];
+} call_t;
+
+static void param(call_t *c, const char *name, db_proc_param_type_t type,
+                  db_proc_param_direction_t dir, const char *in)
+{
+    db_proc_param_t *p = &c->p[c->n];
+    memset(p, 0, sizeof(*p));
+    p->name      = name;
+    p->type      = type;
+    p->direction = dir;
+    p->in_value  = in;
+    if (type != DB_PROC_TYPE_CURSOR)            /* as core: every non-CURSOR */
+    {
+        p->out_value      = c->out[c->n];
+        p->out_value_size = OUTSZ;
+        c->out[c->n][0]   = '\0';
+    }
+    c->n++;
+}
+
+static void call(call_t *c, const char *proc)
+{
+    const char *names[MAXPP];
+    for (int i = 0; i < c->n; i++) names[i] = c->p[i].name;
+    c->error[0] = '\0';
+    if (D->dialect->procedure_call_sql(proc, names, c->n, c->call, sizeof(c->call)) != 0)
+    {
+        c->rc = -1;
+        snprintf(c->error, sizeof(c->error), "procedure_call_sql failed");
+        return;
+    }
+    db_proc_execute_request_t req = { c->call, c->n, c->p };
+    c->rc = D->dml_execute_procedure(C, &PL, &req);
+    if (c->rc != 0) snprintf(c->error, sizeof(c->error), "%s", mssql_proc_last_error());
+}
+
+/* Releases every CURSOR handle not fetched. */
+static void call_done(call_t *c)
+{
+    for (int i = 0; i < c->n; i++)
+        if (c->p[i].out_cursor_handle)
+        {
+            D->cursor_handle_free(c->p[i].out_cursor_handle);
+            c->p[i].out_cursor_handle = NULL;
+        }
+}
+
+/* ---- one CURSOR fetched whole, as core does ---- */
+typedef struct {
+    int                rc;
+    int                ncols, nrows, batch;
+    db_column_meta_t  *cols;
+    resultset_field_t *f;
+    int                batches[64], nbatches;
+    db_fetch_batch_stats_t st;
+} cur_t;
+
+static void cur_free(cur_t *r) { free(r->cols); free(r->f); memset(r, 0, sizeof(*r)); }
+
+static void fetch(cur_t *r, db_proc_param_t *p)
+{
+    memset(r, 0, sizeof(*r));
+    void *h = p->out_cursor_handle;
+    p->out_cursor_handle = NULL;                 /* ownership passes at the call */
+    db_select_cursor_t *cur = NULL;
+    if (D->select_open_from_cursor(C, h, &cur, &r->cols, &r->ncols, &r->batch) != 0)
+    {
+        r->rc = -1;
+        return;
+    }
+    for (;;)
+    {
+        resultset_t *rs = NULL;
+        int rows = 0;
+        db_fetch_batch_stats_t st;
+        if (D->select_fetch_batch(cur, &rs, &rows, &st) != 0) { r->rc = -1; break; }
+        if (rows == 0) break;
+        if (r->nbatches < 64) r->batches[r->nbatches++] = rows;
+        r->st.blob_count += st.blob_count; r->st.blob_bytes += st.blob_bytes;
+        r->st.clob_count += st.clob_count; r->st.clob_bytes += st.clob_bytes;
+        r->f = realloc(r->f, sizeof(resultset_field_t) * (size_t)(r->nrows + rows) * (size_t)r->ncols);
+        for (int i = 0; i < rows; i++)
+            for (int c = 0; c < r->ncols; c++)
+                r->f[(size_t)(r->nrows + i) * r->ncols + c] = rs->records[i].fields[c];
+        r->nrows += rows;
+        resultset_free(rs);
+        if (rows < r->batch) break;              /* core's own loop rule */
+    }
+    D->select_close(cur);
+}
+
+static resultset_field_t *fld(cur_t *r, int row, int col) { return &r->f[(size_t)row * r->ncols + col]; }
+
+static void cleanup_rows(void)
+{
+    exec_sql("DELETE FROM " T_FIELD " WHERE NUMBER_COL BETWEEN 999701 AND 999799", 0, NULL);
+    exec_sql("DELETE FROM " T_UNIT  " WHERE NUMBER_COL BETWEEN 999701 AND 999799", 0, NULL);
+    D->commit(C, &L.dml);
+}
+
+static char *e_acute(int n)                      /* n x U+00E9, UTF-8 */
+{
+    char *s = malloc((size_t)n * 2 + 1);
+    for (int i = 0; i < n; i++) { s[2 * i] = (char)0xC3; s[2 * i + 1] = (char)0xA9; }
+    s[n * 2] = '\0';
+    return s;
+}
+
+int main(int argc, char *argv[])
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    const char *ini = argc > 1 ? argv[1] : CONFIG_INI_MSSQL;
+    oci_context_t ctx; app_config_t config;
+    if (h_init(ini, &ctx, &config, &L) != 0) { printf("INIT FAILED\nFAIL\n"); return 1; }
+    if (logger_init_str2(&PL, config.procedure_log_file_name, config.procedure_log_file_max_size,
+                         config.procedure_log_file_rotation_number, config.procedure_log_level,
+                         &L.err) != 0)
+    {
+        printf("INIT FAILED (procedure log)\nFAIL\n");
+        return 1;
+    }
+    ctx.procedure_logger = &PL;
+    D = mssql_driver_get();
+    C = &ctx;
+    CFG = &config;
+    int failed = 0;
+    call_t *K = calloc(1, sizeof(*K));
+    cur_t R;
+    long logpos;
+
+    /* ---- Test 1 ---- */
+    printf("Test 1 (connect, test rows written)  ... ");
+    g_fail = 0;
+    if (D->connect(&ctx) != 0 || !ctx.svchp)
+    {
+        printf("FAILED - connect(); see %s\nFAIL\n", config.connection_log_file_name);
+        return 1;
+    }
+    cleanup_rows();
+    {
+        const char *r1[] = { "999701", "proc row 1" };
+        const char *r2[] = { "999702", "proc row 2" };
+        const char *r3[] = { "999703", "proc row 3" };
+        const char *u1[] = { "999710", "sample-proc-row" };
+        const char *ins = "INSERT INTO " T_FIELD " (NUMBER_COL, VARCHAR2_COL, DATE_COL) "
+                          "VALUES (?, ?, '2030-02-01 00:00:00')";
+        if (exec_sql(ins, 2, r1) || exec_sql(ins, 2, r2) || exec_sql(ins, 2, r3) ||
+            exec_sql("INSERT INTO " T_UNIT " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, u1) ||
+            D->commit(&ctx, &L.dml) != 0)
+            bad("could not write the test rows%s", "");
+    }
+    if (!g_fail) printf("OK\n");
+    failed |= g_fail;
+
+    /* ---- Test 2 ---- */
+    printf("Test 2 (no parameters)               ... ");
+    g_fail = 0;
+    logpos = h_log_size(config.procedure_log_file_name);
+    memset(K, 0, sizeof(*K));
+    call(K, OWNER "UNIT_TEST_NOOP_PROC");
+    if (K->rc != 0) bad("call failed: %s", K->error);
+    else if (!h_log_has(config.procedure_log_file_name, logpos, "{CALL DATA_MANAGER.UNIT_TEST_NOOP_PROC}"))
+        bad("call text {CALL DATA_MANAGER.UNIT_TEST_NOOP_PROC} not in %s", config.procedure_log_file_name);
+    call_done(K);
+    if (!g_fail) printf("OK\n");
+    failed |= g_fail;
+
+    /* ---- Test 3 ---- */
+    printf("Test 3 (scalar IN + OUT)             ... ");
+    g_fail = 0;
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_DEPT_ID", DB_PROC_TYPE_INT, DB_PROC_DIR_IN, "999799");
+        param(K, "P_STATUS",  DB_PROC_TYPE_INT, DB_PROC_DIR_OUT, NULL);
+        K->p[1].out_int = -7;
+        call(K, OWNER "GET_DEPT_STATUS");
+        if (K->rc != 0) bad("call (no match) failed: %s", K->error);
+        else if (K->p[1].out_is_null || K->p[1].out_int != 0)
+            badl("no match: want P_STATUS 0, got %ld (null=%ld)", K->p[1].out_int, K->p[1].out_is_null);
+        call_done(K);
+
+        long want = h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999701", 0, NULL);
+        memset(K, 0, sizeof(*K));
+        param(K, "P_DEPT_ID", DB_PROC_TYPE_INT, DB_PROC_DIR_IN, "999701");
+        param(K, "P_STATUS",  DB_PROC_TYPE_INT, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "GET_DEPT_STATUS");
+        if (K->rc != 0) bad("call (match) failed: %s", K->error);
+        else if (want != 1 || K->p[1].out_int != want)
+            badl("match: want P_STATUS = server count %ld (1), got %ld", want, K->p[1].out_int);
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (0, then 1)\n");
+    failed |= g_fail;
+
+    /* ---- Test 4 ---- */
+    printf("Test 4 (IN + OUT + CURSOR)           ... ");
+    g_fail = 0;
+    logpos = h_log_size(config.procedure_log_file_name);
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_IN_NUM",  DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999710");
+        param(K, "P_OUT_NUM", DB_PROC_TYPE_INT,    DB_PROC_DIR_OUT, NULL);
+        param(K, "P_RESULTS", DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "UNIT_TEST_SAMPLE_PROC");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else
+        {
+            if (K->p[1].out_int != 1999420) badl("P_OUT_NUM %ld, want %ld", K->p[1].out_int, 1999420);
+            if (!h_log_has(config.procedure_log_file_name, logpos,
+                           "{CALL DATA_MANAGER.UNIT_TEST_SAMPLE_PROC(?, ?)}"))
+                bad("call text with the CURSOR's ? removed not in the log%s", "");
+            if (!K->p[2].out_cursor_handle || K->p[2].out_is_null) bad("no CURSOR handle%s", "");
+            else
+            {
+                fetch(&R, &K->p[2]);
+                if (R.rc != 0) bad("fetch failed: %s", mssql_select_last_error());
+                else if (R.nrows != 1 || R.ncols != 3) badl("%ld rows x %ld columns, want 1 x 3", R.nrows, R.ncols);
+                else if (strcmp(fld(&R, 0, 0)->value, "999710") || strcmp(fld(&R, 0, 1)->value, "sample-proc-row") ||
+                         strcasecmp(R.cols[0].field_name, "NUMBER_COL") || strcmp(R.cols[0].field_type, "NUMBER"))
+                    bad("row/columns not the seeded row (NUMBER_COL %s)", fld(&R, 0, 0)->value);
+                cur_free(&R);
+            }
+        }
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (OUT 1999420, 1 row)\n");
+    failed |= g_fail;
+
+    /* ---- Test 5 ---- */
+    printf("Test 5 (OUT count = CURSOR rows)     ... ");
+    g_fail = 0;
+    {
+        long want = h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL >= 999701", 0, NULL);
+        memset(K, 0, sizeof(*K));
+        param(K, "P_MIN_NUM",   DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999701");
+        param(K, "P_ROW_COUNT", DB_PROC_TYPE_INT,    DB_PROC_DIR_OUT, NULL);
+        param(K, "P_RESULTS",   DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "GET_ROWS_WITH_STATUS");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else
+        {
+            fetch(&R, &K->p[2]);
+            if (R.rc != 0) bad("fetch failed: %s", mssql_select_last_error());
+            else if (want != 3)
+                badl("OCI_FIELD_TEST has %ld rows with NUMBER_COL >= 999701, want only this "
+                     "harness's %ld - remove the others (999701-999799 is reserved)", want, 3);
+            else if (K->p[1].out_int != want || R.nrows != want)
+                badl("P_ROW_COUNT %ld, CURSOR rows %ld - want 3 and 3", K->p[1].out_int, R.nrows);
+            cur_free(&R);
+        }
+        call_done(K);
+    }
+    if (!g_fail) printf("OK\n");
+    failed |= g_fail;
+
+    /* ---- Test 6 / 7 ---- */
+    for (int open = 0; open <= 1; open++)
+    {
+        printf(open ? "Test 7 (CURSOR returned)             ... "
+                    : "Test 6 (CURSOR with no result set)   ... ");
+        g_fail = 0;
+        memset(K, 0, sizeof(*K));
+        param(K, "P_OPEN_CURSOR", DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  open ? "1" : "0");
+        param(K, "P_RESULTS",     DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "UNIT_TEST_CURSOR_PROC");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else if (!open && (!K->p[1].out_is_null || K->p[1].out_cursor_handle))
+            bad("want out_is_null = 1 and no handle%s", "");
+        else if (open)
+        {
+            if (K->p[1].out_is_null || !K->p[1].out_cursor_handle) bad("want a handle%s", "");
+            else
+            {
+                fetch(&R, &K->p[1]);
+                if (R.rc != 0 || R.ncols != 1 || R.nrows > 1)
+                    badl("fetch rc %ld, %ld column(s)", R.rc, R.ncols);
+                cur_free(&R);
+            }
+        }
+        call_done(K);
+        if (!g_fail) printf(open ? "OK\n" : "OK (NULL, not an error)\n");
+        failed |= g_fail;
+    }
+
+    /* ---- Test 8 ---- */
+    printf("Test 8 (two result sets, two CURSORs)... ");
+    g_fail = 0;
+    {
+        int saved = config.query_fetch_batch_size;
+        config.query_fetch_batch_size = 2;
+        memset(K, 0, sizeof(*K));
+        param(K, "P_MIN_NUM", DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999701");
+        param(K, "P_A",       DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        param(K, "P_B",       DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "MS_TEST_TWO_RESULTS");
+        config.query_fetch_batch_size = saved;
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else if (!K->p[1].out_cursor_handle || !K->p[2].out_cursor_handle) bad("want two handles%s", "");
+        else
+        {
+            cur_t B;
+            fetch(&R, &K->p[1]);
+            fetch(&B, &K->p[2]);
+            if (R.rc || B.rc) bad("fetch failed: %s", mssql_select_last_error());
+            else if (R.nrows != 3 || B.nrows != 3) badl("rows %ld and %ld, want 3 and 3", R.nrows, B.nrows);
+            else if (R.batch != 2 || R.nbatches != 2 || R.batches[0] != 2 || R.batches[1] != 1)
+                badl("batch size %ld, %ld batches - want 2, batches 2 + 1", R.batch, R.nbatches);
+            else if (strcasecmp(R.cols[0].field_name, "NUMBER_COL") || strcasecmp(B.cols[0].field_name, "VARCHAR2_COL"))
+                bad("A/B are not the two result sets in order (A column %s)", R.cols[0].field_name);
+            else
+            {
+                char want[32];
+                for (int i = 0; i < 3; i++)
+                {
+                    snprintf(want, sizeof(want), "proc row %d", i + 1);
+                    int found = 0;
+                    for (int j = 0; j < 3; j++) if (!strcmp(fld(&B, j, 0)->value, want)) found = 1;
+                    if (!found) bad("'%s' missing from the second CURSOR", want);
+                }
+            }
+            cur_free(&R);
+            cur_free(&B);
+        }
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (3 + 3 rows, row count skipped, batches 2 + 1)\n");
+    failed |= g_fail;
+
+    /* ---- Test 9 ---- */
+    printf("Test 9 (extra result set discarded)  ... ");
+    g_fail = 0;
+    logpos = h_log_size(config.procedure_log_file_name);
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_MIN_NUM", DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999701");
+        param(K, "P_A",       DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "MS_TEST_TWO_RESULTS");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else
+        {
+            fetch(&R, &K->p[1]);
+            if (R.rc || R.nrows != 3 || strcasecmp(R.cols[0].field_name, "NUMBER_COL"))
+                badl("first result set: rc %ld, %ld rows (want 3)", R.rc, R.nrows);
+            cur_free(&R);
+            if (!h_log_has(config.procedure_log_file_name, logpos, "result set 2 discarded"))
+                bad("no 'result set 2 discarded' WARN in %s", config.procedure_log_file_name);
+        }
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (WARN logged)\n");
+    failed |= g_fail;
+
+    /* ---- Test 10 ---- */
+    printf("Test 10 (error after first result)   ... ");
+    g_fail = 0;
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_A", DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "MS_TEST_ERROR_AFTER_FIRST");
+        if (K->rc == 0) bad("want the call to fail%s", "");
+        else if (!strstr(K->error, "50001")) bad("error '%s' (want native 50001)", K->error);
+        if (K->p[0].out_cursor_handle) bad("a handle was returned with the failure%s", "");
+        call_done(K);
+        if (h_count(&ctx, "SELECT 1 AS X", 0, NULL) != 1) bad("connection unusable afterwards%s", "");
+    }
+    if (!g_fail) printf("OK (failed, no handle, connection answers)\n");
+    failed |= g_fail;
+
+    /* ---- Test 11 ---- */
+    printf("Test 11 (non-ASCII string OUT)       ... ");
+    g_fail = 0;
+    {
+        char *want = e_acute(100);
+        memset(K, 0, sizeof(*K));
+        param(K, "P_LEN", DB_PROC_TYPE_INT, DB_PROC_DIR_IN,  "100");
+        param(K, "P_OUT", DB_PROC_TYPE_STR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "MS_TEST_STR_OUT");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else if (K->p[1].out_is_null || strcmp(K->out[1], want))
+            badl("P_OUT is %ld bytes, want %ld (100 x U+00E9)", (long)strlen(K->out[1]), 200);
+        call_done(K);
+        free(want);
+    }
+    if (!g_fail) printf("OK (100 x U+00E9, 200 bytes)\n");
+    failed |= g_fail;
+
+    /* ---- Test 12 ---- */
+    printf("Test 12 (OUT too long - not cut)     ... ");
+    g_fail = 0;
+    {
+        /* 20000 characters: fits the UTF-16 buffer, not 32767 bytes of UTF-8 */
+        memset(K, 0, sizeof(*K));
+        param(K, "P_LEN", DB_PROC_TYPE_INT, DB_PROC_DIR_IN,  "20000");
+        param(K, "P_OUT", DB_PROC_TYPE_STR, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "MS_TEST_STR_OUT");
+        if (K->rc == 0) badl("20000 chars: want a failure, got %ld bytes", (long)strlen(K->out[1]), 0);
+        else if (!strstr(K->error, "not cut short")) bad("error '%s'", K->error);
+        call_done(K);
+
+        /* a 64-byte buffer and 100 characters: not even the UTF-16 fits */
+        memset(K, 0, sizeof(*K));
+        param(K, "P_LEN", DB_PROC_TYPE_INT, DB_PROC_DIR_IN,  "100");
+        param(K, "P_OUT", DB_PROC_TYPE_STR, DB_PROC_DIR_OUT, NULL);
+        K->p[1].out_value_size = 64;
+        call(K, OWNER "MS_TEST_STR_OUT");
+        if (K->rc == 0) badl("64-byte buffer: want a failure, got %ld bytes", (long)strlen(K->out[1]), 0);
+        else if (!strstr(K->error, "not cut short")) bad("error '%s'", K->error);
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (both refused)\n");
+    failed |= g_fail;
+
+    /* ---- Test 13 ---- */
+    printf("Test 13 (IN_OUT)                     ... ");
+    g_fail = 0;
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_TEXT", DB_PROC_TYPE_STR, DB_PROC_DIR_IN_OUT, "Gr\xc3\xbc\xc3\x9f" "e");
+        param(K, "P_NUM",  DB_PROC_TYPE_INT, DB_PROC_DIR_IN_OUT, "41");
+        call(K, OWNER "MS_TEST_INOUT");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else
+        {
+            if (strcmp(K->out[0], "Gr\xc3\xbc\xc3\x9f" "e \xe2\x9c\x93")) bad("P_TEXT '%s', want 'Grüße ✓'", K->out[0]);
+            if (K->p[1].out_int != 42 || K->p[1].out_is_null) badl("P_NUM %ld, want %ld", K->p[1].out_int, 42);
+        }
+        call_done(K);
+
+        memset(K, 0, sizeof(*K));
+        param(K, "P_TEXT", DB_PROC_TYPE_STR, DB_PROC_DIR_IN_OUT, NULL);
+        param(K, "P_NUM",  DB_PROC_TYPE_INT, DB_PROC_DIR_IN_OUT, NULL);
+        call(K, OWNER "MS_TEST_INOUT");
+        if (K->rc != 0) bad("NULL call failed: %s", K->error);
+        else if (!K->p[0].out_is_null || !K->p[1].out_is_null)
+            badl("NULL in: out_is_null %ld / %ld, want 1 / 1", K->p[0].out_is_null, K->p[1].out_is_null);
+        call_done(K);
+
+        memset(K, 0, sizeof(*K));
+        param(K, "P_TEXT", DB_PROC_TYPE_STR, DB_PROC_DIR_IN_OUT, "x");
+        param(K, "P_NUM",  DB_PROC_TYPE_INT, DB_PROC_DIR_IN_OUT, "4x");
+        call(K, OWNER "MS_TEST_INOUT");
+        if (K->rc == 0) bad("IN_OUT int '4x' accepted%s", "");
+        else if (!strstr(K->error, "not a whole number")) bad("error '%s'", K->error);
+        call_done(K);
+
+        /* the Stage 1 procedure: bigint IN OUT, bound as int */
+        memset(K, 0, sizeof(*K));
+        param(K, "P_VALUE", DB_PROC_TYPE_INT, DB_PROC_DIR_IN_OUT, "-5");
+        call(K, OWNER "UNIT_TEST_INOUT_PROC");
+        if (K->rc != 0) bad("UNIT_TEST_INOUT_PROC failed: %s", K->error);
+        else if (K->p[0].out_int != -4) badl("UNIT_TEST_INOUT_PROC: %ld, want %ld", K->p[0].out_int, -4);
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (text, int, NULL, bad int refused, UNIT_TEST_INOUT_PROC)\n");
+    failed |= g_fail;
+
+    /* ---- Test 14 ---- */
+    printf("Test 14 (BLOB column in a CURSOR)    ... ");
+    g_fail = 0;
+    {
+        char v[3][256];
+        const char *k2[] = { "2" };
+        if (h_query(&ctx, "SELECT CONVERT(varchar(64), HASHBYTES('SHA2_256', PHOTO), 2), "
+                          "DATALENGTH(PHOTO), FILE_NAME FROM " T_LOB " WHERE ID = ?", 1, k2, v, 3) != 1)
+            bad("seed photo ID 2 not in %s", T_LOB);
+        else
+        {
+            memset(K, 0, sizeof(*K));
+            param(K, "P_A", DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+            call(K, OWNER "MS_TEST_LOB_RESULT");
+            if (K->rc != 0) bad("call failed: %s", K->error);
+            else
+            {
+                fetch(&R, &K->p[0]);
+                if (R.rc != 0 || R.nrows != 1 || R.ncols != 3) badl("fetch: rc %ld, %ld rows", R.rc, R.nrows);
+                else
+                {
+                    resultset_field_t *f = fld(&R, 0, 2);
+                    char path[1100], hex[65] = "";
+                    snprintf(path, sizeof(path), "%s/%s", config.BLOB_output_dir, f->blob_detail.file_name);
+                    FILE *fp = fopen(path, "rb");
+                    long got = -1;
+                    if (fp)
+                    {
+                        fseek(fp, 0, SEEK_END); got = ftell(fp); fseek(fp, 0, SEEK_SET);
+                        unsigned char *b = malloc(got > 0 ? (size_t)got : 1);
+                        size_t rd = fread(b, 1, (size_t)got, fp);
+                        fclose(fp);
+                        h_sha256_hex(b, rd, hex);
+                        free(b);
+                    }
+                    if (!f->is_blob || strcmp(R.cols[2].field_type, "BLOB")) bad("PHOTO is not a BLOB field (%s)", R.cols[2].field_type);
+                    else if ((long)f->blob_detail.file_size != atol(v[1]) || got != atol(v[1]))
+                        badl("size %ld on disk, server %ld", got, atol(v[1]));
+                    else if (strcmp(hex, v[0])) bad("SHA-256 of %s differs from the server", path);
+                    else if (R.st.blob_count != 1) badl("blob_count %ld, want %ld", R.st.blob_count, 1);
+                    if (got >= 0 && strcmp(f->blob_detail.file_name, v[2]) != 0) unlink(path);
+                }
+                cur_free(&R);
+            }
+            call_done(K);
+        }
+    }
+    if (!g_fail) printf("OK (file size and SHA-256 match)\n");
+    failed |= g_fail;
+
+    /* ---- Test 15 ---- */
+    printf("Test 15 (query_max_record_count)     ... ");
+    g_fail = 0;
+    {
+        int saved = config.query_max_record_count;
+        for (int cap = 2; cap <= 3; cap++)
+        {
+            config.query_max_record_count = cap;
+            memset(K, 0, sizeof(*K));
+            param(K, "P_MIN_NUM", DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999701");
+            param(K, "P_RESULTS", DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+            call(K, OWNER "GET_FIELD_ROWS");
+            if (cap == 2)
+            {
+                if (K->rc == 0) bad("3 rows with a cap of 2: want a failure%s", "");
+                else if (!strstr(K->error, "query_max_record_count")) bad("error '%s'", K->error);
+                if (K->p[1].out_cursor_handle) bad("a handle was returned with the failure%s", "");
+            }
+            else if (K->rc != 0) bad("3 rows with a cap of 3 failed: %s", K->error);
+            else
+            {
+                fetch(&R, &K->p[1]);
+                if (R.rc || R.nrows != 3) badl("cap 3: rc %ld, %ld rows", R.rc, R.nrows);
+                cur_free(&R);
+            }
+            call_done(K);
+        }
+        config.query_max_record_count = saved;
+    }
+    if (!g_fail) printf("OK (cap 2 fails, cap 3 gives 3 rows)\n");
+    failed |= g_fail;
+
+    /* ---- Test 16 ---- */
+    printf("Test 16 (server errors)              ... ");
+    g_fail = 0;
+    {
+        memset(K, 0, sizeof(*K));
+        param(K, "P_DEPT_ID", DB_PROC_TYPE_INT, DB_PROC_DIR_IN,  "abc");
+        param(K, "P_STATUS",  DB_PROC_TYPE_INT, DB_PROC_DIR_OUT, NULL);
+        call(K, OWNER "GET_DEPT_STATUS");
+        if (K->rc == 0) bad("P_DEPT_ID 'abc' accepted%s", "");
+        else if (!strstr(K->error, "8114")) bad("error '%s' (want native 8114)", K->error);
+        call_done(K);
+
+        memset(K, 0, sizeof(*K));
+        call(K, OWNER "MS_TEST_NO_SUCH_PROC");
+        if (K->rc == 0) bad("unknown procedure accepted%s", "");
+        else if (!strstr(K->error, "2812")) bad("error '%s' (want native 2812)", K->error);
+        call_done(K);
+        if (h_count(&ctx, "SELECT 1 AS X", 0, NULL) != 1) bad("connection unusable afterwards%s", "");
+    }
+    if (!g_fail) printf("OK (8114, 2812)\n");
+    failed |= g_fail;
+
+    /* ---- Test 17 ---- */
+    printf("Test 17 (50 calls, handles released) ... ");
+    g_fail = 0;
+    {
+        for (int i = 0; i < 50 && !g_fail; i++)
+        {
+            memset(K, 0, sizeof(*K));
+            param(K, "P_MIN_NUM", DB_PROC_TYPE_INT,    DB_PROC_DIR_IN,  "999701");
+            param(K, "P_A",       DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+            param(K, "P_B",       DB_PROC_TYPE_CURSOR, DB_PROC_DIR_OUT, NULL);
+            call(K, OWNER "MS_TEST_TWO_RESULTS");
+            if (K->rc != 0) { bad("call failed: %s", K->error); break; }
+            if (i % 2 == 0)
+            {
+                fetch(&R, &K->p[1]);
+                if (R.rc || R.nrows != 3) bad("fetch failed%s", "");
+                cur_free(&R);
+            }
+            call_done(K);                        /* cursor_handle_free on the rest */
+        }
+        db_select_cursor_t *cur = (db_select_cursor_t *)1;
+        db_column_meta_t   *cols = NULL;
+        int nc = 0, bs = 0;
+        if (D->select_open_from_cursor(&ctx, NULL, &cur, &cols, &nc, &bs) == 0 || cur)
+            bad("select_open_from_cursor(NULL) did not fail cleanly%s", "");
+        D->cursor_handle_free(NULL);
+        if (h_count(&ctx, "SELECT 1 AS X", 0, NULL) != 1) bad("connection unusable afterwards%s", "");
+    }
+    if (!g_fail) printf("OK (50 calls; SELECT 1 still answers)\n");
+    failed |= g_fail;
+
+    /* ---- Test 18 ---- */
+    printf("Test 18 (self-commit, no managed tx) ... ");
+    g_fail = 0;
+    logpos = h_log_size(config.procedure_log_file_name);
+    {
+        /* A read first: SQL Server opens a transaction for it (autocommit
+         * off), as the gateway's own lookups do before a procedure. */
+        if (h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999701", 0, NULL) != 1)
+            bad("row 999701 missing%s", "");
+        memset(K, 0, sizeof(*K));
+        call(K, OWNER "MS_TEST_SELF_COMMIT");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else
+        {
+            char v[1][256];
+            D->rollback(&ctx, &L.dml);           /* the procedure's own COMMIT must hold */
+            const char *k1[] = { "999701" };
+            if (h_query(&ctx, "SELECT VARCHAR2_COL FROM " T_FIELD " WHERE NUMBER_COL = ?", 1, k1, v, 1) != 1 ||
+                strcmp(v[0], "self-commit"))
+                bad("the procedure's change is not committed (VARCHAR2_COL '%s')", v[0]);
+            if (!h_log_has(config.procedure_log_file_name, logpos, "open read transaction ended"))
+                bad("no 'open read transaction ended' line in %s", config.procedure_log_file_name);
+        }
+        call_done(K);
+    }
+    if (!g_fail) printf("OK (read first, then the call: no 266; its COMMIT held)\n");
+    failed |= g_fail;
+
+    /* ---- Test 19 ---- */
+    printf("Test 19 (self-commit inside a tx)    ... ");
+    g_fail = 0;
+    {
+        static int dummy_tx;
+        const char *r20[] = { "999720", "caller row" };
+        if (exec_sql("INSERT INTO " T_FIELD " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, r20) != 0)
+            bad("could not write the caller's row%s", "");
+        ctx.active_tx = (void *)&dummy_tx;       /* a managed transaction is open */
+        memset(K, 0, sizeof(*K));
+        call(K, OWNER "MS_TEST_SELF_COMMIT");
+        ctx.active_tx = NULL;
+        if (K->rc == 0) bad("want 266 - the driver must not end a managed transaction%s", "");
+        else if (!strstr(K->error, "266")) bad("error '%s' (want native 266)", K->error);
+        call_done(K);
+        D->rollback(&ctx, &L.dml);
+        long kept = h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999720", 0, NULL);
+        if (!g_fail)
+            printf("OK (266 reported; the caller's row was %s by the procedure's COMMIT)\n",
+                   kept == 1 ? "committed" : "not committed");
+    }
+    failed |= g_fail;
+
+    cleanup_rows();
+    D->disconnect(&ctx);
+    free(K);
+    printf("%s\n", failed ? "FAIL" : "PASS");
+    logger_close(&PL);
+    h_close(&L);
+    return failed ? 1 : 0;
+}

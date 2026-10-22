@@ -1,1 +1,0 @@
-{"status":"ERROR","audit_id":"audit_stub_grant_round_1","operation":"GRANT","error_code":"DDL_EXECUTION_FAILED","error_text":"SQLSTATE 42000 [native 15151]: Cannot find the user 'FX_GRANTEE', because it does not exist or you do not have permission."}

@@ -1,6 +1,7 @@
 /*
  * mssql_select.h   (driver_mssql Stage 3, 2026-10-19, points T3-T5;
- *                   Stage 5, 2026-10-21, points W1-W6)
+ *                   Stage 5, 2026-10-21, points W1-W6;
+ *                   Stage 6, 2026-10-21, points X3-X4)
  *
  * The SELECT cursor behind driver_mssql's select_open /
  * select_fetch_batch / select_close (db_driver.h has the contract).
@@ -80,6 +81,38 @@ void mssql_select_close(db_select_cursor_t *cursor);
  * out_error_message.
  */
 const char *mssql_select_last_error(void);
+
+/*
+ * Stage 6 (2026-10-21, X3/X4) - a stored procedure's result sets, for
+ * mssql_proc.c. ODBC gives a procedure's OUT values only after every
+ * result set has been read, so each one is read in full while it is
+ * current and held.
+ *
+ * mssql_select_buffer_result()
+ *   Reads the current result set of stmt (an executed SQLHSTMT - not
+ *   taken over, not advanced past this result) through the same code as
+ *   a SELECT: batches of batch rows, long columns to files as Stage 5.
+ *   More than max_rows rows (when > 0) fails the call - nothing is cut
+ *   short. On return stmt has no bound columns and a row array of 1, so
+ *   SQLMoreResults can follow. *out is a cursor ready for
+ *   mssql_select_open_buffered(); free it with mssql_select_close() when
+ *   it is not opened. what is logged with any failure. 0 or -1 (logged,
+ *   mssql_select_last_error()).
+ *
+ * mssql_select_open_buffered()
+ *   select_open_from_cursor() for such a cursor: the column list (caller
+ *   frees) and batch size, exactly as select_open() gives them.
+ *   mssql_select_fetch_batch() then returns the held batches in order
+ *   and mssql_select_close() frees whatever is left. 0 or -1.
+ *
+ * mssql_select_buffered_rows()
+ *   Rows held in such a cursor (for logging); -1 if not one.
+ */
+int  mssql_select_buffer_result(oci_context_t *ctx, void *stmt, const char *what,
+                                int batch, int max_rows, db_select_cursor_t **out);
+int  mssql_select_open_buffered(db_select_cursor_t *cursor, db_column_meta_t **out_columns,
+                                int *out_column_count, int *out_batch_size);
+int  mssql_select_buffered_rows(const db_select_cursor_t *cursor);
 
 #ifdef __cplusplus
 }

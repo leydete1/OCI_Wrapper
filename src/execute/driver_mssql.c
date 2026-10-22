@@ -16,9 +16,9 @@
  *                          transaction back, and a lost connection
  *                          (08S01) leaves the outcome unknown - retrying
  *                          the commit alone would be wrong in both cases.
- *   everything else        present, but fails with
- *                          "driver_mssql: <hook> not implemented yet
- *                          (stage N)" - stages 3-6 fill these in.
+ *   everything else        filled in by stages 3-6 below (the
+ *                          "not implemented yet" stubs are gone as of
+ *                          stage 6).
  *
  * Stage 3 (2026-10-19), points T1-T10:
  *   select_open / select_fetch_batch / select_close
@@ -34,6 +34,15 @@
  *                          mssql_dml.c
  *   dialect                row_locator_clauses (OUTPUT inserted.<key>),
  *                          text LOBs bound in the statement
+ *
+ * Stage 5 (2026-10-21), points W1-W7: long columns in SELECT
+ *                          (mssql_select.c), statement text as UTF-16
+ *                          (mssql_text.c)
+ *
+ * Stage 6 (2026-10-21), points X1-X6:
+ *   dml_execute_procedure / select_open_from_cursor / cursor_handle_free
+ *                          mssql_proc.c - result sets read in order into
+ *                          the CURSOR parameters, then the OUT values
  *
  * Never includes an Oracle header: m2_compile_proof.py compiles this
  * file with every Oracle header blocked.
@@ -53,16 +62,8 @@
 #include "mssql_select.h"      /* Stage 3 */
 #include "mssql_metadata.h"    /* Stage 3 */
 #include "mssql_dml.h"         /* Stage 4 */
+#include "mssql_proc.h"        /* Stage 6 */
 #include "logger.h"
-
-/* ================================================================== */
-/*  Not implemented yet (P8)                                            */
-/* ================================================================== */
-static void not_yet(logger_t *logger, const char *hook, int stage)
-{
-    logger_write(logger, LOG_ERROR, hook, 0,
-                 "driver_mssql: %s not implemented yet (stage %d)", hook, stage);
-}
 
 /* ================================================================== */
 /*  Connections (P5)                                                    */
@@ -137,34 +138,10 @@ static int mssql_rollback(oci_context_t *ctx, logger_t *logger)
 /* dml_execute, dml_execute_returning_rowids, rowid_result_free,
  * lob_write_by_rowid and table_key: mssql_dml.c (Stage 4). */
 
-static int mssql_dml_execute_procedure(oci_context_t *ctx, logger_t *logger,
-                                       db_proc_execute_request_t *req)
-{
-    (void)ctx; (void)req;
-    not_yet(logger, "dml_execute_procedure", 6);
-    return -1;
-}
-
-static int mssql_select_open_from_cursor(oci_context_t *ctx, void *cursor_handle,
-                                         db_select_cursor_t **out_cursor,
-                                         db_column_meta_t **out_columns,
-                                         int *out_column_count, int *out_batch_size)
-{
-    (void)cursor_handle;
-    if (out_cursor)       *out_cursor = NULL;
-    if (out_columns)      *out_columns = NULL;
-    if (out_column_count) *out_column_count = 0;
-    if (out_batch_size)   *out_batch_size = 0;
-    not_yet(ctx ? ctx->procedure_logger : NULL, "select_open_from_cursor", 6);
-    return -1;
-}
+/* dml_execute_procedure, select_open_from_cursor and cursor_handle_free:
+ * mssql_proc.c (Stage 6). */
 
 /* describe_table: mssql_metadata.c (Stage 3). */
-
-static void mssql_cursor_handle_free(void *cursor_handle)
-{
-    (void)cursor_handle;    /* no cursor handle is ever handed out yet */
-}
 
 /* Dialect (M5): mssql_dialect.c (Stage 3). */
 
@@ -186,10 +163,10 @@ static const db_driver_t g_mssql_driver = {
     .dml_execute_returning_rowids = mssql_dml_execute_returning_rowids,
     .rowid_result_free            = mssql_rowid_result_free,
     .lob_write_by_rowid           = mssql_lob_write_by_rowid,
-    .dml_execute_procedure        = mssql_dml_execute_procedure,
-    .select_open_from_cursor      = mssql_select_open_from_cursor,
+    .dml_execute_procedure        = mssql_proc_execute,          /* mssql_proc.c */
+    .select_open_from_cursor      = mssql_proc_open_cursor,      /* mssql_proc.c */
     .describe_table               = mssql_describe_table,
-    .cursor_handle_free           = mssql_cursor_handle_free,
+    .cursor_handle_free           = mssql_proc_cursor_free,      /* mssql_proc.c */
     .table_key                    = mssql_table_key,             /* mssql_dml.c */
     .dialect                      = &mssql_dialect,   /* mssql_dialect.c */
 };

@@ -1,6 +1,7 @@
 /*
  * mssql_select.c   (driver_mssql Stage 3, 2026-10-19, points T3-T5;
- *                   Stage 5, 2026-10-21, points W1-W6)
+ *                   Stage 5, 2026-10-21, points W1-W6;
+ *                   Stage 6, 2026-10-21, points X3-X4)
  *
  * SELECT through ODBC - see mssql_select.h for what each call does.
  *
@@ -31,6 +32,12 @@
  * with text_lobs_inline. Unlike driver_oracle, a BLOB file that cannot
  * be written fails the fetch (W4). A result with no long column is
  * fetched exactly as in Stage 3.
+ *
+ * Procedure result sets (Stage 6). mssql_select_buffer_result() reads the
+ * current result set of a procedure call's statement through the same
+ * describe/bind (ms_setup_columns) and fetch code as a SELECT, holding
+ * every batch; the cursor it returns is "buffered" - fetch_batch hands
+ * the held batches out in order and never touches ODBC again.
  *
  * The cursor type. db_select_cursor_t is opaque to core; driver_oracle.c
  * defines struct db_select_cursor_t for its own cursors. This file keeps
@@ -122,6 +129,18 @@ typedef struct {
     SQLUSMALLINT   *row_status;     /* [batch]                           */
     SQLLEN         *bind_inds;      /* [bind_count]                      */
     int             exhausted;
+
+    /* Stage 6 - a procedure's result set, read in full (mssql_proc.c).
+     * stmt_borrowed: stmt belongs to the procedure call, never freed
+     * here. buffered: every batch is held below and stmt is NULL;
+     * select_fetch_batch hands them out in order.                     */
+    int             stmt_borrowed;
+    int             buffered;
+    resultset_t   **bat;            /* [nbat] - NULL once handed out     */
+    int            *bat_rows;
+    db_fetch_batch_stats_t *bat_stats;
+    int             nbat, next;
+    db_column_meta_t *cols;         /* [ncols] - copied out by open      */
 } mssql_cursor_t;
 
 static __thread char g_last_error[2048];
@@ -161,7 +180,13 @@ static void ms_fail_stmt(oci_context_t *ctx, const char *func, const char *sql,
 static void ms_cursor_free(mssql_cursor_t *cur)
 {
     if (!cur) return;
-    if (cur->stmt) SQLFreeHandle(SQL_HANDLE_STMT, cur->stmt);
+    if (cur->stmt && !cur->stmt_borrowed) SQLFreeHandle(SQL_HANDLE_STMT, cur->stmt);
+    for (int b = 0; b < cur->nbat; b++)
+        if (cur->bat && cur->bat[b]) resultset_free(cur->bat[b]);
+    free(cur->bat);
+    free(cur->bat_rows);
+    free(cur->bat_stats);
+    free(cur->cols);
     for (int c = 0; c < cur->ncols; c++)
     {
         if (cur->bufs) free(cur->bufs[c]);
@@ -252,6 +277,155 @@ static SQLULEN ms_utf16_units(const char *s)
         n += (*p >= 0xF0) ? 2 : 1;
     }
     return n;
+}
+
+/* Describes the current result set of cur->stmt (ncols columns) and
+ * binds it for fetching: per-column buffers and a column-wise array of
+ * cur->batch rows, or none when it has a long column (W2). Fills
+ * *out_columns (caller frees). 0, or -1 logged - the caller frees cur.
+ * Shared by select_open and, from Stage 6, a procedure's result sets. */
+static int ms_setup_columns(mssql_cursor_t *cur, const char *sql, SQLSMALLINT ncols,
+                            db_column_meta_t **out_columns)
+{
+    oci_context_t *ctx = cur->ctx;
+    SQLRETURN      r;
+    cur->ncols       = ncols;
+    cur->names       = calloc((size_t)ncols, sizeof(*cur->names));
+    cur->field_types = calloc((size_t)ncols, sizeof(*cur->field_types));
+    cur->lob_kind    = calloc((size_t)ncols, sizeof(*cur->lob_kind));
+    cur->buf_size    = calloc((size_t)ncols, sizeof(*cur->buf_size));
+    cur->bufs        = calloc((size_t)ncols, sizeof(*cur->bufs));
+    cur->inds        = calloc((size_t)ncols, sizeof(*cur->inds));
+    cur->row_status  = calloc((size_t)cur->batch, sizeof(*cur->row_status));
+    if (!cur->names || !cur->field_types || !cur->lob_kind || !cur->buf_size ||
+        !cur->bufs || !cur->inds || !cur->row_status)
+    {
+        ms_fail(ctx, __func__, sql, "select_open: out of memory (%d columns)", ncols);
+        return -1;
+    }
+
+    /* ---- describe ---- */
+    for (int c = 0; c < ncols; c++)
+    {
+        SQLSMALLINT name_len = 0, type = 0, dec = 0, nullable = 0;
+        SQLULEN     colsize  = 0;
+        char        type_name[64] = "";
+
+        r = SQLDescribeCol(cur->stmt, (SQLUSMALLINT)(c + 1),
+                           (SQLCHAR *)cur->names[c], (SQLSMALLINT)sizeof(cur->names[c]),
+                           &name_len, &type, &colsize, &dec, &nullable);
+        if (!SQL_SUCCEEDED(r))
+        {
+            ms_fail_stmt(ctx, __func__, sql, cur->stmt, "SQLDescribeCol");
+            return -1;
+        }
+        SQLColAttribute(cur->stmt, (SQLUSMALLINT)(c + 1), SQL_DESC_TYPE_NAME,
+                        type_name, (SQLSMALLINT)sizeof(type_name), NULL, NULL);
+        /* "int identity" -> "int" */
+        char *sp = strchr(type_name, ' ');
+        if (sp) *sp = '\0';
+
+        /* W1: CLR types (geometry, geography, hierarchyid, user types)
+         * have no text form the driver can give. */
+        if (type == SQL_SS_UDT)
+        {
+            /* The type name the driver reports is "udt"; the CLR type's
+             * own name (hierarchyid ...) is a driver-specific attribute. */
+            char   udt_name[64] = "";
+            SQLLEN unused = 0;
+            if (SQL_SUCCEEDED(SQLColAttribute(cur->stmt, (SQLUSMALLINT)(c + 1),
+                                              SQL_CA_SS_UDT_TYPE_NAME, udt_name,
+                                              (SQLSMALLINT)sizeof(udt_name), NULL,
+                                              &unused)) && udt_name[0])
+                snprintf(type_name, sizeof(type_name), "%s", udt_name);
+            ms_fail(ctx, __func__, sql,
+                    "driver_mssql: column %s is a CLR type (%s) - not supported in a "
+                    "SELECT; convert it in the query (for example CAST(... AS "
+                    "nvarchar(max)))", cur->names[c][0] ? cur->names[c] : "(no name)",
+                    type_name[0] ? type_name : "?");
+            return -1;
+        }
+
+        cur->lob_kind[c] = ms_lob_kind(type, colsize);
+        if (cur->lob_kind[c] != MS_LOB_NONE)
+        {
+            cur->has_lob        = 1;
+            cur->field_types[c] = cur->lob_kind[c] == MS_LOB_BINARY ? "BLOB" : "CLOB";
+            logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
+                         "column %d name=%s type=%s sql_type=%d long - field_type=%s",
+                         c + 1, cur->names[c], type_name, (int)type, cur->field_types[c]);
+            continue;           /* read with SQLGetData - no buffer */
+        }
+
+        cur->field_types[c] = ms_field_type(type, type_name);
+        cur->buf_size[c]    = ms_buf_size(type, colsize);
+        cur->bufs[c]        = calloc((size_t)cur->batch, (size_t)cur->buf_size[c]);
+        cur->inds[c]        = calloc((size_t)cur->batch, sizeof(SQLLEN));
+        if (!cur->bufs[c] || !cur->inds[c])
+        {
+            ms_fail(ctx, __func__, sql,
+                    "select_open: out of memory (column %s, %d x %ld bytes)",
+                    cur->names[c], cur->batch, (long)cur->buf_size[c]);
+            return -1;
+        }
+
+        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
+                     "column %d name=%s type=%s sql_type=%d size=%lu buf=%ld field_type=%s",
+                     c + 1, cur->names[c], type_name, (int)type,
+                     (unsigned long)colsize, (long)cur->buf_size[c], cur->field_types[c]);
+    }
+
+    /* ---- W2: a result with a long column - no bound buffers; rows are
+     * fetched one at a time and every column read with SQLGetData. ---- */
+    if (cur->has_lob)
+    {
+        lob_output_tag(cur->lob_tag, sizeof(cur->lob_tag));
+        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                     "LOB output tag %s for this SELECT", cur->lob_tag);
+    }
+
+    /* ---- column-wise array fetch ---- */
+    if (!cur->has_lob &&
+        (!SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_BIND_TYPE,
+                                       (SQLPOINTER)SQL_BIND_BY_COLUMN, 0)) ||
+         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_ARRAY_SIZE,
+                                       (SQLPOINTER)(SQLULEN)cur->batch, 0)) ||
+         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROWS_FETCHED_PTR,
+                                       &cur->rows_fetched, 0)) ||
+         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_STATUS_PTR,
+                                       cur->row_status, 0))))
+    {
+        ms_fail_stmt(ctx, __func__, sql, cur->stmt, "SQLSetStmtAttr(array fetch)");
+        return -1;
+    }
+
+    for (int c = 0; c < ncols && !cur->has_lob; c++)
+    {
+        r = SQLBindCol(cur->stmt, (SQLUSMALLINT)(c + 1), SQL_C_CHAR,
+                       cur->bufs[c], cur->buf_size[c], cur->inds[c]);
+        if (!SQL_SUCCEEDED(r))
+        {
+            ms_fail_stmt(ctx, __func__, sql, cur->stmt, "SQLBindCol");
+            return -1;
+        }
+    }
+
+    *out_columns = NULL;
+    db_column_meta_t *columns = calloc((size_t)ncols, sizeof(*columns));
+    if (!columns)
+    {
+        ms_fail(ctx, __func__, sql, "select_open: out of memory (column list)");
+        return -1;
+    }
+    for (int c = 0; c < ncols; c++)
+    {
+        snprintf(columns[c].field_name, sizeof(columns[c].field_name), "%s", cur->names[c]);
+        snprintf(columns[c].field_type, sizeof(columns[c].field_type), "%s",
+                 cur->field_types[c]);
+    }
+
+    *out_columns = columns;
+    return 0;
 }
 
 int mssql_select_open(oci_context_t              *ctx,
@@ -403,145 +577,11 @@ int mssql_select_open(oci_context_t              *ctx,
         return -1;
     }
 
-    cur->ncols       = ncols;
-    cur->names       = calloc((size_t)ncols, sizeof(*cur->names));
-    cur->field_types = calloc((size_t)ncols, sizeof(*cur->field_types));
-    cur->lob_kind    = calloc((size_t)ncols, sizeof(*cur->lob_kind));
-    cur->buf_size    = calloc((size_t)ncols, sizeof(*cur->buf_size));
-    cur->bufs        = calloc((size_t)ncols, sizeof(*cur->bufs));
-    cur->inds        = calloc((size_t)ncols, sizeof(*cur->inds));
-    cur->row_status  = calloc((size_t)cur->batch, sizeof(*cur->row_status));
-    if (!cur->names || !cur->field_types || !cur->lob_kind || !cur->buf_size ||
-        !cur->bufs || !cur->inds || !cur->row_status)
+    db_column_meta_t *columns = NULL;
+    if (ms_setup_columns(cur, req->sql, ncols, &columns) != 0)
     {
-        ms_fail(ctx, __func__, req->sql, "select_open: out of memory (%d columns)", ncols);
         ms_cursor_free(cur);
         return -1;
-    }
-
-    /* ---- describe ---- */
-    for (int c = 0; c < ncols; c++)
-    {
-        SQLSMALLINT name_len = 0, type = 0, dec = 0, nullable = 0;
-        SQLULEN     colsize  = 0;
-        char        type_name[64] = "";
-
-        r = SQLDescribeCol(cur->stmt, (SQLUSMALLINT)(c + 1),
-                           (SQLCHAR *)cur->names[c], (SQLSMALLINT)sizeof(cur->names[c]),
-                           &name_len, &type, &colsize, &dec, &nullable);
-        if (!SQL_SUCCEEDED(r))
-        {
-            ms_fail_stmt(ctx, __func__, req->sql, cur->stmt, "SQLDescribeCol");
-            ms_cursor_free(cur);
-            return -1;
-        }
-        SQLColAttribute(cur->stmt, (SQLUSMALLINT)(c + 1), SQL_DESC_TYPE_NAME,
-                        type_name, (SQLSMALLINT)sizeof(type_name), NULL, NULL);
-        /* "int identity" -> "int" */
-        char *sp = strchr(type_name, ' ');
-        if (sp) *sp = '\0';
-
-        /* W1: CLR types (geometry, geography, hierarchyid, user types)
-         * have no text form the driver can give. */
-        if (type == SQL_SS_UDT)
-        {
-            /* The type name the driver reports is "udt"; the CLR type's
-             * own name (hierarchyid ...) is a driver-specific attribute. */
-            char   udt_name[64] = "";
-            SQLLEN unused = 0;
-            if (SQL_SUCCEEDED(SQLColAttribute(cur->stmt, (SQLUSMALLINT)(c + 1),
-                                              SQL_CA_SS_UDT_TYPE_NAME, udt_name,
-                                              (SQLSMALLINT)sizeof(udt_name), NULL,
-                                              &unused)) && udt_name[0])
-                snprintf(type_name, sizeof(type_name), "%s", udt_name);
-            ms_fail(ctx, __func__, req->sql,
-                    "driver_mssql: column %s is a CLR type (%s) - not supported in a "
-                    "SELECT; convert it in the query (for example CAST(... AS "
-                    "nvarchar(max)))", cur->names[c][0] ? cur->names[c] : "(no name)",
-                    type_name[0] ? type_name : "?");
-            ms_cursor_free(cur);
-            return -1;
-        }
-
-        cur->lob_kind[c] = ms_lob_kind(type, colsize);
-        if (cur->lob_kind[c] != MS_LOB_NONE)
-        {
-            cur->has_lob        = 1;
-            cur->field_types[c] = cur->lob_kind[c] == MS_LOB_BINARY ? "BLOB" : "CLOB";
-            logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                         "column %d name=%s type=%s sql_type=%d long - field_type=%s",
-                         c + 1, cur->names[c], type_name, (int)type, cur->field_types[c]);
-            continue;           /* read with SQLGetData - no buffer */
-        }
-
-        cur->field_types[c] = ms_field_type(type, type_name);
-        cur->buf_size[c]    = ms_buf_size(type, colsize);
-        cur->bufs[c]        = calloc((size_t)cur->batch, (size_t)cur->buf_size[c]);
-        cur->inds[c]        = calloc((size_t)cur->batch, sizeof(SQLLEN));
-        if (!cur->bufs[c] || !cur->inds[c])
-        {
-            ms_fail(ctx, __func__, req->sql,
-                    "select_open: out of memory (column %s, %d x %ld bytes)",
-                    cur->names[c], cur->batch, (long)cur->buf_size[c]);
-            ms_cursor_free(cur);
-            return -1;
-        }
-
-        logger_write(ctx->select_logger, LOG_DEBUG, __func__, 0,
-                     "column %d name=%s type=%s sql_type=%d size=%lu buf=%ld field_type=%s",
-                     c + 1, cur->names[c], type_name, (int)type,
-                     (unsigned long)colsize, (long)cur->buf_size[c], cur->field_types[c]);
-    }
-
-    /* ---- W2: a result with a long column - no bound buffers; rows are
-     * fetched one at a time and every column read with SQLGetData. ---- */
-    if (cur->has_lob)
-    {
-        lob_output_tag(cur->lob_tag, sizeof(cur->lob_tag));
-        logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
-                     "LOB output tag %s for this SELECT", cur->lob_tag);
-    }
-
-    /* ---- column-wise array fetch ---- */
-    if (!cur->has_lob &&
-        (!SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_BIND_TYPE,
-                                       (SQLPOINTER)SQL_BIND_BY_COLUMN, 0)) ||
-         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_ARRAY_SIZE,
-                                       (SQLPOINTER)(SQLULEN)cur->batch, 0)) ||
-         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROWS_FETCHED_PTR,
-                                       &cur->rows_fetched, 0)) ||
-         !SQL_SUCCEEDED(SQLSetStmtAttr(cur->stmt, SQL_ATTR_ROW_STATUS_PTR,
-                                       cur->row_status, 0))))
-    {
-        ms_fail_stmt(ctx, __func__, req->sql, cur->stmt, "SQLSetStmtAttr(array fetch)");
-        ms_cursor_free(cur);
-        return -1;
-    }
-
-    for (int c = 0; c < ncols && !cur->has_lob; c++)
-    {
-        r = SQLBindCol(cur->stmt, (SQLUSMALLINT)(c + 1), SQL_C_CHAR,
-                       cur->bufs[c], cur->buf_size[c], cur->inds[c]);
-        if (!SQL_SUCCEEDED(r))
-        {
-            ms_fail_stmt(ctx, __func__, req->sql, cur->stmt, "SQLBindCol");
-            ms_cursor_free(cur);
-            return -1;
-        }
-    }
-
-    db_column_meta_t *columns = calloc((size_t)ncols, sizeof(*columns));
-    if (!columns)
-    {
-        ms_fail(ctx, __func__, req->sql, "select_open: out of memory (column list)");
-        ms_cursor_free(cur);
-        return -1;
-    }
-    for (int c = 0; c < ncols; c++)
-    {
-        snprintf(columns[c].field_name, sizeof(columns[c].field_name), "%s", cur->names[c]);
-        snprintf(columns[c].field_type, sizeof(columns[c].field_type), "%s",
-                 cur->field_types[c]);
     }
 
     logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
@@ -966,6 +1006,16 @@ int mssql_select_fetch_batch(db_select_cursor_t      *cursor,
     if (!cur || !out_rs || !out_rows_fetched) return -1;
 
     g_last_error[0] = '\0';
+    if (cur->buffered)                       /* Stage 6: a procedure result */
+    {
+        if (cur->next >= cur->nbat) return 0;
+        int b = cur->next++;
+        *out_rs           = cur->bat[b];
+        *out_rows_fetched = cur->bat_rows[b];
+        cur->bat[b]       = NULL;
+        if (out_stats) *out_stats = cur->bat_stats[b];
+        return 0;
+    }
     if (cur->exhausted) return 0;
     if (cur->has_lob) return ms_fetch_lob_batch(cur, out_rs, out_rows_fetched, out_stats);
 
@@ -1041,4 +1091,141 @@ int mssql_select_fetch_batch(db_select_cursor_t      *cursor,
 void mssql_select_close(db_select_cursor_t *cursor)
 {
     ms_cursor_free((mssql_cursor_t *)cursor);
+}
+
+/* ================================================================== */
+/*  Stage 6 - a procedure's result sets (X3, X4)                       */
+/* ================================================================== */
+
+int mssql_select_buffer_result(oci_context_t *ctx, void *stmt, const char *what,
+                               int batch, int max_rows, db_select_cursor_t **out)
+{
+    g_last_error[0] = '\0';
+    if (out) *out = NULL;
+    if (!ctx || !stmt || !out)
+    {
+        ms_fail(ctx, __func__, what, "buffer_result: invalid arguments");
+        return -1;
+    }
+
+    SQLHSTMT        st  = (SQLHSTMT)stmt;
+    mssql_cursor_t *cur = calloc(1, sizeof(*cur));
+    if (!cur)
+    {
+        ms_fail(ctx, __func__, what, "buffer_result: out of memory");
+        return -1;
+    }
+    cur->ctx           = ctx;
+    cur->stmt          = st;
+    cur->stmt_borrowed = 1;
+    cur->batch         = batch > 0 ? batch : 1;
+
+    int         rc = -1, total = 0, cap = 0;
+    SQLSMALLINT ncols = 0;
+    if (!SQL_SUCCEEDED(SQLNumResultCols(st, &ncols)) || ncols <= 0)
+    {
+        ms_fail_stmt(ctx, __func__, what, st, "SQLNumResultCols");
+        goto Done;
+    }
+    if (ms_setup_columns(cur, what, ncols, &cur->cols) != 0) goto Done;
+    if (cur->has_lob) lob_output_tag(cur->lob_tag, sizeof(cur->lob_tag));
+
+    for (;;)
+    {
+        resultset_t           *rs = NULL;
+        int                    rows = 0;
+        db_fetch_batch_stats_t stats;
+        if (mssql_select_fetch_batch((db_select_cursor_t *)cur, &rs, &rows, &stats) != 0)
+            goto Done;                       /* logged by fetch_batch */
+        if (rows == 0) break;
+        total += rows;
+        if (max_rows > 0 && total > max_rows)
+        {
+            resultset_free(rs);
+            ms_fail(ctx, __func__, what,
+                    "a procedure result set has more than %d rows "
+                    "(query_max_record_count) - the call is failed, not cut short",
+                    max_rows);
+            goto Done;
+        }
+        if (cur->nbat == cap)
+        {
+            int ncap = cap ? cap * 2 : 8;
+            resultset_t **nb = realloc(cur->bat, (size_t)ncap * sizeof(*nb));
+            if (nb) cur->bat = nb;
+            int *nr = realloc(cur->bat_rows, (size_t)ncap * sizeof(*nr));
+            if (nr) cur->bat_rows = nr;
+            db_fetch_batch_stats_t *ns = realloc(cur->bat_stats, (size_t)ncap * sizeof(*ns));
+            if (ns) cur->bat_stats = ns;
+            if (!nb || !nr || !ns)
+            {
+                resultset_free(rs);
+                ms_fail(ctx, __func__, what, "buffer_result: out of memory (%d rows)", total);
+                goto Done;
+            }
+            cap = ncap;
+        }
+        cur->bat[cur->nbat]       = rs;
+        cur->bat_rows[cur->nbat]  = rows;
+        cur->bat_stats[cur->nbat] = stats;
+        cur->nbat++;
+    }
+    rc = 0;
+
+Done:
+    /* The statement goes on to the next result: no bound columns or
+     * row array may be left on it. */
+    SQLFreeStmt(st, SQL_UNBIND);
+    if (!cur->has_lob)
+    {
+        SQLSetStmtAttr(st, SQL_ATTR_ROWS_FETCHED_PTR, NULL, 0);
+        SQLSetStmtAttr(st, SQL_ATTR_ROW_STATUS_PTR, NULL, 0);
+        SQLSetStmtAttr(st, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)(SQLULEN)1, 0);
+    }
+    cur->stmt = SQL_NULL_HSTMT;
+    for (int c = 0; c < cur->ncols; c++)      /* fetch buffers: no longer needed */
+    {
+        if (cur->bufs) { free(cur->bufs[c]); cur->bufs[c] = NULL; }
+        if (cur->inds) { free(cur->inds[c]); cur->inds[c] = NULL; }
+    }
+    if (rc != 0)
+    {
+        ms_cursor_free(cur);
+        return -1;
+    }
+    cur->buffered = 1;
+    cur->next     = 0;
+    logger_write(ctx->select_logger, LOG_INFO, __func__, 0,
+                 "procedure result set buffered: %d column(s), %d row(s) in %d batch(es) of %d",
+                 cur->ncols, total, cur->nbat, cur->batch);
+    *out = (db_select_cursor_t *)cur;
+    return 0;
+}
+
+int mssql_select_buffered_rows(const db_select_cursor_t *cursor)
+{
+    const mssql_cursor_t *cur = (const mssql_cursor_t *)cursor;
+    int n = 0;
+    if (!cur || !cur->buffered) return -1;
+    for (int b = 0; b < cur->nbat; b++) n += cur->bat_rows[b];
+    return n;
+}
+
+int mssql_select_open_buffered(db_select_cursor_t *cursor, db_column_meta_t **out_columns,
+                               int *out_column_count, int *out_batch_size)
+{
+    mssql_cursor_t *cur = (mssql_cursor_t *)cursor;
+    if (out_columns)      *out_columns = NULL;
+    if (out_column_count) *out_column_count = 0;
+    if (out_batch_size)   *out_batch_size = 0;
+    if (!cur || !cur->buffered || cur->next != 0 || !out_columns || !out_column_count ||
+        !out_batch_size)
+        return -1;
+    db_column_meta_t *cols = calloc((size_t)cur->ncols, sizeof(*cols));
+    if (!cols) return -1;
+    memcpy(cols, cur->cols, (size_t)cur->ncols * sizeof(*cols));
+    *out_columns      = cols;
+    *out_column_count = cur->ncols;
+    *out_batch_size   = cur->batch;
+    return 0;
 }

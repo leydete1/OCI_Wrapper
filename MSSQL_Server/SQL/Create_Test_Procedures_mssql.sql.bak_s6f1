@@ -1,0 +1,106 @@
+-- ======================================================================
+-- Create_Test_Procedures_mssql.sql   (driver_mssql Stage 6, point X7)
+--
+-- The SQL Server-only test procedures MSSQL_Driver_Procedure_Test uses,
+-- on top of the eight from Create_MSSQL_Test_Objects.sql (S9:
+-- GET_DEPT_STATUS, GET_FIELD_ROWS, GET_ROWS_WITH_STATUS, PURGE_OLD_ROWS,
+-- UNIT_TEST_SAMPLE_PROC, UNIT_TEST_NOOP_PROC, UNIT_TEST_CURSOR_PROC,
+-- UNIT_TEST_INOUT_PROC), which this script does not touch.
+--
+--   MS_TEST_TWO_RESULTS        two result sets with a row count between
+--   MS_TEST_ERROR_AFTER_FIRST  a result set, then THROW 50001
+--   MS_TEST_STR_OUT            an nvarchar(max) OUT of @P_LEN x U+00E9
+--   MS_TEST_INOUT              nvarchar(max) and int IN OUT
+--   MS_TEST_LOB_RESULT         a varbinary(max) column in a result set
+--
+-- Run as sa (creating procedures needs more than DATA_MANAGER has;
+-- DATA_MANAGER already has EXECUTE on the schema - S5). sqlcmd prompts
+-- for the password:
+--
+--   sqlcmd -S localhost -U sa -C -b -d DataManager \
+--          -i Create_Test_Procedures_mssql.sql
+--
+-- Safe to run any number of times (CREATE OR ALTER). Nothing in this
+-- file is a secret. Non-ASCII characters are written with NCHAR() so the
+-- file's own encoding never matters.
+-- ======================================================================
+
+:on error exit
+SET NOCOUNT ON;
+GO
+USE DataManager;
+GO
+
+-- Two result sets; between them a statement that reports a row count
+-- (SET NOCOUNT OFF) - the driver must skip that, not give it a CURSOR.
+-- Assigning a variable starts no transaction.
+CREATE OR ALTER PROCEDURE DATA_MANAGER.MS_TEST_TWO_RESULTS
+    @P_MIN_NUM  bigint
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT NUMBER_COL
+      FROM DATA_MANAGER.OCI_FIELD_TEST
+     WHERE NUMBER_COL >= @P_MIN_NUM
+     ORDER BY NUMBER_COL;
+
+    DECLARE @n int;
+    SET NOCOUNT OFF;
+    SELECT @n = 0;
+    SET NOCOUNT ON;
+
+    SELECT VARCHAR2_COL
+      FROM DATA_MANAGER.OCI_FIELD_TEST
+     WHERE NUMBER_COL >= @P_MIN_NUM
+     ORDER BY NUMBER_COL;
+END;
+GO
+
+-- A result set first, then an error: the error arrives at the driver's
+-- SQLMoreResults, not at SQLExecute.
+CREATE OR ALTER PROCEDURE DATA_MANAGER.MS_TEST_ERROR_AFTER_FIRST
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT 1 AS N;
+    THROW 50001, N'MS_TEST_ERROR_AFTER_FIRST: deliberate error after the first result set', 1;
+END;
+GO
+
+-- @P_LEN characters U+00E9 (2 bytes each in UTF-8). 100 fits the
+-- gateway's OUT buffer; 20000 (40000 bytes) does not and must fail.
+CREATE OR ALTER PROCEDURE DATA_MANAGER.MS_TEST_STR_OUT
+    @P_LEN  int,
+    @P_OUT  nvarchar(max) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @P_OUT = REPLICATE(CAST(NCHAR(233) AS nvarchar(max)), @P_LEN);
+END;
+GO
+
+-- IN OUT text and int: text + ' ' + U+2713, number + 1. NULL stays NULL.
+CREATE OR ALTER PROCEDURE DATA_MANAGER.MS_TEST_INOUT
+    @P_TEXT  nvarchar(max) OUTPUT,
+    @P_NUM   int OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @P_TEXT = @P_TEXT + N' ' + NCHAR(10003);
+    SET @P_NUM  = @P_NUM + 1;
+END;
+GO
+
+-- A BLOB in a result set: seed photo 2 (Emily_big_hug.jpg).
+CREATE OR ALTER PROCEDURE DATA_MANAGER.MS_TEST_LOB_RESULT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT ID, FILE_NAME, PHOTO
+      FROM DATA_MANAGER.OCI_LOB_TEST
+     WHERE ID = 2;
+END;
+GO
+
+PRINT 'ok      MS_TEST_ procedures (5)';
+GO

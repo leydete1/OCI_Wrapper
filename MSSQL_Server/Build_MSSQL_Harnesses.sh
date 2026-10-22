@@ -1,7 +1,7 @@
 #!/bin/bash
 # ======================================================================
 # Build_MSSQL_Harnesses.sh  (driver_mssql Stage 2, P10; Stage 3, T10;
-#                            Stage 4, U8; Stage 5, W7)
+#                            Stage 4, U8; Stage 5, W7; Stage 6, X8)
 #
 # Builds and runs the SQL Server driver harnesses with AddressSanitizer,
 # writing each run to logs/MSSQL_Driver_<name>_Test.log - the file names
@@ -15,11 +15,14 @@
 #   DML, LOB_Write,        Stage 4 - INSERT/UPDATE/DELETE with OUTPUT keys,
 #   Transaction                      LOB writes, deadlock and lock timeout
 #   LOB_Select             Stage 5 - long columns in SELECT (files, inline)
+#   Procedure              Stage 6 - stored procedures: OUT values, result
+#                                    sets as CURSOR parameters
 #
 # Usage:  MSSQL_Server/Build_MSSQL_Harnesses.sh [config_mssql.ini]
 # Needs:  unixodbc-dev, msodbcsql18, the DataManager database
 #         (Create_MSSQL_Test_Objects.sql, then
-#         Reset_Tester_Objects_mssql.sql for the OCI_FIELD_TEST seed rows),
+#         Reset_Tester_Objects_mssql.sql for the OCI_FIELD_TEST seed rows,
+#         Create_Test_Procedures_mssql.sql for the test procedures),
 #         Props/config_mssql.ini with the real DATA_MANAGER password.
 # ======================================================================
 set -u
@@ -84,7 +87,7 @@ done
 COMMON="$ROOT/src/execute/driver_mssql.c $ROOT/src/infra/MSSQL_Pool.c \
         $ROOT/src/execute/mssql_dialect.c $ROOT/src/execute/mssql_select.c \
         $ROOT/src/execute/mssql_metadata.c $ROOT/src/execute/mssql_dml.c \
-        $ROOT/src/execute/mssql_text.c \
+        $ROOT/src/execute/mssql_text.c $ROOT/src/execute/mssql_proc.c \
         $RESULTSET_BUILDER $DB_TYPE_CLASS $BLOB_UTILS $CLOB_UTILS \
         $MIME_SHIM \
         $ROOT/src/infra/ini_reader.c $ROOT/src/infra/logger.c $ROOT/src/core/ctx_utils.c"
@@ -94,7 +97,7 @@ export ASAN_OPTIONS="detect_leaks=1"
 export LSAN_OPTIONS="suppressions=$ROOT/MSSQL_Server/lsan_mssql.supp:print_suppressions=1"
 
 rc=0
-for name in Connect Pool Dialect Select Metadata DML LOB_Write Transaction LOB_Select; do
+for name in Connect Pool Dialect Select Metadata DML LOB_Write Transaction LOB_Select Procedure; do
     src="$ROOT/src/Drivers/MSSQL/MSSQL_Driver_${name}_Test.c"
     exe="$BIN/MSSQL_Driver_${name}_Test"
     log="$LOGS/MSSQL_Driver_${name}_Test.log"
