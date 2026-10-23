@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Verification query for Round 9 - run this AFTER Round 9 completes.
+
+ What to actually check in the response, not just "did it return 200":
+   - BOTH rows (NUMBER_COL 901 and 902) must appear.
+   - BOTH rows' BLOB_COL field must show real LOB metadata
+     (file_name/file_path/file_size) - NOT empty. Under the old bug,
+     row 902 would come back with an empty/unpopulated BLOB_COL,
+     silently, with no error anywhere in the response or logs.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_verify_round_9</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)</sql>
+        </operation>
+    </transaction>
+</request>

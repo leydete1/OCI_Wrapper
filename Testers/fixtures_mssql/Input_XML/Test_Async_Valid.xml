@@ -1,0 +1,11 @@
+<request version="1.0">
+  <external_audit_id>audit_stub_async_valid</external_audit_id>
+  <session_id>-</session_id>
+  <transaction required="1">
+    <operation type="SELECT">
+      <sql>SELECT * FROM OCI_FIELD_TEST</sql>
+      <execute_async>1</execute_async>
+      <async_call_back_url>https://webhook.site/311aaf77-9574-4183-9f0a-a856589aebe6/callback</async_call_back_url>
+    </operation>
+  </transaction>
+</request>

@@ -1,0 +1,13 @@
+{
+    "external_audit_id": "audit_stub_select_3",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT FLOAT_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (4242, 4243, 4244) ORDER BY NUMBER_COL"
+            }
+        ]
+    }
+}

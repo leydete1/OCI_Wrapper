@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - Negative test: ALTER is not valid on a VIEW
+ Expected: validate_grant_request() returns -1 with
+ GRANT_PRIVILEGE_NOT_VALID_FOR_VIEW (ALTER is table-only in Oracle).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_grant_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="GRANT">
+            <grantee>MIGRATOR_USER</grantee>
+            <object_type>VIEW</object_type>
+            <object_name>EMP_VIEW</object_name>
+            <owner>DATA_MANAGER</owner>
+            <privileges>
+                <privilege>SELECT</privilege>
+                <privilege>ALTER</privilege>
+            </privileges>
+        </operation>
+    </transaction>
+</request>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 3 - CHECK_PERMISSION, unknown/never-authenticated session_id
+ No real session needed for this one - it proves an unknown session_id
+ is refused cleanly rather than crashing or returning ALLOWED. Safe to
+ run via the standard Run.sh HTTP tester or File Consumer as-is, no
+ substitution needed.
+
+ Expected result depends on session_validation_enabled (config.ini):
+   1 (the tester's setting): error_code SESSION_NOT_FOUND - dispatcher
+     session validation rejects the request before CHECK_PERMISSION
+     runs, so the permission cache is never consulted.
+   0: <result>DENIED</result>, and in security_Data_Manager.log
+     "no cached permission list (unknown, expired, or
+     never-authenticated session)" - the cache-miss path, separate
+     from Round 2's real-but-ungranted-permission denial.
+
+ 2026-10-13 (fix-22 point 20): this comment used to describe only the
+ second case.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_check_permission_round_3</external_audit_id>
+    <session_id>00000000-0000-0000-0000-000000000000</session_id>
+    <transaction required="0">
+        <operation type="CHECK_PERMISSION">
+            <permission_code>CUSTOMER.READ</permission_code>
+        </operation>
+    </transaction>
+</request>

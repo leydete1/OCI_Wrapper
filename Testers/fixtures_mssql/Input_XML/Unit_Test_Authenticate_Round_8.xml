@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 8 - AUTHENTICATE, delegated LDAP source, success case
+ Requires Seed_LDAP_Test_Source.txt AND the Docker OpenLDAP test
+ container (with test_user.ldif loaded) to both be running first.
+ Expect: <status>SUCCESS</status>, a real session_id, display_name
+ "LDAP Test User". Confirms auth_authenticate() correctly bypasses
+ crypt_verify_password() entirely for a non-LOCAL source and instead
+ performs a real LDAP bind via ldap_auth_helper.c.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_8</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>ldap.test.user</username>
+            <credential>LdapTest!2026</credential>
+        </operation>
+    </transaction>
+</request>

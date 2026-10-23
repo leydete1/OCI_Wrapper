@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Verification query for Round 5 - run this AFTER Round 5 completes.
+
+ Check that BOTH rows (NUMBER_COL 501 and 502) show their OWN,
+ DIFFERENT CLOB_COL text - "CLOB content row 1..." and "CLOB content
+ row 2..." respectively. Under the old bug, row 502's CLOB_COL would
+ come back empty, since only row_base (row 501) ever had its LOB
+ content written.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_verify_round_5</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (501, 502) ORDER BY NUMBER_COL</sql>
+        </operation>
+    </transaction>
+</request>

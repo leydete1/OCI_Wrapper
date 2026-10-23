@@ -1,0 +1,15 @@
+{
+    "external_audit_id": "select_integration_test_async_json_20260914",
+    "session_id": "-",
+    "transaction": {
+        "required": 0,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)",
+                "execute_async": true,
+                "async_call_back_url": "https://webhook.site/REPLACE-WITH-YOUR-OWN-ID"
+            }
+        ]
+    }
+}

@@ -1,0 +1,13 @@
+{
+    "external_audit_id": "audit_stub_check_permission_round_2",
+    "session_id": "PASTE_REAL_SESSION_ID_HERE",
+    "transaction": {
+        "required": 0,
+        "operations": [
+            {
+                "type": "CHECK_PERMISSION",
+                "permission_code": "CUSTOMER.WRITE"
+            }
+        ]
+    }
+}

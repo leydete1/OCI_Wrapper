@@ -1,0 +1,41 @@
+{
+    "external_audit_id": "select_integration_test_json_20260914",
+    "session_id": "-",
+    "transaction": {
+        "required": 0,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = 1"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT * FROM OCI_LOB_TEST ORDER BY ID"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT ID, DESCRIPTION, FILE_NAME, PHOTO FROM OCI_LOB_TEST ORDER BY ID"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT ID, DESCRIPTION, FILE_NAME, LARGE_CLOB FROM OCI_CLOB_TEST ORDER BY ID"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (4243, 4244) ORDER BY NUMBER_COL"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = -999999"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = 1"
+            },
+            {
+                "type": "SELECT",
+                "sql": "SELECT OCI_LOB_TEST.* , PHOTO AS Second_Blob , PHOTO AS Third_Blob FROM OCI_LOB_TEST order by 1"
+            }
+        ]
+    }
+}

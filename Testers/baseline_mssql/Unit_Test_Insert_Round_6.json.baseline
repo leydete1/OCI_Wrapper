@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_insert_round_6","operation":"-","error_code":"LEVEL2_FIELD_INVALID","error_text":"Row 1: Field 'VARCHAR2_COL': value length 160 exceeds VARCHAR2(100)"}

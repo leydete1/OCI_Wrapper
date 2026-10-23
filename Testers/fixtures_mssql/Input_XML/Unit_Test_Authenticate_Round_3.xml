@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 3 - AUTHENTICATE, unknown username
+ No seed data needed - this username should not exist.
+ Expect: <status>DENIED</status>, identical in shape to Round 2's
+ response (Security_Module_Design_Specification.docx Section 5 - a
+ single generic denial, never distinguishing "no such user" from "wrong
+ password" to the caller). Diff Round 2's and Round 3's response
+ bodies to confirm they really are indistinguishable.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_3</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>no.such.user.exists</username>
+            <credential>DoesNotMatterWhatThisIs</credential>
+        </operation>
+    </transaction>
+</request>

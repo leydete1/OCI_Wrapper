@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<request version="1.0">
+    <external_audit_id>audit_stub_select_2_blobs</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+
+        <operation type="SELECT">
+            <sql>
+                SELECT OCI_LOB_TEST.*  FROM OCI_LOB_TEST order by 1
+            </sql>
+        </operation>
+
+    </transaction>
+</request>

@@ -1,0 +1,15 @@
+{
+    "external_audit_id": "audit_stub_droptable_round_3",
+    "session_id": "-",
+    "transaction": {
+        "required": 0,
+        "operations": [
+            {
+                "type": "DROP_TABLE",
+                "table_name": "MIGRATION_LOG",
+                "owner": "DATA_MANAGER",
+                "cascade_constraints": 1
+            }
+        ]
+    }
+}

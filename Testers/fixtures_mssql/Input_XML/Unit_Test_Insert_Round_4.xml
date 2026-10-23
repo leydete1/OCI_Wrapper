@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 4 - CLOB from file:// path
+ value starts with "file://" -> read from disk.
+ Update the path below to a text file that exists on your system.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_4</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>400</value></field>
+                <field><field_name>CLOB_COL</field_name><value>file:///home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test_clob.txt</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

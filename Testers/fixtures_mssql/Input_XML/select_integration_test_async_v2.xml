@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ select_integration_test_async_v2.xml
+
+ Phase 2b (async integration) stress test - XML input, exercises the
+ XML batch-envelope branch specifically (ReturnFormat mirrors input
+ format - see dispatcher.c).
+
+ Deliberately picks a query with BOTH a BLOB and a CLOB column: CLOB
+ forces batch_size down to 1 (the array-fetch quirk), so 5 truncated
+ rows means 5 SEPARATE batches get delivered via the callback, not one -
+ this is what actually exercises the multi-batch loop, is_final_batch
+ only firing true on the last one, and blobs_extracted/clobs_extracted
+ accumulating correctly batch-by-batch rather than a trivial single-
+ batch case that wouldn't prove much.
+
+ Same query already used in op5 of select_integration_tests.xml and the
+ original async test file, chosen again deliberately - lets you compare
+ this run's per-batch envelope content directly against last time's
+ output on webhook.site for the exact same underlying data.
+
+ REPLACE THE PLACEHOLDER URL BELOW before running.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>select_integration_test_async_v2_xml_20260915</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)</sql>
+            <execute_async>1</execute_async>
+            <async_call_back_url>https://webhook.site/REPLACE-WITH-YOUR-OWN-ID</async_call_back_url>
+        </operation>
+    </transaction>
+</request>

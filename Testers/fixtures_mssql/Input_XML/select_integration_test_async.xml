@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ select_integration_test_async.xml
+
+ Separate file, deliberately - Level 2 requires execute_async=1 to be
+ the SOLE operation in its transaction (see OCI_Level2_Parser.c's own
+ validation), so this cannot be combined into
+ select_integration_tests.xml's 8-operation transaction.
+
+ This is the most important negative test in the whole matrix: it
+ confirms the async branch genuinely wasn't disturbed by wrapping it in
+ if(is_async){...} - it should behave byte-for-byte identically to
+ before this integration, since none of its own code was touched.
+
+ REPLACE THE PLACEHOLDER URL BELOW before running - e.g. a fresh
+ https://webhook.site/<your-id> URL, so you can actually see what gets
+ delivered. async_call_back_url must be non-empty and https:// or
+ Level 2 will reject the request outright (by design).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>select_integration_test_async_20260914</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)</sql>
+            <execute_async>1</execute_async>
+            <async_call_back_url>https://webhook.site/REPLACE-WITH-YOUR-OWN-ID</async_call_back_url>
+        </operation>
+    </transaction>
+</request>

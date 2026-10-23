@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Unit_Test_Procedure_Round_1.xml
+ Scalar IN + scalar OUT test.
+ Calls a procedure that takes a department ID and returns a status code.
+
+ Example Oracle procedure this test targets:
+ CREATE OR REPLACE PROCEDURE DATA_MANAGER.GET_DEPT_STATUS (
+     P_DEPT_ID   IN  NUMBER,
+     P_STATUS    OUT INTEGER
+ ) AS
+ BEGIN
+     SELECT COUNT(*) INTO P_STATUS
+     FROM   OCI_FIELD_TEST
+     WHERE  NUMBER_COL = P_DEPT_ID;
+ END;
+
+ Expected log markers:
+   Stage 4: Executing PL/SQL block
+   PL/SQL execute OK elapsed=...
+   OUT param 'P_STATUS' type='INTEGER' value='...'
+   execute_procedure complete
+
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+ The <parameters><parameter> shape is unchanged from the old format -
+ Level 1 already parsed this exact shape before the refactor, only the
+ surrounding envelope and <operation type="..."> attribute are new.
+
+ Note: P_DEPT_ID=42 - if the row with NUMBER_COL=42 has since been
+ deleted by earlier Delete testing, P_STATUS will correctly return 0
+ rather than a non-zero count - not a failure, just reflects current
+ table state.
+
+ 2026-07-31 fix: the original old-format version of this fixture had a
+ run of hyphens as a section separator, which is invalid inside an XML
+ comment (XML forbids two adjacent hyphens anywhere in a comment, not
+ just at its boundaries) - never caught before since the old parser
+ never actually validated well-formed XML, just did substring
+ extraction. Removed here since the new pipeline uses real XML parsing
+ (libxml2).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_procedure_round_1</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="EXECUTE_PROCEDURE">
+            <procedure_name>GET_DEPT_STATUS</procedure_name>
+            <owner>DATA_MANAGER</owner>
+            <parameters>
+
+                <parameter>
+                    <param_name>P_DEPT_ID</param_name>
+                    <param_type>NUMBER</param_type>
+                    <param_direction>IN</param_direction>
+                    <param_value>42</param_value>
+                </parameter>
+
+                <parameter>
+                    <param_name>P_STATUS</param_name>
+                    <param_type>INTEGER</param_type>
+                    <param_direction>OUT</param_direction>
+                    <param_value></param_value>
+                </parameter>
+
+            </parameters>
+        </operation>
+    </transaction>
+</request>

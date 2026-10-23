@@ -1,0 +1,18 @@
+<request version="1.0">
+  <external_audit_id>audit_stub_async_mixed_tx</external_audit_id>
+  <session_id>-</session_id>
+  <transaction required="1">
+    <operation type="SELECT">
+      <sql>SELECT * FROM OCI_FIELD_TEST</sql>
+      <execute_async>1</execute_async>
+      <async_call_back_url>https://example.com/callback</async_call_back_url>
+    </operation>
+    <operation type="INSERT">
+      <table_name>OCI_FIELD_TEST</table_name>
+      <owner>DATA_MANAGER</owner>
+      <row number="1">
+        <field><field_name>NUMBER_COL</field_name><value>999</value></field>
+      </row>
+    </operation>
+  </transaction>
+</request>

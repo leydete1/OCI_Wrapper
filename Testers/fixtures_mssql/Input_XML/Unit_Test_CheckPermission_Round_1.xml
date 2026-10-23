@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 1 - CHECK_PERMISSION, granted permission, expect ALLOWED
+
+ IMPORTANT - this fixture CANNOT be run via the standard Run.sh HTTP
+ tester the way every other fixture is. Run.sh's tester creates ONE
+ shared session via a plain CREATE_SESSION at the start of the whole
+ run and splices that same session_id into every fixture automatically
+ - but authz_build_permission_cache() only runs inside auth_authenticate()
+ (Stage 5), never for a plain CREATE_SESSION. That shared session_id
+ has no permission cache entry at all, so it would always come back
+ DENIED here regardless of what Seed_Authz_Test_Data.txt grants.
+
+ Use test_check_permission.sh instead - it authenticates first (which
+ DOES build the permission cache) and splices that real session_id in
+ automatically. This file is kept for reference / File Consumer style
+ manual testing, with a literal placeholder below that you must
+ replace with a session_id taken from an actual AUTHENTICATE response.
+
+ Requires Seed_Authz_Test_Data.txt to have been run BEFORE the
+ AUTHENTICATE call that produces the session_id you paste in below -
+ permission grants only take effect on the NEXT login, not mid-session
+ (Security_Module_Design_Specification.docx Section 6.6).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_check_permission_round_1</external_audit_id>
+    <session_id>PASTE_REAL_SESSION_ID_HERE</session_id>
+    <transaction required="0">
+        <operation type="CHECK_PERMISSION">
+            <permission_code>CUSTOMER.READ</permission_code>
+        </operation>
+    </transaction>
+</request>

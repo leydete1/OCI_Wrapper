@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_createuser_round_2</audit_id>
+<operation>-</operation>
+<error_code>LEVEL2_FIELD_INVALID</error_code>
+<error_text>Invalid quota &apos;5GB&apos; for user &apos;BAD_QUOTA_USER&apos;: expected UNLIMITED or &lt;digits&gt;[K|M|G]</error_text>
+</execution_envelope>
+</output_xml>

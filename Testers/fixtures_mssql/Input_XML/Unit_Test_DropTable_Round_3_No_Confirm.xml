@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 3 - Negative test: DROP_TABLE with no <confirm> (defaults to 0)
+ Exercises the execute-stage safety gate added 07-Sep/08-Sep.
+ Expected: dispatch_drop_table_new() refuses to call
+ execute_ddl_statement() at all - error_code "CONFIRM_REQUIRED",
+ no DDL executed, DATA_MANAGER.MIGRATION_LOG untouched.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_droptable_round_3</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="DROP_TABLE">
+            <table_name>MIGRATION_LOG</table_name>
+            <owner>DATA_MANAGER</owner>
+            <cascade_constraints>1</cascade_constraints>
+        </operation>
+    </transaction>
+</request>

@@ -1,0 +1,15 @@
+{
+    "external_audit_id": "audit_stub_async_valid_json",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT * FROM OCI_FIELD_TEST",
+                "execute_async": 1,
+                "async_call_back_url": "https://webhook.site/8180c514-d288-49c7-bfed-2c238c3b51cb"
+            }
+        ]
+    }
+}

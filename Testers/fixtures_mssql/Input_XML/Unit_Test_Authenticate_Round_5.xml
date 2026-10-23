@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 5 - AUTHENTICATE, correct credential, account locked
+ 'auth.test.locked' is locked by Reset_Tester_Objects.sql before each
+ run (LOCKED=Y). The credential is the CORRECT one (same hash as
+ auth.test.user, "Str0ng!TestPass2026") - proves LOCKED is checked
+ ahead of the password verify, and that there is no automatic unlock
+ (Security_Module_Design_Specification.docx Section 5/12 - manual
+ administrator reset only).
+
+ 2026-10-10 (fix-22 point 14): this used 'auth.test.nearlock' and
+ relied on Round 4 locking it first; under the parallel tester the
+ order is not guaranteed, and the baseline had caught a SUCCESS.
+ Expected: <status>ERROR</status>, error_code DENIED.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_5</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.locked</username>
+            <credential>Str0ng!TestPass2026</credential>
+        </operation>
+    </transaction>
+</request>

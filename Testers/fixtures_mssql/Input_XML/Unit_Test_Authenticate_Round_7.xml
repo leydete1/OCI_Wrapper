@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 7 - AUTHENTICATE, missing credential - Level 2 rejection
+ No seed data needed - this should never reach auth_authenticate() at
+ all. Exercises level2_validate_authenticate()'s LEVEL2_ERR_FIELD_
+ INVALID path (OCI_Level2_Parser.c) rather than a real denial.
+ Expect: request rejected at Level 2, distinct error code/text from
+ the AUTHENTICATE-specific DENIED status the other rounds produce -
+ check dispatcher/security logs to confirm this never logged a
+ "bad credential" or "no such user" line, only a Level 2 validation
+ failure line.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_7</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.user</username>
+            <credential></credential>
+        </operation>
+    </transaction>
+</request>

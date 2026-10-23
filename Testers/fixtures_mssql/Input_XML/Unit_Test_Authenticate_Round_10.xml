@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 10 - AUTHENTICATE, delegated LDAP source, server unreachable
+ Run this with the Docker OpenLDAP container STOPPED
+ (docker stop openldap-test), or point a temporary AUTH_SOURCE row at
+ an unused port to simulate this without disrupting Round 8/9's setup.
+ Expect: <status>DENIED</status>, returned within a few seconds (bound
+ by LDAP_AUTH_BIND_TIMEOUT_SECONDS=5 in ldap_auth_helper.c), not a
+ hang. This is the test that proves the timeout actually works -
+ without it, an unreachable directory server could block a dispatcher
+ worker thread indefinitely.
+ Remember to restart the container afterward:
+ docker start openldap-test
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_10</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>ldap.test.user</username>
+            <credential>LdapTest!2026</credential>
+        </operation>
+    </transaction>
+</request>

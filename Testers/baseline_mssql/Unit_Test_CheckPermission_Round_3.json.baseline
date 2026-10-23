@@ -1,0 +1,1 @@
+{"status":"ERROR","audit_id":"audit_stub_check_permission_round_3","operation":"SESSION_VALIDATION","error_code":"SESSION_NOT_FOUND","error_text":"The session_id on this request is missing, unknown, or expired - a valid session is required before this request can be processed."}

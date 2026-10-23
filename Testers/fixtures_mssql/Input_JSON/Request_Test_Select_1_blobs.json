@@ -1,0 +1,13 @@
+{
+    "external_audit_id": "audit_stub_select_1_blobs",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT OCI_LOB_TEST.* , PHOTO AS Second_Blob , PHOTO AS Third_Blob FROM OCI_LOB_TEST order by 1"
+            }
+        ]
+    }
+}

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 9 - Multi-row bulk: scalar + BLOB, 2 rows in ONE batch
+ Regression test for the 2026-08-25 fix: previously, any multi-row
+ INSERT batch containing a BLOB/CLOB column only ever wrote the FIRST
+ row's LOB content - every other row in the same batch was silently
+ left as an unfilled EMPTY_BLOB(), with no error at all. Round 5
+ (CLOB) has always exercised the same shape by accident - its own
+ comment assumed a "CLOB guard" would force single-row execution,
+ which never actually existed in the code - but nobody had verified
+ row 2's actual content until now.
+
+ Use a DIFFERENT file for row 2 if you have one handy - makes it
+ easier to visually confirm row 2 genuinely got its OWN content,
+ not row 1's or nothing at all. Reusing test.bin for both is fine
+ too, just less visually distinguishable when checking output.
+
+ Update the path(s) below to files that exist on your system.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_insert_round_9</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="INSERT">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <row number="1">
+                <field><field_name>NUMBER_COL</field_name><value>901</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 9 multi-row BLOB row 1</value></field>
+                <field><field_name>BLOB_COL</field_name><value>/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test.bin</value></field>
+            </row>
+            <row number="2">
+                <field><field_name>NUMBER_COL</field_name><value>902</value></field>
+                <field><field_name>VARCHAR2_COL</field_name><value>Round 9 multi-row BLOB row 2</value></field>
+                <field><field_name>BLOB_COL</field_name><value>/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test.bin</value></field>
+            </row>
+        </operation>
+    </transaction>
+</request>

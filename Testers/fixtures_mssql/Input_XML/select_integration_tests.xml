@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ select_integration_tests.xml
+
+ Drop into file_consumer's Input_XML directory (consumer_file.ini:
+ file_consumer.input_xml_dir). 8 SELECT operations in one transaction -
+ supported since <operation> is a dynamically-sized array (see
+ OCI_Level1_Parser.c), not a fixed slot count.
+
+ query_max_record_count=5 in the real config.ini - several operations
+ below are deliberately sized against that, so truncation gets
+ exercised naturally rather than needing its own separate case:
+   op2 (6 rows -> 5), op3 (6 rows -> 5, with a real BLOB column present
+   too), op5 (1274 rows -> 5, the heaviest stress case).
+ op4 is the boundary case instead - exactly 5 rows, so it should NOT
+ truncate - worth checking <truncated> is false there specifically.
+
+ NOT included here: the async case (execute_async=1) - Level 2 requires
+ it be the sole operation in its own transaction, so it's a separate
+ file - see select_integration_test_async.xml.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>select_integration_test_20260914</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+
+        <!-- op1: simple scalar baseline -->
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = 1</sql>
+        </operation>
+
+        <!-- op2: SELECT * wildcard - Phase B reconciliation now reads
+             column names from the driver's own describe output instead
+             of doing its own separate OCIParamGet loop. 6 real rows,
+             truncates to 5. -->
+        <operation type="SELECT">
+            <sql>SELECT * FROM OCI_LOB_TEST ORDER BY ID</sql>
+        </operation>
+
+        <!-- op3: real BLOB column, same table, also truncates to 5 -
+             confirms <blobs_extracted> and metrics.lob_bytes stay
+             correct even when combined with truncation. -->
+        <operation type="SELECT">
+            <sql>SELECT ID, DESCRIPTION, FILE_NAME, PHOTO FROM OCI_LOB_TEST ORDER BY ID</sql>
+        </operation>
+
+        <!-- op4: real CLOB column, exactly 5 rows - boundary case,
+             should NOT truncate. Exercises the batch_size downgrade to
+             1 (CLOB array-fetch quirk) through the real integration,
+             not just the standalone cursor test. -->
+        <operation type="SELECT">
+            <sql>SELECT ID, DESCRIPTION, FILE_NAME, LARGE_CLOB FROM OCI_CLOB_TEST ORDER BY ID</sql>
+        </operation>
+
+        <!-- op5: mixed BLOB+CLOB in one query, 1274 real rows (same
+             query that already stress-tested the standalone driver) -
+             heaviest truncation case, and exercises the
+             alloc_batch_size fix under real response/cache/metrics. -->
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL, CLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (4243, 4244) ORDER BY NUMBER_COL</sql>
+        </operation>
+
+        <!-- op6: zero rows - the "record_count=0 is valid, not an
+             error" path. -->
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = -999999</sql>
+        </operation>
+
+        <!-- op7: identical SQL to op1, verbatim - should be a resultset
+             cache HIT (confirms caching still works and correctly
+             bypasses the driver entirely on a hit). -->
+        <operation type="SELECT">
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL = 1</sql>
+        </operation>
+
+        <!-- op8: wildcard + explicit duplicate-aliased BLOB columns in
+             the same query - Phase B's trickiest branch (mixed
+             wildcard/explicit field budget accounting) plus multiple
+             BLOB fields per row. Same query already used in the CLOB
+             extraction's own before/after comparison. -->
+        <operation type="SELECT">
+            <sql>SELECT OCI_LOB_TEST.* , PHOTO AS Second_Blob , PHOTO AS Third_Blob FROM OCI_LOB_TEST order by 1</sql>
+        </operation>
+
+    </transaction>
+</request>

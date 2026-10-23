@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - Negative test: malformed quota
+ Expected: validate_create_user_request() returns -1 with
+ DDL_QUOTA_INVALID (quota "5GB" is not UNLIMITED or <digits>[K|M|G]).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_createuser_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="CREATE_USER">
+            <username>BAD_QUOTA_USER</username>
+            <identified_by>Round2PlainPwd</identified_by>
+            <default_tablespace>USERS</default_tablespace>
+            <quota>5GB</quota>
+        </operation>
+    </transaction>
+</request>

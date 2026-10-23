@@ -1,0 +1,7 @@
+<auth>
+  <operation>AUTHENTICATE</operation>
+  <status>SUCCESS</status>
+  <session_id>43539a99-4b8b-42bc-9998-a451d338dfc8</session_id>
+  <display_name>Auth Test User</display_name>
+  <ttl_seconds>1800</ttl_seconds>
+</auth>

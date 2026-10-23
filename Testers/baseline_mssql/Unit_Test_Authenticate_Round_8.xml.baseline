@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_authenticate_round_8</audit_id>
+<operation>AUTHENTICATE</operation>
+<error_code>DENIED</error_code>
+<error_text>Authentication failed</error_text>
+</execution_envelope>
+</output_xml>

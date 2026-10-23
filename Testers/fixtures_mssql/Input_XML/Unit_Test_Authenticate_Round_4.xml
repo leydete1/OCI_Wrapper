@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 4 - AUTHENTICATE, lockout threshold trip
+ Requires Seed_Auth_Test_Users.txt to have been run first -
+ 'auth.test.nearlock' starts at FAILED_ATTEMPTS=4, one below
+ config.ini's auth_max_failed_attempts default of 5.
+ Expect: <status>DENIED</status> AND, as a side effect, APP_USER for
+ 'auth.test.nearlock' should now show FAILED_ATTEMPTS=5, LOCKED='Y',
+ LOCKED_TS populated. Run Round 5 immediately after this to confirm a
+ CORRECT credential is still denied once locked.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_4</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.nearlock</username>
+            <credential>StillTheWrongPassword</credential>
+        </operation>
+    </transaction>
+</request>

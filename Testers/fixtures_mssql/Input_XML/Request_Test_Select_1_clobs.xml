@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<request version="1.0">
+    <external_audit_id>audit_stub_select_1_clobs</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+        <operation type="SELECT">
+            <sql>
+                SELECT *  FROM OCI_CLOB_TEST  order by 1
+            </sql>
+        </operation>
+    </transaction>
+</request>

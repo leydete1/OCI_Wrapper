@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 1 - AUTHENTICATE, LOCAL source, success case
+ Requires Seed_Auth_Test_Users.txt to have been run first.
+ Expect: <status>SUCCESS</status>, a real session_id, display_name
+ "Auth Test User", ttl_seconds > 0. Also expect FAILED_ATTEMPTS to
+ remain 0 and LAST_LOGIN_TS to be stamped on APP_USER afterwards.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_1</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.user</username>
+            <credential>Str0ng!TestPass2026</credential>
+        </operation>
+    </transaction>
+</request>

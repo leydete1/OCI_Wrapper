@@ -1,0 +1,24 @@
+{
+    "external_audit_id": "audit_stub_insert_round_2",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "INSERT",
+                "table_name": "OCI_FIELD_TEST",
+                "owner": "DATA_MANAGER",
+                "rows": [
+                    {
+                        "row_number": 1,
+                        "fields": [
+                            { "field_name": "NUMBER_COL",   "value": "200" },
+                            { "field_name": "VARCHAR2_COL", "value": "Round 2 BLOB test" },
+                            { "field_name": "BLOB_COL",     "value": "/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test.bin" }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

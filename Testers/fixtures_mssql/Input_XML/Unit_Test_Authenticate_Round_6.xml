@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 6 - AUTHENTICATE, disabled account, correct credential
+ Requires Seed_Auth_Test_Users.txt to have been run first.
+ Credential here is deliberately correct - proves ENABLED='N' is
+ checked ahead of the password verify.
+ Expect: <status>DENIED</status> despite the correct password.
+ FAILED_ATTEMPTS for 'auth.test.disabled' should NOT increment - a
+ disabled-account denial happens before record_auth_failure() is ever
+ reached (see auth_authenticate()'s ordering in OCI_Auth_Manager.c).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_6</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.disabled</username>
+            <credential>Str0ng!TestPass2026</credential>
+        </operation>
+    </transaction>
+</request>

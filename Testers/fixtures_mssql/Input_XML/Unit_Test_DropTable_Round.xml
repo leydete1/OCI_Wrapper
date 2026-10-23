@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - Negative test: table_name starts with a digit
+ Expected: validate_drop_table_request() returns -1 with
+ DROP_TABLE_NAME_INVALID (Oracle identifiers can't start with a digit).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_droptable_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="DROP_TABLE">
+            <table_name>1_BAD_NAME</table_name>
+            <owner>HR</owner>
+        </operation>
+    </transaction>
+</request>

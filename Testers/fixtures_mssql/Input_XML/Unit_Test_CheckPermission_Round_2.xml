@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - CHECK_PERMISSION, ungranted permission, expect DENIED
+ Same session_id caveat as Round 1 - see that file's own comment.
+ CUSTOMER.WRITE was deliberately never granted to TEST_ROLE
+ (Seed_Authz_Test_Data.txt) - proves authz_has_permission() denies a
+ permission that genuinely isn't in the cached list, not just that it
+ can return ALLOWED for one that is.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_check_permission_round_2</external_audit_id>
+    <session_id>PASTE_REAL_SESSION_ID_HERE</session_id>
+    <transaction required="0">
+        <operation type="CHECK_PERMISSION">
+            <permission_code>CUSTOMER.WRITE</permission_code>
+        </operation>
+    </transaction>
+</request>

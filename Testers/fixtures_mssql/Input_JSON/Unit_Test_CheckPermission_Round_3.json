@@ -1,0 +1,13 @@
+{
+    "external_audit_id": "audit_stub_check_permission_round_3",
+    "session_id": "00000000-0000-0000-0000-000000000000",
+    "transaction": {
+        "required": 0,
+        "operations": [
+            {
+                "type": "CHECK_PERMISSION",
+                "permission_code": "CUSTOMER.READ"
+            }
+        ]
+    }
+}

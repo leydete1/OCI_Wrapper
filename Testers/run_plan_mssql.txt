@@ -1,0 +1,82 @@
+# ======================================================================
+# run_plan.txt - HTTP tester run plan (2026-10-14, points d1-d3)
+#
+# Lives next to Run.sh in Testers/. The tester reads it at startup.
+#
+#   [solo]            run one at a time, in this order, BEFORE anything
+#                     else - they see the database exactly as
+#                     Reset_Tester_Objects.sql left it.
+#   [chain <name>]    run in this order, one after the other, on one
+#                     thread. Chains run alongside each other and
+#                     alongside every fixture not listed here.
+#
+# Every fixture listed here is compared strictly: any difference from
+# its baseline is a FAIL. End a line with the word  variance  to keep
+# the old tolerant rule for that one fixture.
+#
+# The XML and JSON versions of each round share their keys (both
+# Insert_Round_5 files insert 501 and 502, for example), so each pair
+# goes in the same chain. Then the shared keys do no harm and no
+# fixture file needs to change.
+#
+# A name here with no fixture file is a FAIL; a name listed twice stops
+# the tester before it starts. '#' starts a comment.
+# ======================================================================
+
+[solo]
+# Procedure R1 counts the rows with NUMBER_COL = 42 (seed only: 1);
+# R2 lists every row >= 1 (the four seed rows); R4 purges rows older
+# than a year (none). All three read rows the chains below change.
+Unit_Test_Procedure_Round_1.xml
+Unit_Test_Procedure_Round_1.json
+Unit_Test_Procedure_Round_2.xml
+Unit_Test_Procedure_Round_2.json
+Unit_Test_Procedure_Round_4.xml
+Unit_Test_Procedure_Round_4.json
+
+[chain r1]
+# 42 and 99 inserted twice, then every 42 row updated (seed + 2 = 3)
+Unit_Test_Insert_Round_1.xml
+Unit_Test_Insert_Round_1.json
+Unit_Test_Update_Scalar.xml
+Unit_Test_Update_Scalar.json
+
+[chain r2]
+# 200 inserted twice, BLOB updated twice, then both 200 rows deleted
+Unit_Test_Insert_Round_2.xml
+Unit_Test_Insert_Round_2.json
+Unit_Test_Update_Blob.xml
+Unit_Test_Update_Blob.json
+Unit_Test_Delete_Round_1.xml
+
+[chain r3]
+# 300 inserted twice, CLOB updated twice
+Unit_Test_Insert_Round_3.xml
+Unit_Test_Insert_Round_3.json
+Unit_Test_Update_Clob.xml
+Unit_Test_Update_Clob.json
+
+[chain r4]
+# 400 inserted twice, then both 400 rows deleted
+Unit_Test_Insert_Round_4.xml
+Unit_Test_Insert_Round_4.json
+Unit_Test_Delete_Round_1.json
+
+[chain r5]
+# 501/502 inserted, verified (exactly 2 rows), 502 deleted; then the
+# JSON round inserts 501/502 again and deletes both 501 rows
+Unit_Test_Insert_Round_5.xml
+Verify_Round_5_Clob.xml
+Unit_Test_Delete_Round_2.xml
+Unit_Test_Insert_Round_5.json
+Unit_Test_Delete_Round_2.json
+
+[chain r9]
+# 901/902 inserted with a BLOB, verified, then the async selects that
+# read the same two rows
+Unit_Test_Insert_Round_9.xml
+Verify_Round_9_Blob.xml
+select_integration_test_async.xml
+select_integration_test_async.json
+select_integration_test_async_v2.xml
+select_integration_test_async_v2.json

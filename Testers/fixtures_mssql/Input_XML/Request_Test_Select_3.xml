@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Request_Test_Select_3 - FLOAT column, a value and NULLs.
+ 2026-10-12 (fix-22 point 17): reads only the seed rows that
+ Reset_Tester_Objects.sql creates and no other fixture touches, in a
+ fixed order. Expected: 4.25, then NULL, NULL. The old SQL read the
+ whole table with no WHERE or ORDER BY, so which 5 rows came back
+ depended on what the other fixtures were doing at the time.
+-->
+<request version="1.0">
+    <external_audit_id>audit_stub_select_3</external_audit_id>
+    <session_id>-</session_id>
+
+    <transaction required="1">
+        <operation type="SELECT">
+            <sql>
+                SELECT FLOAT_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (4242, 4243, 4244) ORDER BY NUMBER_COL
+            </sql>
+        </operation>
+    </transaction>
+</request>

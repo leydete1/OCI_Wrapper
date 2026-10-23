@@ -1,0 +1,23 @@
+{
+    "external_audit_id": "audit_stub_insert_round_7",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "INSERT",
+                "table_name": "OCI_FIELD_TEST",
+                "owner": "DATA_MANAGER",
+                "rows": [
+                    {
+                        "row_number": 1,
+                        "fields": [
+                            { "field_name": "NUMBER_COL",        "value": "701" },
+                            { "field_name": "NOT_A_REAL_COLUMN", "value": "whatever" }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

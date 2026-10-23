@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - Negative test: DEFAULT on an OUT parameter
+ Expected: validate_create_procedure_request() returns -1 with
+ PROCEDURE_PARAM_DEFAULT_NOT_ALLOWED (Oracle only allows DEFAULT on IN
+ parameters).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_createprocedure_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="CREATE_PROCEDURE">
+            <procedure_name>BAD_PROC</procedure_name>
+            <owner>DATA_MANAGER</owner>
+            <parameters>
+                <parameter>
+                    <name>P_LOG_ID</name>
+                    <data_type>NUMBER</data_type>
+                    <mode>OUT</mode>
+                    <default_value>0</default_value>
+                </parameter>
+            </parameters>
+            <body>NULL;</body>
+        </operation>
+    </transaction>
+</request>

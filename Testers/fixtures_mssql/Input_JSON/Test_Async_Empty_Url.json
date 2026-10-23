@@ -1,0 +1,14 @@
+{
+    "external_audit_id": "audit_stub_async_empty_url_json",
+    "session_id": "-",
+    "transaction": {
+        "required": 1,
+        "operations": [
+            {
+                "type": "SELECT",
+                "sql": "SELECT * FROM OCI_FIELD_TEST",
+                "execute_async": 1
+            }
+        ]
+    }
+}

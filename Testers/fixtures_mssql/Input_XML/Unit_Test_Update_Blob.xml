@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Update BLOB Test
+ WHERE NUMBER_COL=200 identifies the row (created by Insert Round 2).
+ SET VARCHAR2_COL (scalar) and BLOB_COL (file path) together - mixed
+ scalar + BLOB update in one SET clause.
+ New request-envelope format per Data_Manager_Request_Definitions.docx.
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_update_blob</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="1">
+        <operation type="UPDATE">
+            <table_name>OCI_FIELD_TEST</table_name>
+            <owner>DATA_MANAGER</owner>
+            <where>
+                <key><field_name>NUMBER_COL</field_name><key_value>200</key_value></key>
+            </where>
+            <set>
+                <field><field_name>VARCHAR2_COL</field_name><value>BLOB updated by Test_XML_Runner</value></field>
+                <field><field_name>BLOB_COL</field_name><value>/home/leyden100/eclipse-workspace/OCI_Wrapper/test_data/test.bin</value></field>
+            </set>
+        </operation>
+    </transaction>
+</request>

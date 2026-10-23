@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_createtable_round_2</audit_id>
+<operation>-</operation>
+<error_code>LEVEL2_FIELD_INVALID</error_code>
+<error_text>Column &apos;NOTES&apos; (VARCHAR2) in table &apos;BAD_TABLE&apos; requires a positive &lt;length&gt;</error_text>
+</execution_envelope>
+</output_xml>

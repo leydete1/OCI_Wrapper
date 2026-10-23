@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<output_xml>
+<execution_envelope>
+<status>ERROR</status>
+<audit_id>audit_stub_droptable_round_2</audit_id>
+<operation>-</operation>
+<error_code>LEVEL2_FIELD_INVALID</error_code>
+<error_text>Invalid table_name &apos;1_BAD_NAME&apos;: must start with a letter and contain only letters, digits, &apos;_&apos;, &apos;$&apos; or &apos;#&apos;</error_text>
+</execution_envelope>
+</output_xml>

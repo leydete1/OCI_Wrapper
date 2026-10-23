@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - AUTHENTICATE, LOCAL source, wrong credential (known user)
+ Requires Seed_Auth_Test_Users.txt to have been run first.
+ Expect: <status>DENIED</status>, no session_id. APP_USER.FAILED_ATTEMPTS
+ for 'auth.test.user' should increment by 1 as a side effect - check
+ this did NOT also flip LOCKED to 'Y' (only Round 4 should do that).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_authenticate_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="AUTHENTICATE">
+            <username>auth.test.user</username>
+            <credential>ThisIsTheWrongPassword</credential>
+        </operation>
+    </transaction>
+</request>

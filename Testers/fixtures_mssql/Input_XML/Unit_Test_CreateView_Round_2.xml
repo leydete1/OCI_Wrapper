@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+========================================================================
+ Round 2 - Negative test: query contains a semicolon
+ Expected: validate_create_view_request() returns -1 with
+ VIEW_QUERY_CONTAINS_SEMICOLON (statement-stacking guard).
+========================================================================
+-->
+
+<request version="1.0">
+    <external_audit_id>audit_stub_createview_round_2</external_audit_id>
+    <session_id>-</session_id>
+    <transaction required="0">
+        <operation type="CREATE_VIEW">
+            <view_name>BAD_VIEW</view_name>
+            <owner>DATA_MANAGER</owner>
+            <query>SELECT 1 FROM DUAL; DROP TABLE DATA_MANAGER.OCI_FIELD_TEST</query>
+        </operation>
+    </transaction>
+</request>

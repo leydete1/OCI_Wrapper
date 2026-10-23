@@ -1,0 +1,31 @@
+# mssql_excluded.txt  (driver_mssql Stage 7, point Z3 / Q1, agreed 23 Oct 2026)
+#
+# Fixtures NOT run through the SQL Server gateway. Run_mssql.sh leaves
+# them out of the fixture folders it builds; the Oracle run (Run.sh)
+# still runs all 109. One fixture file name per line, then the reason.
+#
+# DDL - the core DDL modules build Oracle DDL text (TABLESPACE, sequences,
+# PL/SQL bodies ...). Refusing DDL cleanly on SQL Server (U7) was decided
+# out, so on SQL Server these only show Oracle syntax being rejected.
+# The error-path rounds (CreateTable_2, CreateView_2, CreateProcedure_2,
+# DropTable_2/3, DropTable_Round) are still run: they fail in Level 2,
+# before the database, and behave the same on both.
+Unit_Test_CreateTable_Round_1.xml                      DDL (Oracle CREATE TABLE text)
+Unit_Test_CreateTable_Round_1.json                     DDL (Oracle CREATE TABLE text)
+Unit_Test_CreateView_Round_1.xml                       DDL
+Unit_Test_CreateView_Round_1.json                      DDL
+Unit_Test_DropTable_Round_1.xml                        DDL
+Unit_Test_DropTable_Round_1.json                       DDL
+Unit_Test_DropTable_Round_4_DESTRUCTIVE_Confirmed.xml  DDL
+Unit_Test_DropTable_Round_4_DESTRUCTIVE_Confirmed.json DDL
+Unit_Test_CreateProcedure_Round_1.xml                  DDL (PL/SQL body)
+Unit_Test_CreateProcedure_Round_1.json                 DDL (PL/SQL body)
+Unit_Test_DDL_Sequence_Round_1.xml                     DDL (Oracle sequence)
+Unit_Test_DDL_Sequence_Round_1.json                    DDL (Oracle sequence; was an "expected diff")
+#
+# Security admin - Oracle CREATE USER ... IDENTIFIED BY ... and GRANT text.
+# CreateUser_Round_2 and Grant_Round_2 (error paths) are still run.
+Unit_Test_CreateUser_Round_1.xml                       security admin (Oracle CREATE USER)
+Unit_Test_CreateUser_Round_1.json                      security admin (Oracle CREATE USER)
+Unit_Test_Grant_Round_1.xml                            security admin (Oracle GRANT)
+Unit_Test_Grant_Round_1.json                           security admin (Oracle GRANT; was an "expected diff")
