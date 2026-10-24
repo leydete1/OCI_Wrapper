@@ -1,32 +1,33 @@
 === 1. Server, clock and DataManager settings
 version|level|edition|server_time
 -------|-----|-------|-----------
-16.0.4305.5|RTM|Developer Edition (64-bit)|2026-10-24 15:51:51.1578672 +01:00
+16.0.4305.5|RTM|Developer Edition (64-bit)|2026-10-24 21:18:09.2779982 +01:00
 name|collation_name|is_read_committed_snapshot_on|snapshot_isolation_state_desc
 ----|--------------|-----------------------------|-----------------------------
 DataManager|Latin1_General_100_CI_AS_SC_UTF8|1|OFF
 === 2. Gateway sessions (program_name DataSol_Gateway)
 session_id|login_name|host_name|status|open_tx|last_request_start_time|last_request_end_time|idle_s
 ----------|----------|---------|------|-------|-----------------------|---------------------|------
-85|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.740|2026-10-24 15:43:26.740|505
-86|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.743|2026-10-24 15:43:26.743|505
-87|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.743|2026-10-24 15:43:26.743|505
-88|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.747|2026-10-24 15:43:26.747|505
-89|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.747|2026-10-24 15:43:26.747|505
-90|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 15:43:26.747|2026-10-24 15:43:26.747|505
-91|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 15:43:26.570|2026-10-24 15:43:26.570|505
-92|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 15:43:26.580|2026-10-24 15:43:26.577|505
-93|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 15:43:26.587|2026-10-24 15:43:26.587|505
-94|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 15:43:26.613|2026-10-24 15:43:26.610|505
-=== 3. Open transactions on gateway sessions (Z7)
-session_id|transaction_id|tx_name|transaction_begin_time|age_s|state
-----------|--------------|-------|----------------------|-----|-----
-85|4865|user_transaction|2026-10-24 15:43:26.740|505|active
-86|4866|user_transaction|2026-10-24 15:43:26.743|505|active
-87|4870|user_transaction|2026-10-24 15:43:26.743|505|active
-88|4874|user_transaction|2026-10-24 15:43:26.743|505|active
-89|4878|user_transaction|2026-10-24 15:43:26.747|505|active
-90|4882|user_transaction|2026-10-24 15:43:26.747|505|active
+62|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:11:41.160|2026-10-24 21:11:41.163|388
+63|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:10.830|2026-10-24 21:12:10.830|359
+64|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:09.737|2026-10-24 21:12:09.740|360
+65|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:09.723|2026-10-24 21:12:09.723|360
+66|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:09.763|2026-10-24 21:12:09.763|360
+67|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:09.717|2026-10-24 21:12:09.717|360
+68|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 21:12:09.793|2026-10-24 21:12:09.797|360
+69|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 21:11:41.057|2026-10-24 21:11:41.057|388
+70|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 21:11:41.063|2026-10-24 21:11:41.063|388
+71|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 21:11:41.073|2026-10-24 21:11:41.070|388
+=== 3. Open transactions on gateway sessions (Z7) - log_bytes 0 / wrote_at NULL = has written nothing
+session_id|transaction_id|tx_name|transaction_begin_time|age_s|state|log_bytes|wrote_at
+----------|--------------|-------|----------------------|-----|-----|---------|--------
+62|69009|user_transaction|2026-10-24 21:11:41.163|388|active|0|NULL
+67|69944|user_transaction|2026-10-24 21:12:09.717|360|active|0|NULL
+65|69948|user_transaction|2026-10-24 21:12:09.723|360|active|0|NULL
+66|69949|user_transaction|2026-10-24 21:12:09.730|360|active|0|NULL
+64|69950|user_transaction|2026-10-24 21:12:09.740|360|active|0|NULL
+68|69964|user_transaction|2026-10-24 21:12:09.797|360|active|0|NULL
+63|70023|user_transaction|2026-10-24 21:12:10.830|359|active|0|NULL
 === 4. Requests running now: gateway sessions, and anything blocked
 session_id|status|command|wait_type|wait_ms|blocked_by|db|sql_text
 ----------|------|-------|---------|-------|----------|--|--------
@@ -36,11 +37,36 @@ session_id|program_name|login_name|status|open_tx|last_sql
 === 6. Locks in DataManager, by session (beyond the shared DATABASE lock)
 session_id|resource_type|request_mode|request_status|locks
 ----------|-------------|------------|--------------|-----
-=== 7. tempdb version store (read-committed snapshot keeps row versions for open transactions)
+=== 7. tempdb version store, and the transactions that use row versions
 version_store_kb
 ----------------
-0
-=== 8. Deadlocks recorded by system_health (ring buffer; times are UTC)
-Msg 1934, Level 16, State 1, Server mssql2022, Line 5
-SELECT failed because the following SET options have incorrect settings: 'QUOTED_IDENTIFIER'. Verify that SET options are correct for use with indexed views and/or indexes on computed columns and/or filtered indexes and/or query notifications and/or XML data type methods and/or spatial index operations.
+5568
+active_snapshot_tx
+------------------
+1
+session_id|program_name|transaction_id|is_snapshot|elapsed_s|open_tx
+----------|------------|--------------|-----------|---------|-------
+66|DataSol_Gateway|69949|0|359|1
+=== 8. Deadlocks recorded by system_health (its files in /var/opt/mssql/log; times are UTC)
+utc_time|victim_process|client_app
+--------|--------------|----------
+2026-10-24 20:11:04.862|processf0006d468|DataSol_Gateway
+2026-10-23 16:52:58.012|processe8006d848|DataSol_Gateway
+2026-10-23 16:45:50.420|processe800688c8|DataSol_Gateway
+2026-10-22 15:31:48.779|processf16d63088|DataSol_Gateway
+2026-10-22 15:04:35.994|processf00069468|DataSol_Gateway
+2026-10-22 11:29:48.217|process10000688c8|DataSol_Gateway
+2026-10-22 11:15:00.558|process10000688c8|DataSol_Gateway
+2026-10-22 11:08:02.973|process10000688c8|DataSol_Gateway
+2026-10-21 19:06:27.197|processf80068ca8|DataSol_Gateway
+2026-10-21 18:55:24.573|processf8006cca8|DataSol_Gateway
+2026-10-21 18:54:37.055|processf8006d848|DataSol_Gateway
+2026-10-21 18:35:14.350|processf80069468|DataSol_Gateway
+2026-10-21 12:18:20.633|processe966ba8c8|DataSol_Gateway
+2026-10-21 11:48:37.830|processe966bd088|DataSol_Gateway
+2026-10-21 11:44:35.280|processe8006d848|DataSol_Gateway
+2026-10-21 11:05:42.376|processe8006cca8|DataSol_Gateway
+2026-10-21 10:36:34.558|processe966bcca8|DataSol_Gateway
+2026-10-20 21:04:36.705|processf000688c8|DataSol_Gateway
+2026-10-20 20:36:48.901|processf0006d848|DataSol_Gateway
 === done (read-only - nothing was changed)

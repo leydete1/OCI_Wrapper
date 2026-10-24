@@ -1,0 +1,46 @@
+=== 1. Server, clock and DataManager settings
+version|level|edition|server_time
+-------|-----|-------|-----------
+16.0.4305.5|RTM|Developer Edition (64-bit)|2026-10-24 20:27:26.8331939 +01:00
+name|collation_name|is_read_committed_snapshot_on|snapshot_isolation_state_desc
+----|--------------|-----------------------------|-----------------------------
+DataManager|Latin1_General_100_CI_AS_SC_UTF8|1|OFF
+=== 2. Gateway sessions (program_name DataSol_Gateway)
+session_id|login_name|host_name|status|open_tx|last_request_start_time|last_request_end_time|idle_s
+----------|----------|---------|------|-------|-----------------------|---------------------|------
+58|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.170|2026-10-24 20:23:24.173|242
+61|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.173|2026-10-24 20:23:24.173|242
+63|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.177|2026-10-24 20:23:24.177|242
+64|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.177|2026-10-24 20:23:24.177|242
+65|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.177|2026-10-24 20:23:24.180|242
+66|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|1|2026-10-24 20:23:24.180|2026-10-24 20:23:24.180|242
+68|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 20:23:23.983|2026-10-24 20:23:23.980|243
+69|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 20:23:23.997|2026-10-24 20:23:23.993|243
+70|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 20:23:24.013|2026-10-24 20:23:24.010|242
+71|DATA_MANAGER|Terry-HP-Laptop-15-fd0xxx|sleeping|0|2026-10-24 20:23:24.033|2026-10-24 20:23:24.030|242
+=== 3. Open transactions on gateway sessions (Z7)
+session_id|transaction_id|tx_name|transaction_begin_time|age_s|state
+----------|--------------|-------|----------------------|-----|-----
+58|28521|user_transaction|2026-10-24 20:23:24.173|242|active
+61|28522|user_transaction|2026-10-24 20:23:24.173|242|active
+63|28526|user_transaction|2026-10-24 20:23:24.177|242|active
+64|28530|user_transaction|2026-10-24 20:23:24.177|242|active
+65|28534|user_transaction|2026-10-24 20:23:24.177|242|active
+66|28538|user_transaction|2026-10-24 20:23:24.180|242|active
+=== 4. Requests running now: gateway sessions, and anything blocked
+session_id|status|command|wait_type|wait_ms|blocked_by|db|sql_text
+----------|------|-------|---------|-------|----------|--|--------
+=== 5. Head blockers (block others, are not blocked) and their last SQL
+session_id|program_name|login_name|status|open_tx|last_sql
+----------|------------|----------|------|-------|--------
+=== 6. Locks in DataManager, by session (beyond the shared DATABASE lock)
+session_id|resource_type|request_mode|request_status|locks
+----------|-------------|------------|--------------|-----
+=== 7. tempdb version store (read-committed snapshot keeps row versions for open transactions)
+version_store_kb
+----------------
+0
+=== 8. Deadlocks recorded by system_health (ring buffer; times are UTC)
+Msg 1934, Level 16, State 1, Server mssql2022, Line 5
+SELECT failed because the following SET options have incorrect settings: 'QUOTED_IDENTIFIER'. Verify that SET options are correct for use with indexed views and/or indexes on computed columns and/or filtered indexes and/or query notifications and/or XML data type methods and/or spatial index operations.
+=== done (read-only - nothing was changed)

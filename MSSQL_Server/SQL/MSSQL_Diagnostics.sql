@@ -1,6 +1,14 @@
 -- ======================================================================
 -- MSSQL_Diagnostics.sql   (SQL Server Operations & Troubleshooting Guide,
---                          Sections 4 and 5 - G3 verification, 24 Oct 2026)
+--                          Sections 4 and 5 - G3 verification, 24 Oct 2026;
+--                          fix 1, 24 Oct: QUOTED_IDENTIFIER ON for the XML
+--                          in section 8; section 3 shows whether each open
+--                          transaction has written anything; section 7
+--                          counts snapshot transactions;
+--                          fix 2, 24 Oct: section 7 names the transactions
+--                          holding row versions; section 8 reads the
+--                          system_health files, not only its small
+--                          in-memory buffer)
 --
 -- READ-ONLY. Looks at what DataSol_Gateway is doing on SQL Server:
 -- its sessions, their open transactions, running requests and blocking,
@@ -27,6 +35,9 @@
 -- ======================================================================
 
 SET NOCOUNT ON;
+-- sqlcmd connects with QUOTED_IDENTIFIER OFF; XML methods (section 8)
+-- need it ON (error 1934 otherwise). Holds for the rest of the session.
+SET QUOTED_IDENTIFIER ON;
 GO
 
 PRINT '=== 1. Server, clock and DataManager settings';
@@ -55,7 +66,7 @@ SELECT s.session_id,
  ORDER BY s.session_id;
 GO
 
-PRINT '=== 3. Open transactions on gateway sessions (Z7)';
+PRINT '=== 3. Open transactions on gateway sessions (Z7) - log_bytes 0 / wrote_at NULL = has written nothing';
 SELECT s.session_id,
        at.transaction_id,
        at.name                                                     AS tx_name,
@@ -71,10 +82,15 @@ SELECT s.session_id,
                                  WHEN 7 THEN 'rolling back'
                                  WHEN 8 THEN 'rolled back'
                                  ELSE CAST(at.transaction_state AS varchar(4))
-       END                                                         AS state
+       END                                                         AS state,
+       COALESCE(dt.database_transaction_log_bytes_used, 0)         AS log_bytes,
+       dt.database_transaction_begin_time                          AS wrote_at
   FROM sys.dm_tran_session_transactions st
   JOIN sys.dm_tran_active_transactions  at ON at.transaction_id = st.transaction_id
   JOIN sys.dm_exec_sessions             s  ON s.session_id      = st.session_id
+  LEFT JOIN sys.dm_tran_database_transactions dt
+         ON dt.transaction_id = at.transaction_id
+        AND dt.database_id    = DB_ID(N'DataManager')
  WHERE s.program_name = N'DataSol_Gateway'
  ORDER BY age_s DESC;
 GO
@@ -127,24 +143,43 @@ SELECT l.request_session_id                                        AS session_id
  ORDER BY l.request_session_id, locks DESC;
 GO
 
-PRINT '=== 7. tempdb version store (read-committed snapshot keeps row versions for open transactions)';
+PRINT '=== 7. tempdb version store, and the transactions that use row versions';
 SELECT SUM(version_store_reserved_page_count) * 8                 AS version_store_kb
   FROM tempdb.sys.dm_db_file_space_usage;
+-- The transactions SQL Server counts as using row versions, and so can
+-- hold version cleanup back (cleanup runs about once a minute). Compare
+-- with section 3: are the gateway's open read transactions among them?
+SELECT COUNT(*)                                                   AS active_snapshot_tx
+  FROM sys.dm_tran_active_snapshot_database_transactions;
+SELECT a.session_id,
+       COALESCE(s.program_name, '')                               AS program_name,
+       a.transaction_id,
+       a.is_snapshot,
+       a.elapsed_time_seconds                                     AS elapsed_s,
+       COALESCE(s.open_transaction_count, 0)                      AS open_tx
+  FROM sys.dm_tran_active_snapshot_database_transactions a
+  LEFT JOIN sys.dm_exec_sessions s ON s.session_id = a.session_id
+ ORDER BY a.elapsed_time_seconds DESC;
 GO
 
-PRINT '=== 8. Deadlocks recorded by system_health (ring buffer; times are UTC)';
--- The SQL Server Transaction harness causes one on purpose (Test 2), so
--- a harness run leaves at least one entry here.
-SELECT x.d.value('@timestamp', 'datetime2(3)')                    AS utc_time,
-       x.d.value('(data/value/deadlock/victim-list/victimProcess/@id)[1]',
-                 'varchar(50)')                                    AS victim_process
-  FROM (SELECT CAST(st.target_data AS xml) AS td
-          FROM sys.dm_xe_session_targets st
-          JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
-         WHERE s.name = N'system_health'
-           AND st.target_name = N'ring_buffer') AS rb
- CROSS APPLY rb.td.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS x(d)
+PRINT '=== 8. Deadlocks recorded by system_health (its files in /var/opt/mssql/log; times are UTC)';
+-- system_health runs all the time and writes system_health_*.xel files;
+-- its in-memory ring buffer holds only the most recent events. The SQL
+-- Server Transaction harness causes a deadlock on purpose (Test 2), so a
+-- harness run leaves an entry here.
+IF OBJECT_ID('tempdb..#dl') IS NOT NULL DROP TABLE #dl;
+SELECT CAST(f.event_data AS xml)                                  AS x
+  INTO #dl
+  FROM sys.fn_xe_file_target_read_file(N'/var/opt/mssql/log/system_health*.xel', NULL, NULL, NULL) f
+ WHERE f.object_name = N'xml_deadlock_report';
+SELECT x.value('(event/@timestamp)[1]', 'datetime2(3)')           AS utc_time,
+       x.value('(event/data/value/deadlock/victim-list/victimProcess/@id)[1]',
+               'varchar(50)')                                     AS victim_process,
+       x.value('(event/data/value/deadlock/process-list/process/@clientapp)[1]',
+               'nvarchar(128)')                                   AS client_app
+  FROM #dl
  ORDER BY utc_time DESC;
+DROP TABLE #dl;
 GO
 
 PRINT '=== done (read-only - nothing was changed)';

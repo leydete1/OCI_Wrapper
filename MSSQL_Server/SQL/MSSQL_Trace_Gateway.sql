@@ -1,6 +1,8 @@
 -- ======================================================================
 -- MSSQL_Trace_Gateway.sql   (SQL Server Operations & Troubleshooting
---                            Guide, Section 6 - G3 verification, 24 Oct)
+--                            Guide, Section 6 - G3 verification, 24 Oct;
+--                            fix 1, 24 Oct: READ no longer groups on XML
+--                            methods (error 4148); QUOTED_IDENTIFIER ON)
 --
 -- An Extended Events trace of DataSol_Gateway's own statements and
 -- errors - the SQL Server counterpart of the Oracle guide's
@@ -45,6 +47,9 @@
 -- ======================================================================
 
 SET NOCOUNT ON;
+-- sqlcmd connects with QUOTED_IDENTIFIER OFF; the XML methods in READ
+-- need it ON (error 1934 otherwise).
+SET QUOTED_IDENTIFIER ON;
 GO
 
 IF N'$(ACTION)' NOT IN (N'START', N'STOP', N'READ', N'DROP')
@@ -109,15 +114,19 @@ BEGIN
       FROM #ev GROUP BY event_name ORDER BY events DESC;
 
     PRINT '=== errors (number, severity, message) - most frequent first';
+    -- XML methods are not allowed in GROUP BY (error 4148): copy the
+    -- values into a plain table first, then group.
+    IF OBJECT_ID('tempdb..#err') IS NOT NULL DROP TABLE #err;
     SELECT x.value('(event/data[@name="error_number"]/value)[1]', 'int')            AS error_number,
            x.value('(event/data[@name="severity"]/value)[1]', 'int')                AS severity,
-           LEFT(x.value('(event/data[@name="message"]/value)[1]', 'nvarchar(400)'), 150) AS message,
-           COUNT(*)                                                                  AS times
-      FROM #ev WHERE event_name = 'error_reported'
-     GROUP BY x.value('(event/data[@name="error_number"]/value)[1]', 'int'),
-              x.value('(event/data[@name="severity"]/value)[1]', 'int'),
-              LEFT(x.value('(event/data[@name="message"]/value)[1]', 'nvarchar(400)'), 150)
+           LEFT(x.value('(event/data[@name="message"]/value)[1]', 'nvarchar(400)'), 150) AS message
+      INTO #err
+      FROM #ev WHERE event_name = 'error_reported';
+    SELECT error_number, severity, message, COUNT(*) AS times
+      FROM #err
+     GROUP BY error_number, severity, message
      ORDER BY times DESC;
+    DROP TABLE #err;
 
     PRINT '=== 20 slowest statements (duration in ms; event time UTC)';
     SELECT TOP (20)
