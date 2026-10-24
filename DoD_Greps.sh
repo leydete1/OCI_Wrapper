@@ -1,5 +1,5 @@
 #!/bin/bash
-# DoD_Greps.sh - Oracle dialect extraction, Definition-of-done checks (v2).
+# DoD_Greps.sh - Oracle dialect extraction, Definition-of-done checks (v3).
 #
 # Run from the project root:  cd ~/eclipse-workspace/OCI_Wrapper && ./DoD_Greps.sh
 # Output goes to the screen and to DoD_Greps.log (in the project root).
@@ -18,6 +18,14 @@
 #     strings such as \"ttl_seconds\":%d.
 #   - Grep 0 accepts harness names with underscores and the scripts and
 #     logs that live in that folder.
+#
+# v3 (2026-10-24, driver_mssql Stage 7), two false alarms from the SQL
+# Server work removed; nothing else changed:
+#   - Grep 1 also skips the test-table names OCI_LOB_TEST and
+#     OCI_CLOB_TEST (used by the MSSQL harnesses), like OCI_FIELD_TEST.
+#   - Grep 2 matches SYSDATE as a whole word, so SQL Server's own
+#     SYSDATETIME() (mssql_dialect.c) is no longer reported. SYSDATE,
+#     SYSDATE - 1 and the like are still caught.
 #
 # Each check prints its hits; "none" means it passed. A hit is either a
 # real leftover or an entry for dod_allowlist.txt (one exact output line
@@ -86,7 +94,7 @@ grep -rnE -e 'OCI[A-Z][A-Za-z]+[[:space:]]*\(|#include[[:space:]]*[<"]oci\.h[">]
           -e 'oci_trans_commit_retry|\bOCI_[A-Z][a-z][A-Za-z_]*[[:space:]]*\(' \
   src/ include/ --include='*.[ch]' \
   | grep -vE 'driver_oracle|/Connection(_Pool)?\.[ch]:|Unit_Test_Module|/Drivers/Oracle/|^src/test/' \
-  | grep -vE 'OCI_(SESSION|METRICS|FIELD_TEST|DEPENDENCY_LIST|OBJECT_REF|FIELD_REF)\b|OCI_[A-Z0-9_]+_H\b' \
+  | grep -vE 'OCI_(SESSION|METRICS|FIELD_TEST|LOB_TEST|CLOB_TEST|DEPENDENCY_LIST|OBJECT_REF|FIELD_REF)\b|OCI_[A-Z0-9_]+_H\b' \
   | sed -E 's/[[:space:]]+/ /g' \
   | grep -vFf "$OLDPWD/dod_allowlist.txt" \
   || echo "none"
@@ -94,7 +102,7 @@ grep -rnE -e 'OCI[A-Z][A-Za-z]+[[:space:]]*\(|#include[[:space:]]*[<"]oci\.h[">]
 echo
 echo "=== Grep 2 - Oracle SQL fragments or dictionary views built in core (comments ignored)"
 grep -rnE -e 'TO_DATE|TO_TIMESTAMP|TO_[YD][MS]INTERVAL|EMPTY_[BC]LOB|RETURNING ROWID' \
-          -e 'FROM DUAL|BEGIN %s|SYS_REFCURSOR|SYSDATE|SYSTIMESTAMP|NUMTODSINTERVAL|NEXTVAL|CURRVAL' \
+          -e 'FROM DUAL|BEGIN %s|SYS_REFCURSOR|\bSYSDATE\b|SYSTIMESTAMP|NUMTODSINTERVAL|NEXTVAL|CURRVAL' \
           -e 'NVL\(|ROWNUM|DECODE\(|[^\\]":%d|[ (,=]:%d' \
           -e 'ALL_(TAB|TABLES|OBJECTS|COLUMNS|CONS)|USER_(TAB|OBJECTS)|DBA_|V\$' \
   src/ include/ --include='*.[ch]' \

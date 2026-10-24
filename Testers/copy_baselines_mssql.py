@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-copy_baselines_mssql.py  (driver_mssql Stage 7, point Z2 - 23 Oct 2026)
+copy_baselines_mssql.py  (driver_mssql Stage 7, point Z2 - 23 Oct 2026;
+                          part 2a: the reviewed differences, Z4 and Z5)
 
 Fills Testers/baseline_mssql for Run_mssql.sh:
 
@@ -35,10 +36,10 @@ FIXTURE_DIRS = [os.path.join(ROOT, "test_data/consumers/file/Input_XML"),
 NEEDS_MSSQL_BASELINE = {
     "select_integration_tests.xml":    "alias case (Second_Blob vs SECOND_BLOB); seed DESCRIPTION text of row 1",
     "select_integration_tests.json":   "alias case (Second_Blob vs SECOND_BLOB); seed DESCRIPTION text of row 1",
-    "Verify_Round_5_Clob.xml":         "fetch_batch_size 5 (Oracle forces 1 for a CLOB column)",
+    "Verify_Round_5_Clob.xml":         "fetch_batch_size 5 (Oracle forces 1 for a CLOB column); fixture has ORDER BY (Z4)",
     "Unit_Test_Procedure_Round_2.xml": "DATE_COL: field_type TIMESTAMP, value 2030-01-01 00:00:00 (Oracle DATE, 01-JAN-30)",
     "Unit_Test_Procedure_Round_2.json": "DATE_COL: field_type TIMESTAMP, value 2030-01-01 00:00:00 (Oracle DATE, 01-JAN-30)",
-    "Request_Test_Select_2.json":      "TO BE DETERMINED from its first SQL Server response (point Z5)",
+    "Request_Test_Select_2.json":      "reviewed 23 Oct (Z5): FIELD_TEST_ID / ROWID_COL / UROWID_COL; type names and ISO text for float and date/time columns - see README",
 }
 
 README = """baseline_mssql - SQL Server baselines for Run_mssql.sh (driver_mssql Stage 7)
