@@ -21,7 +21,8 @@
  *   Test 10  row_limit_sql - TOP wrapper, or OFFSET/FETCH (5a)
  *   Test 11  text after a trailing -- comment starts on a new line
  *   Test 12  every hook returns -1 when the buffer is too small
- *   Test 13  row_locator_clauses: OUTPUT inserted.[KEY] (U2), nothing
+ *   Test 13  row_locator_clauses: OUTPUT inserted.[KEY] INTO @dm_k (k)
+ *            (U2; INTO since C5, 26 Oct), nothing
  *            without a key, -1 for a composite key
  *   Test 14  db_type_class / db_type_lob_kind / db_type_text_bound for
  *            SQL Server names, the Oracle names unchanged, and lob_kind
@@ -340,14 +341,14 @@ int main(int argc, char *argv[])
         const char *k1[] = { "FIELD_TEST_ID" };
         db_row_locator_ctx_t loc = { "OCI_FIELD_TEST", "DATA_MANAGER", k1, 1 };
         rc = d->row_locator_clauses(DB_DML_INSERT, &loc, 3, mid, sizeof(mid), tail, sizeof(tail));
-        expect_str("INSERT mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID]");
+        expect_str("INSERT mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID] INTO @dm_k (k)");
         expect_str("INSERT tail", rc, tail, "");
         rc = d->row_locator_clauses(DB_DML_UPDATE, &loc, 9, mid, sizeof(mid), tail, sizeof(tail));
-        expect_str("UPDATE mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID]");
+        expect_str("UPDATE mid", rc, mid, "OUTPUT inserted.[FIELD_TEST_ID] INTO @dm_k (k)");
         const char *k2[] = { "ODD]NAME" };
         db_row_locator_ctx_t loc2 = { "T", "", k2, 1 };
         rc = d->row_locator_clauses(DB_DML_INSERT, &loc2, 1, mid, sizeof(mid), tail, sizeof(tail));
-        expect_str("] doubled", rc, mid, "OUTPUT inserted.[ODD]]NAME]");
+        expect_str("] doubled", rc, mid, "OUTPUT inserted.[ODD]]NAME] INTO @dm_k (k)");
         db_row_locator_ctx_t nokey = { "T", "", NULL, 0 };
         strcpy(mid, "x"); strcpy(tail, "x");
         rc = d->row_locator_clauses(DB_DML_INSERT, &nokey, 1, mid, sizeof(mid), tail, sizeof(tail));
@@ -361,7 +362,7 @@ int main(int argc, char *argv[])
         expect_rc("small buffer", d->row_locator_clauses(DB_DML_INSERT, &loc, 1, tiny, sizeof(tiny),
                                                          tail, sizeof(tail)), -1);
     }
-    end("OUTPUT inserted.[KEY]");
+    end("OUTPUT inserted.[KEY] INTO @dm_k (k)");
 
     /* ---- Test 14 ---- */
     begin("Test 14 (db_type_class, lob_kind)");

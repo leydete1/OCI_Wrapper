@@ -35,8 +35,9 @@
  *   dml_execute / dml_execute_returning_rowids / rowid_result_free /
  *   lob_write_by_rowid / table_key
  *                          mssql_dml.c
- *   dialect                row_locator_clauses (OUTPUT inserted.<key>),
- *                          text LOBs bound in the statement
+ *   dialect                row_locator_clauses (OUTPUT inserted.<key>;
+ *                          INTO @dm_k since C5, 26 Oct), text LOBs
+ *                          bound in the statement
  *
  * Stage 5 (2026-10-21), points W1-W7: long columns in SELECT
  *                          (mssql_select.c), statement text as UTF-16

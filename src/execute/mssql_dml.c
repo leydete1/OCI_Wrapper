@@ -26,6 +26,26 @@
  * (mssql_tx_begin_write, MSSQL_Pool.h); commit() / rollback() switch it
  * back. A write is never run if the switch fails.
  *
+ * C5 (2026-10-26, clean-up Part 2, from the live probe MSSQL_C5_Probe):
+ *   - A trigger without SET NOCOUNT ON sends its own statements' row
+ *     counts BEFORE the statement's own, which always comes LAST (probe
+ *     F1: a 2-row INSERT gives 6, 0, 2). dml_execute, lob_write_by_rowid
+ *     and a returning call on a table without a key now read every result
+ *     and take the last row count (read_results) - before, the first
+ *     (6 for 2) or the sum.
+ *   - SQL_NO_DATA from execute (or the last SQLParamData) only means the
+ *     first result is a count of 0; trigger results can still follow
+ *     (F3). The remaining results are always read.
+ *   - OUTPUT without INTO fails on a table with an enabled trigger
+ *     (error 334). The dialect now gives OUTPUT inserted.[K] INTO @dm_k
+ *     (k), and dml_execute_returning_rowids runs such a statement as the
+ *     batch  DECLARE @dm_k TABLE (k nvarchar(4000)); <statement>;
+ *     SELECT k FROM @dm_k;  - the keys are the rows of the LAST result
+ *     set (F5). A statement with a plain OUTPUT clause still runs as
+ *     written.
+ *   No SET NOCOUNT and no @@ROWCOUNT are added: a batch aborted before
+ *   its SET NOCOUNT OFF would leave the session with NOCOUNT ON.
+ *
  * Never includes an Oracle header.
  */
 
@@ -77,6 +97,44 @@ static void dml_fail_text(logger_t *logger, const char *func, char *out, size_t 
     va_end(ap);
     logger_write(logger, LOG_ERROR, func, 0, "%s", msg);
     if (out && out_size) snprintf(out, out_size, "%s", msg);
+}
+
+/* C5: reads every result of one execution, whose execute (or last
+ * SQLParamData) returned r. *out_last_count: the LAST row count seen -
+ * the statement's own; a trigger's counts come before it (probe F1).
+ * SQL_NO_DATA from execute is a first result counting 0, not the end
+ * (F3). Result sets are skipped (dml_execute expects none). 0, or -1
+ * (logged, into out) if a later result is an error. */
+static int read_results(SQLHSTMT stmt, SQLRETURN r, logger_t *logger, const char *func,
+                        const char *sql, SQLLEN *out_last_count,
+                        char *out, size_t out_size)
+{
+    SQLLEN last = 0;
+    if (SQL_SUCCEEDED(r))
+    {
+        SQLSMALLINT nc = 0;
+        SQLLEN      n  = -1;
+        if (SQL_SUCCEEDED(SQLNumResultCols(stmt, &nc)) && nc == 0 &&
+            SQL_SUCCEEDED(SQLRowCount(stmt, &n)) && n >= 0)
+            last = n;
+    }
+    for (int guard = 0; guard < 1000; guard++)
+    {
+        SQLRETURN mr = SQLMoreResults(stmt);
+        if (mr == SQL_NO_DATA) break;
+        if (!SQL_SUCCEEDED(mr))
+        {
+            dml_fail(logger, func, SQL_HANDLE_STMT, stmt, "SQLMoreResults", sql, out, out_size);
+            return -1;
+        }
+        SQLSMALLINT nc = 0;
+        SQLLEN      n  = -1;
+        if (SQL_SUCCEEDED(SQLNumResultCols(stmt, &nc)) && nc == 0 &&
+            SQL_SUCCEEDED(SQLRowCount(stmt, &n)) && n >= 0)
+            last = n;
+    }
+    *out_last_count = last;
+    return 0;
 }
 
 /* UTF-16 code units in a UTF-8 string - an nvarchar parameter's size. */
@@ -335,9 +393,11 @@ int mssql_dml_execute(oci_context_t *ctx, logger_t *logger,
                  out_error_message, out_error_message_size);
         goto Done;
     }
+    /* C5: the last row count is the statement's own (triggers first). */
     SQLLEN n = 0;
-    if (r != SQL_NO_DATA && !SQL_SUCCEEDED(SQLRowCount(stmt, &n))) n = 0;
-    if (n < 0) n = 0;
+    if (read_results(stmt, r, logger, __func__, req->sql, &n,
+                     out_error_message, out_error_message_size) != 0)
+        goto Done;
     *out_rows_affected = (int)n;
     logger_write(logger, LOG_INFO, __func__, 0, "dml_execute OK rows_affected=%d bind_count=%d",
                  *out_rows_affected, req->bind_count);
@@ -376,57 +436,70 @@ static int keybuf_add(keybuf_t *k, const char *v)
     return 0;
 }
 
-/* Reads every result of one execution: the OUTPUT rows (keys), or, for a
- * statement without OUTPUT, SQLRowCount blank entries. */
-static int collect_keys(SQLHSTMT stmt, logger_t *logger, const char *sql, keybuf_t *keys)
+/* Reads every result of one execution whose execute returned r.
+ * C5: the keys are the rows of the LAST result set (the C5 batch ends
+ * with SELECT k FROM @dm_k; a trigger's counts come before it). A
+ * statement without OUTPUT (a table with no key) gives as many blank
+ * entries as its LAST row count - the statement's own, not the sum with
+ * a trigger's (probe F1). SQL_NO_DATA from execute is a first result
+ * counting 0, and results may still follow (F3). */
+static int collect_keys(SQLHSTMT stmt, SQLRETURN r, logger_t *logger, const char *sql,
+                        keybuf_t *keys)
 {
+    int    start      = keys->count;   /* this execution's first entry */
     int    saw_output = 0;
-    SQLLEN counted    = 0;
+    SQLLEN last_count = 0;
+    int    have       = SQL_SUCCEEDED(r);   /* a current result to read */
 
-    for (;;)
+    for (int guard = 0; guard < 1000; guard++)
     {
-        SQLSMALLINT nc = 0;
-        if (!SQL_SUCCEEDED(SQLNumResultCols(stmt, &nc)))
+        if (have)
         {
-            dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLNumResultCols", sql, NULL, 0);
-            return -1;
-        }
-        if (nc > 0)
-        {
-            saw_output = 1;
-            SQLRETURN fr;
-            while ((fr = SQLFetch(stmt)) != SQL_NO_DATA)
+            SQLSMALLINT nc = 0;
+            if (!SQL_SUCCEEDED(SQLNumResultCols(stmt, &nc)))
             {
-                if (!SQL_SUCCEEDED(fr))
+                dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLNumResultCols", sql, NULL, 0);
+                return -1;
+            }
+            if (nc > 0)
+            {
+                saw_output  = 1;
+                keys->count = start;           /* only the last result set counts */
+                SQLRETURN fr;
+                while ((fr = SQLFetch(stmt)) != SQL_NO_DATA)
                 {
-                    dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLFetch (OUTPUT)", sql, NULL, 0);
-                    return -1;
+                    if (!SQL_SUCCEEDED(fr))
+                    {
+                        dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLFetch (OUTPUT)", sql, NULL, 0);
+                        return -1;
+                    }
+                    char   v[64] = "";
+                    SQLLEN ind   = 0;
+                    SQLRETURN gr = SQLGetData(stmt, 1, SQL_C_CHAR, v, sizeof(v), &ind);
+                    if (!SQL_SUCCEEDED(gr))
+                    {
+                        dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLGetData (OUTPUT)", sql, NULL, 0);
+                        return -1;
+                    }
+                    if (ind == SQL_NULL_DATA) v[0] = '\0';
+                    if (ind != SQL_NULL_DATA && (ind == SQL_NO_TOTAL || ind >= MSSQL_ROWID_BUF_SIZE))
+                    {
+                        logger_write(logger, LOG_ERROR, __func__, 0,
+                                     "row key value is longer than %d characters - the gateway "
+                                     "keeps %d (ROWID_BUF_SIZE); use a shorter key - sql=%s",
+                                     MSSQL_ROWID_BUF_SIZE - 1, MSSQL_ROWID_BUF_SIZE - 1, sql);
+                        return -1;
+                    }
+                    if (keybuf_add(keys, v) != 0) return -1;
                 }
-                char   v[64] = "";
-                SQLLEN ind   = 0;
-                SQLRETURN gr = SQLGetData(stmt, 1, SQL_C_CHAR, v, sizeof(v), &ind);
-                if (!SQL_SUCCEEDED(gr))
-                {
-                    dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLGetData (OUTPUT)", sql, NULL, 0);
-                    return -1;
-                }
-                if (ind == SQL_NULL_DATA) v[0] = '\0';
-                if (ind != SQL_NULL_DATA && (ind == SQL_NO_TOTAL || ind >= MSSQL_ROWID_BUF_SIZE))
-                {
-                    logger_write(logger, LOG_ERROR, __func__, 0,
-                                 "row key value is longer than %d characters - the gateway "
-                                 "keeps %d (ROWID_BUF_SIZE); use a shorter key - sql=%s",
-                                 MSSQL_ROWID_BUF_SIZE - 1, MSSQL_ROWID_BUF_SIZE - 1, sql);
-                    return -1;
-                }
-                if (keybuf_add(keys, v) != 0) return -1;
+            }
+            else
+            {
+                SQLLEN n = -1;
+                if (SQL_SUCCEEDED(SQLRowCount(stmt, &n)) && n >= 0) last_count = n;
             }
         }
-        else
-        {
-            SQLLEN n = 0;
-            if (SQL_SUCCEEDED(SQLRowCount(stmt, &n)) && n > 0) counted += n;
-        }
+        have = 1;
 
         SQLRETURN mr = SQLMoreResults(stmt);
         if (mr == SQL_NO_DATA) break;
@@ -438,10 +511,16 @@ static int collect_keys(SQLHSTMT stmt, logger_t *logger, const char *sql, keybuf
     }
 
     if (!saw_output)
-        for (SQLLEN i = 0; i < counted; i++)
+        for (SQLLEN i = 0; i < last_count; i++)
             if (keybuf_add(keys, "") != 0) return -1;
     return 0;
 }
+
+/* C5: the batch a statement carrying the dialect's OUTPUT ... INTO @dm_k
+ * clause runs in (mssql_dialect.c, row_locator_clauses). */
+#define DM_K_MARK   "INTO @dm_k (k)"
+#define DM_K_PREFIX "DECLARE @dm_k TABLE (k nvarchar(4000)); "
+#define DM_K_SUFFIX "; SELECT k FROM @dm_k;"
 
 int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
                                        const db_dml_returning_request_t *req,
@@ -460,6 +539,8 @@ int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
     SQLHSTMT stmt  = SQL_NULL_HSTMT;
     SQLLEN  *inds  = NULL;
     keybuf_t keys  = { 0 };
+    char    *batch = NULL;
+    const char *run_sql = req->sql;
     int      rc    = -1;
 
     /* Z7: a write runs in manual-commit; core commits or rolls back. */
@@ -471,9 +552,18 @@ int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
         dml_fail(logger, __func__, SQL_HANDLE_DBC, ctx->svchp, "SQLAllocHandle", req->sql, NULL, 0);
         return -1;
     }
-    if (!SQL_SUCCEEDED(mssql_prepare_utf8(stmt, req->sql)))
+    /* C5: OUTPUT ... INTO @dm_k runs inside the batch that declares the
+     * table variable and reads it back. */
+    if (strstr(req->sql, DM_K_MARK))
     {
-        dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLPrepare", req->sql, NULL, 0);
+        size_t len = strlen(DM_K_PREFIX) + strlen(req->sql) + strlen(DM_K_SUFFIX) + 1;
+        if (!(batch = malloc(len))) goto Done;
+        snprintf(batch, len, "%s%s%s", DM_K_PREFIX, req->sql, DM_K_SUFFIX);
+        run_sql = batch;
+    }
+    if (!SQL_SUCCEEDED(mssql_prepare_utf8(stmt, run_sql)))
+    {
+        dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, "SQLPrepare", run_sql, NULL, 0);
         goto Done;
     }
     if (req->bind_count > 0 && !(inds = calloc((size_t)req->bind_count, sizeof(SQLLEN))))
@@ -494,15 +584,16 @@ int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
         }
 
         SQLRETURN r = SQLExecute(stmt);
-        if (r == SQL_NO_DATA) continue;            /* nothing matched */
-        if (!SQL_SUCCEEDED(r))
+        if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA)
         {
             char what[64];
             snprintf(what, sizeof(what), "SQLExecute (row %d of %d)", it + 1, iters);
-            dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, what, req->sql, NULL, 0);
+            dml_fail(logger, __func__, SQL_HANDLE_STMT, stmt, what, run_sql, NULL, 0);
             goto Done;
         }
-        if (collect_keys(stmt, logger, req->sql, &keys) != 0)
+        /* C5: NO_DATA (nothing matched, or a trigger's 0 first) still
+         * has results to read - the keys' result set among them. */
+        if (collect_keys(stmt, r, logger, run_sql, &keys) != 0)
             goto Done;
         SQLFreeStmt(stmt, SQL_CLOSE);
     }
@@ -519,6 +610,7 @@ Done:
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     free(inds);
     free(keys.buf);
+    free(batch);
     return rc;
 }
 
@@ -684,8 +776,12 @@ int mssql_lob_write_by_rowid(oci_context_t *ctx, logger_t *logger,
         goto Done;
     }
 
+    /* C5: the last row count is the UPDATE's own - a trigger's counts
+     * come first (probe E1: 3, 0, 1); NO_DATA is a first count of 0. */
     SQLLEN rows = 0;
-    if (r == SQL_NO_DATA || !SQL_SUCCEEDED(SQLRowCount(stmt, &rows)) || rows < 1)
+    if (read_results(stmt, r, logger, __func__, sql, &rows, NULL, 0) != 0)
+        goto Done;
+    if (rows < 1)
     {
         logger_write(logger, LOG_ERROR, __func__, 0,
                      "LOB write: no row of %s has %s = '%s'", req->table_fq, key, req->rowid_str);

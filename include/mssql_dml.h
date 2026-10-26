@@ -12,17 +12,24 @@
  *                     and UPDATE work, but it cannot take a LOB write
  *                     (5c, 5d).
  *   dml_execute       U3 - prepare, bind every value as text, execute,
- *                     SQLRowCount. SQL_NO_DATA from execute is "no row
- *                     matched", a success with 0 rows. The error text
+ *                     then every result read: rows_affected is the LAST
+ *                     row count - the statement's own, which comes after
+ *                     any a trigger sends (C5). SQL_NO_DATA from execute
+ *                     is a first count of 0, not the end. The error text
  *                     (M7) also goes to out_error_message.
  *   dml_execute_returning_rowids
- *                     U4 - as dml_execute, then reads the keys SQL
- *                     Server returns for OUTPUT inserted.<key>, one per
+ *                     U4 - as dml_execute, then reads the keys, one per
  *                     affected row, into the flat 24-byte-per-entry
- *                     buffer core reads (ROWID_BUF_SIZE). A key whose
- *                     text needs more than 23 characters fails the
- *                     statement. With no OUTPUT clause (no key) the
- *                     entries are "" and count is SQLRowCount.
+ *                     buffer core reads (ROWID_BUF_SIZE). Since C5 the
+ *                     dialect's clause is OUTPUT inserted.<key> INTO
+ *                     @dm_k (k), and a statement carrying it runs as
+ *                     DECLARE @dm_k TABLE (k nvarchar(4000)); <sql>;
+ *                     SELECT k FROM @dm_k; - the keys are the rows of the
+ *                     LAST result set (OUTPUT without INTO fails on a
+ *                     table with a trigger, error 334). A key whose text
+ *                     needs more than 23 characters fails the statement.
+ *                     With no OUTPUT clause (no key) the entries are ""
+ *                     and their number is the LAST row count.
  *                     row_count > 1 (a multi-row INSERT): the prepared
  *                     statement runs once per row, in row order, in the
  *                     caller's transaction.
@@ -33,7 +40,8 @@
  *                     from its file, a text value from inline_text (cut
  *                     on UTF-8 character boundaries). On SQL Server core
  *                     only sends BLOB-kind columns here - text LOBs are
- *                     bound in the statement itself (U6).
+ *                     bound in the statement itself (U6). The row
+ *                     count checked is the LAST one (C5).
  *
  * Z7 (2026-10-25): each write first switches the connection to
  * manual-commit, if it is not already; commit() / rollback() switch it

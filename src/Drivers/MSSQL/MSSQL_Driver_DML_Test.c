@@ -33,6 +33,23 @@
  *   Test 10  rollback removes an INSERT, commit keeps one
  *   Test 11  a 100 KB UTF-8 text LOB bound in the INSERT (U6), length
  *            checked on the server
+ *   Test 12  (C5, 26 Oct) dml_execute on MS_TRIGGER_TEST, whose trigger
+ *            has no SET NOCOUNT ON and sends its own counts (3 per row,
+ *            then 0) before the statement's: INSERT 1, UPDATE 2, UPDATE
+ *            matching none 0, DELETE 2 - the statement's own counts, not
+ *            the trigger's; the trigger's log rows are there
+ *   Test 13  (C5) returning calls on MS_TRIGGER_TEST, built with the
+ *            dialect's OUTPUT ... INTO @dm_k: a 3-row INSERT gives its 3
+ *            keys in order (before C5: error 334); an UPDATE of 2 rows
+ *            their 2 keys; 3 executions where the middle one matches
+ *            nothing give 2 keys; an UPDATE matching nothing 0; an UPDATE
+ *            without OUTPUT reports its own 2 rows, not the trigger's too
+ *   Test 14  (C5) the same on MS_TRIGGER_NC_TEST (trigger with SET
+ *            NOCOUNT ON): INSERT key back, UPDATE count 1
+ *
+ * Tests 12-14 need Create_Trigger_Test_mssql.sql (run once as sa).
+ * Reserved MS_TRIGGER_TEST / MS_TRIGGER_NC_TEST.ID 999451-999479; their
+ * MS_TRIGGER_LOG rows are removed with them.
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -45,6 +62,9 @@
 
 #define T_FIELD "DATA_MANAGER.OCI_FIELD_TEST"
 #define T_UNIT  "DATA_MANAGER.UNIT_TEST_FIELD_TEST"
+#define T_TRIG  "DATA_MANAGER.MS_TRIGGER_TEST"
+#define T_TRNC  "DATA_MANAGER.MS_TRIGGER_NC_TEST"
+#define T_TLOG  "DATA_MANAGER.MS_TRIGGER_LOG"
 
 static const db_driver_t *D;
 static oci_context_t     *C;
@@ -99,7 +119,17 @@ static void cleanup(void)
 {
     exec_sql("DELETE FROM " T_FIELD " WHERE NUMBER_COL BETWEEN 999401 AND 999499", 0, NULL, NULL, NULL, 0);
     exec_sql("DELETE FROM " T_UNIT  " WHERE NUMBER_COL BETWEEN 999401 AND 999499", 0, NULL, NULL, NULL, 0);
+    exec_sql("DELETE FROM " T_TRIG  " WHERE ID BETWEEN 999451 AND 999479", 0, NULL, NULL, NULL, 0);
+    exec_sql("DELETE FROM " T_TRNC  " WHERE ID BETWEEN 999451 AND 999479", 0, NULL, NULL, NULL, 0);
+    exec_sql("DELETE FROM " T_TLOG  " WHERE ID BETWEEN 999451 AND 999479", 0, NULL, NULL, NULL, 0);
     D->commit(C, &L.dml);
+}
+
+/* MS_TRIGGER_LOG rows for one ID and action (C5). */
+static long log_rows(const char *table, const char *id, const char *action)
+{
+    const char *b[] = { table, id, action };
+    return h_count(C, "SELECT COUNT(*) FROM " T_TLOG " WHERE TABLE_NAME = ? AND ID = ? AND ACTION = ?", 3, b);
 }
 
 int main(int argc, char *argv[])
@@ -164,7 +194,7 @@ int main(int argc, char *argv[])
                  "NCLOB_COL) %s VALUES (?, ?, %s, %s, ?, ?)", mid, e_date, e_raw);
         const char *b[] = { "999401", "dml test 3", "2030-02-03 04:05:06", "CAFEBABE",
                             "clob text 3", "nclob \xe6\x97\xa5\xe6\x9c\xac 3" };
-        if (strcmp(mid, "OUTPUT inserted.[FIELD_TEST_ID]") != 0)
+        if (strcmp(mid, "OUTPUT inserted.[FIELD_TEST_ID] INTO @dm_k (k)") != 0)
             bad("row locator: '%s'", mid);
         if (returning(sql, 6, b, 1, &res) != 0) bad("insert failed: %s", sql);
         else
@@ -373,6 +403,129 @@ int main(int argc, char *argv[])
         }
         free(big);
     }
+    failed |= g_fail;
+
+    /* ---- Tests 12-14 need the trigger tables ---- */
+    int have_trig = h_count(&ctx, "SELECT COUNT(*) FROM " T_TRIG " WHERE ID = 0", 0, NULL) == 0 &&
+                    h_count(&ctx, "SELECT COUNT(*) FROM " T_TRNC " WHERE ID = 0", 0, NULL) == 0;
+
+    /* ---- Test 12 ---- */
+    printf("Test 12 (C5: dml_execute, trigger)   ... ");
+    g_fail = 0;
+    if (!have_trig) bad("MS_TRIGGER_TEST / MS_TRIGGER_NC_TEST missing - run %s as sa",
+                        "MSSQL_Server/SQL/Create_Trigger_Test_mssql.sql");
+    else
+    {
+        int rows;
+        char got[32];
+        const char *ins[][2] = { { "999451", "a" }, { "999452", "b" }, { "999453", "c" } };
+        for (int i = 0; i < 3; i++)
+        {
+            rows = -1;
+            if (exec_sql("INSERT INTO " T_TRIG " (ID, NAME) VALUES (?, ?)", 2, ins[i], &rows, NULL, 0) != 0 ||
+                rows != 1)
+            { snprintf(got, sizeof(got), "%d", rows); bad("INSERT: want rows_affected 1, got %s", got); }
+        }
+        const char *u2[] = { "upd", "999451", "999452" };
+        rows = -1;
+        if (exec_sql("UPDATE " T_TRIG " SET NAME = ? WHERE ID BETWEEN ? AND ?", 3, u2, &rows, NULL, 0) != 0 ||
+            rows != 2)
+        { snprintf(got, sizeof(got), "%d", rows); bad("UPDATE 2 rows: want rows_affected 2, got %s", got); }
+        const char *u0[] = { "none", "999478", "999479" };
+        rows = -1;
+        if (exec_sql("UPDATE " T_TRIG " SET NAME = ? WHERE ID BETWEEN ? AND ?", 3, u0, &rows, NULL, 0) != 0 ||
+            rows != 0)
+        { snprintf(got, sizeof(got), "%d", rows); bad("UPDATE matching none: want 0, got %s", got); }
+        const char *d2[] = { "999452", "999453" };
+        rows = -1;
+        if (exec_sql("DELETE FROM " T_TRIG " WHERE ID BETWEEN ? AND ?", 2, d2, &rows, NULL, 0) != 0 ||
+            rows != 2)
+        { snprintf(got, sizeof(got), "%d", rows); bad("DELETE 2 rows: want rows_affected 2, got %s", got); }
+        if (log_rows("MS_TRIGGER_TEST", "999451", "I") != 3 || log_rows("MS_TRIGGER_TEST", "999451", "U") != 3 ||
+            log_rows("MS_TRIGGER_TEST", "999453", "D") != 3)
+            bad("the trigger's log rows are not all there%s", "");
+        D->commit(&ctx, &L.dml);
+    }
+    if (!g_fail) printf("OK (1, 2, 0, 2 - the statements' own counts; trigger logged)\n");
+    failed |= g_fail;
+
+    /* ---- Test 13 ---- */
+    printf("Test 13 (C5: OUTPUT INTO, trigger)   ... ");
+    g_fail = 0;
+    if (have_trig)
+    {
+        locator(DB_DML_INSERT, "DATA_MANAGER", "MS_TRIGGER_TEST", mid, sizeof(mid));
+        if (strcmp(mid, "OUTPUT inserted.[ID] INTO @dm_k (k)") != 0) bad("row locator: '%s'", mid);
+        snprintf(sql, sizeof(sql), "INSERT INTO " T_TRIG " (ID, NAME) %s VALUES (?, ?)", mid);
+        const char *b[] = { "999461", "x", "999462", "y", "999463", "z" };
+        if (returning(sql, 2, b, 3, &res) != 0) bad("3-row INSERT failed (334?): %s", sql);
+        else
+        {
+            if (res.count != 3) bad("3-row INSERT: want 3 keys%s", "");
+            for (int i = 0; i < 3 && i < res.count; i++)
+                if (strcmp(res.rowids + (size_t)i * MSSQL_ROWID_BUF_SIZE, b[i * 2]))
+                    bad("key out of order or wrong: %s", res.rowids + (size_t)i * MSSQL_ROWID_BUF_SIZE);
+            D->rowid_result_free(&res);
+        }
+        locator(DB_DML_UPDATE, "DATA_MANAGER", "MS_TRIGGER_TEST", mid, sizeof(mid));
+        snprintf(sql, sizeof(sql), "UPDATE " T_TRIG " SET NAME = ? %s WHERE ID BETWEEN ? AND ?", mid);
+        const char *u2[] = { "u", "999461", "999462" };
+        if (returning(sql, 3, u2, 0, &res) != 0 || res.count != 2) bad("UPDATE of 2 rows: want 2 keys%s", "");
+        else
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                const char *k = res.rowids + (size_t)i * MSSQL_ROWID_BUF_SIZE;
+                if (strcmp(k, "999461") && strcmp(k, "999462")) bad("unexpected key %s", k);
+            }
+        }
+        D->rowid_result_free(&res);
+        snprintf(sql, sizeof(sql), "UPDATE " T_TRIG " SET NAME = ? %s WHERE ID = ?", mid);
+        const char *u3[] = { "m", "999461", "m", "999479", "m", "999463" };
+        if (returning(sql, 2, u3, 3, &res) != 0 || res.count != 2 ||
+            strcmp(res.rowids, "999461") || strcmp(res.rowids + MSSQL_ROWID_BUF_SIZE, "999463"))
+            bad("3 executions, middle matching none: want keys 999461, 999463%s", "");
+        D->rowid_result_free(&res);
+        const char *u0[] = { "n", "999479" };
+        if (returning(sql, 2, u0, 1, &res) != 0 || res.count != 0) bad("UPDATE matching none: want 0 keys%s", "");
+        D->rowid_result_free(&res);
+        /* no OUTPUT clause (as for a table without a key): the UPDATE's own
+         * count as blank keys - 2, not 2 + the trigger's 6 + 0 */
+        const char *u4[] = { "w", "999461", "999462" };
+        if (returning("UPDATE " T_TRIG " SET NAME = ? WHERE ID BETWEEN ? AND ?", 3, u4, 0, &res) != 0 ||
+            res.count != 2)
+            bad("UPDATE without OUTPUT: want 2 rows reported%s", "");
+        D->rowid_result_free(&res);
+        if (log_rows("MS_TRIGGER_TEST", "999462", "I") != 3 || log_rows("MS_TRIGGER_TEST", "999463", "U") != 3)
+            bad("the trigger's log rows are not all there%s", "");
+        if (h_count(&ctx, "SELECT 1 AS X", 0, NULL) != 1) bad("connection unusable afterwards%s", "");
+        D->commit(&ctx, &L.dml);
+    }
+    else bad("trigger tables missing (Test 12)%s", "");
+    if (!g_fail) printf("OK (3 keys in order; 2; 2 of 3 executions; none: 0; no OUTPUT: 2)\n");
+    failed |= g_fail;
+
+    /* ---- Test 14 ---- */
+    printf("Test 14 (C5: trigger with NOCOUNT)   ... ");
+    g_fail = 0;
+    if (have_trig)
+    {
+        locator(DB_DML_INSERT, "DATA_MANAGER", "MS_TRIGGER_NC_TEST", mid, sizeof(mid));
+        snprintf(sql, sizeof(sql), "INSERT INTO " T_TRNC " (ID, NAME) %s VALUES (?, ?)", mid);
+        const char *b[] = { "999471", "nc" };
+        if (returning(sql, 2, b, 1, &res) != 0 || res.count != 1 || strcmp(res.rowids, "999471"))
+            bad("INSERT: want key 999471%s", "");
+        D->rowid_result_free(&res);
+        int rows = -1;
+        const char *u[] = { "nc2", "999471" };
+        if (exec_sql("UPDATE " T_TRNC " SET NAME = ? WHERE ID = ?", 2, u, &rows, NULL, 0) != 0 || rows != 1)
+            bad("UPDATE: want rows_affected 1%s", "");
+        if (log_rows("MS_TRIGGER_NC_TEST", "999471", "I") != 3 || log_rows("MS_TRIGGER_NC_TEST", "999471", "U") != 3)
+            bad("the trigger's log rows are not all there%s", "");
+        D->commit(&ctx, &L.dml);
+    }
+    else bad("trigger tables missing (Test 12)%s", "");
+    if (!g_fail) printf("OK (key back; count 1)\n");
     failed |= g_fail;
 
     cleanup();

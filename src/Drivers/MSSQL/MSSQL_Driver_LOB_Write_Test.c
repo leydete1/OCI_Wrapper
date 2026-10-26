@@ -34,6 +34,13 @@
  *   Test 9   (Z7, 25 Oct) a LOB write as a transaction's first write
  *            switches to manual-commit itself: rolled back, the row keeps
  *            Test 3's 1000 bytes
+ *   Test 10  (C5, 26 Oct) on MS_TRIGGER_TEST, whose trigger has no SET
+ *            NOCOUNT ON and sends its own counts (3, then 0) before the
+ *            UPDATE's 1: INSERT through the dialect's OUTPUT ... INTO
+ *            @dm_k (before C5: error 334), then a 300 KB BLOB and a text
+ *            LOB written by key - SHA-256 match, and the trigger logged
+ *            each write. Needs Create_Trigger_Test_mssql.sql; reserved
+ *            MS_TRIGGER_TEST.ID 999511-999519.
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -49,6 +56,8 @@
 #define T_CLOB  "DATA_MANAGER.OCI_CLOB_TEST"
 #define T_FIELD "DATA_MANAGER.OCI_FIELD_TEST"
 #define T_AUDIT "DATA_MANAGER.AUDIT_TRAIL"
+#define T_TRIG  "DATA_MANAGER.MS_TRIGGER_TEST"
+#define T_TLOG  "DATA_MANAGER.MS_TRIGGER_LOG"
 
 static const db_driver_t *D;
 static oci_context_t     *C;
@@ -123,6 +132,8 @@ static void cleanup(void)
     exec_sql("DELETE FROM " T_LOB   " WHERE ID BETWEEN 999501 AND 999509", 0, NULL, NULL, 0);
     exec_sql("DELETE FROM " T_CLOB  " WHERE ID BETWEEN 999501 AND 999509", 0, NULL, NULL, 0);
     exec_sql("DELETE FROM " T_FIELD " WHERE NUMBER_COL BETWEEN 999501 AND 999509", 0, NULL, NULL, 0);
+    exec_sql("DELETE FROM " T_TRIG  " WHERE ID BETWEEN 999511 AND 999519", 0, NULL, NULL, 0);
+    exec_sql("DELETE FROM " T_TLOG  " WHERE ID BETWEEN 999511 AND 999519", 0, NULL, NULL, 0);
     D->commit(C, &L.dml);
 }
 
@@ -396,6 +407,52 @@ int main(int argc, char *argv[])
         if (strcmp(hash, want) || atol(len) != 1000) bad("the rolled-back LOB write stayed: DATALENGTH %s", len);
     }
     if (!g_fail) printf("OK (manual-commit for the write; rollback kept the 1000 bytes)\n");
+    failed |= g_fail;
+
+    /* ---- Test 10 ---- */
+    printf("Test 10 (C5: LOB writes, trigger)    ... ");
+    g_fail = 0;
+    if (h_count(&ctx, "SELECT COUNT(*) FROM " T_TRIG " WHERE ID = 0", 0, NULL) != 0)
+        bad("MS_TRIGGER_TEST missing - run %s as sa", "MSSQL_Server/SQL/Create_Trigger_Test_mssql.sql");
+    else
+    {
+        /* the INSERT as core builds it: table_key, then the dialect */
+        char tkey[128] = "", mid[256] = "", tail[64], sql[512], tk[32] = "";
+        int kc = 0;
+        D->table_key(&ctx, "DATA_MANAGER", "MS_TRIGGER_TEST", tkey, sizeof(tkey), &kc);
+        const char *keys[1] = { tkey };
+        db_row_locator_ctx_t loc = { "MS_TRIGGER_TEST", "DATA_MANAGER", kc ? keys : NULL, kc };
+        if (D->dialect->row_locator_clauses(DB_DML_INSERT, &loc, 1, mid, sizeof(mid), tail, sizeof(tail)) != 0 ||
+            strcmp(mid, "OUTPUT inserted.[ID] INTO @dm_k (k)"))
+            bad("row locator: '%s'", mid);
+        snprintf(sql, sizeof(sql), "INSERT INTO " T_TRIG " (ID, NAME) %s VALUES (?, ?)", mid);
+        const char *b[] = { "999511", "lob c5" };
+        if (insert_key(sql, 2, b, tk, sizeof(tk)) != 0 || strcmp(tk, "999511"))
+            bad("INSERT failed (334?) - key '%s'", tk);
+        else
+        {
+            if (lob_write(1, T_TRIG, "DOC", tk, f_big, NULL, 0, &bytes) != 0 || bytes != big_n)
+                bad("BLOB lob_write_by_rowid failed%s", "");
+            h_sha256_hex(big, big_n, want);
+            server_hash("DOC", T_TRIG, "ID", tk, hash, len);
+            if (strcmp(hash, want)) bad("BLOB SHA-256 differs: DATALENGTH %s", len);
+
+            size_t tl = 0;
+            char *text = make_text(20000, &tl);
+            if (lob_write(0, T_TRIG, "NOTE", tk, NULL, text, tl, &bytes) != 0 || bytes != tl)
+                bad("text lob_write_by_rowid failed%s", "");
+            h_sha256_hex(text, tl, want);
+            server_hash("CAST(CAST(NOTE AS varchar(max)) AS varbinary(max))", T_TRIG, "ID", tk, hash, len);
+            if (strcmp(hash, want)) bad("text SHA-256 differs: DATALENGTH %s", len);
+            free(text);
+
+            const char *lb[] = { tk };
+            if (h_count(&ctx, "SELECT COUNT(*) FROM " T_TLOG " WHERE ID = ? AND ACTION = 'U'", 1, lb) != 6)
+                bad("want 6 trigger log rows for the two writes%s", "");
+        }
+        D->commit(&ctx, &L.dml);
+    }
+    if (!g_fail) printf("OK (key 999511; BLOB and text match; trigger logged both writes)\n");
     failed |= g_fail;
 
     cleanup();

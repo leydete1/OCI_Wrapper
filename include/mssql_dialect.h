@@ -19,8 +19,10 @@
  *                        NULL anything else - text LOBs (varchar(max),
  *                             nvarchar(max), text, ntext, xml) are bound
  *                             in the statement itself (Stage 4, U6)
- *   row_locator_clauses  mid "OUTPUT inserted.[KEY]", tail "" (Stage 4,
- *                        U2); both "" when the table has no key
+ *   row_locator_clauses  mid "OUTPUT inserted.[KEY] INTO @dm_k (k)",
+ *                        tail "" (Stage 4, U2; INTO since C5, 26 Oct -
+ *                        mssql_dml.c declares @dm_k); both "" when the
+ *                        table has no key
  *   row_limit_sql        SELECT TOP (n) * FROM (<sql>) AS dm_t
  *                        or, with a top-level ORDER BY (5a),
  *                        <sql> OFFSET 0 ROWS FETCH NEXT n ROWS ONLY

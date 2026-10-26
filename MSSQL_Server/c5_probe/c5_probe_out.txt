@@ -1,0 +1,199 @@
+MSSQL_C5_Probe - Mon Oct 26 17:28:26 2026
+server localhost,1433  database DataManager  login DATA_MANAGER  (APP=DataSol_C5_Probe)
+results: cN = a row count of N, R[..] = a result set and its values, ERR = an error
+
+NOCOUNT at start: OFF
+
+Test   What                                                       Seen                               Result
+
+==== UT  DATA_MANAGER.UNIT_TEST_FIELD_TEST  (no trigger)
+       A1-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A1-UT  plain INSERT 2 rows (log +0)                               first=2 [c2 ]                      same as statement
+       A2-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A2-UT  plain UPDATE 2 rows (log +0)                               first=2 [c2 ]                      same as statement
+       A3-UT  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA 
+A3-UT  plain UPDATE 0 rows: does execute say NO_DATA?             NO_DATA first=-1 [NO_DATA ]        info
+       A4-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A4-UT  plain DELETE 2 rows (log +0)                               first=2 [c2 ]                      same as statement
+       B1-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9111] 
+B1-UT  INSERT ... OUTPUT inserted.[K] (today)                     R[9111]                            ok
+       B2-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9112,9113] 
+B2-UT  UPDATE ... OUTPUT inserted.[K] (today)                     R[9112,9113]                       ok
+       C1a-UT  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9121] 
+C1a-UT batch INSERT, execution 1 of 3                             last set [9121] [c1 R[9121] ]      ok
+       C1b-UT  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9122] 
+C1b-UT batch INSERT, execution 2 of 3                             last set [9122] [c1 R[9122] ]      ok
+       C1c-UT  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9123] 
+C1c-UT batch INSERT, execution 3 of 3                             last set [9123] [c1 R[9123] ]      ok
+       log +0 for 3 rows inserted
+       C2-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 R[9124,9125] 
+C2-UT  batch UPDATE 2 rows                                        last set [9124,9125] [c2 R[9124,9125] ] ok
+       C3-UT  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA R[] 
+C3-UT  batch UPDATE 0 rows                                        NO_DATA last set [] n=0            ok
+       CN1a-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9121] 
+CN1a-UT NOCOUNT batch INSERT, execution 1 of 3                     last set [9121] [R[9121] ]         ok
+       CN1b-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9122] 
+CN1b-UT NOCOUNT batch INSERT, execution 2 of 3                     last set [9122] [R[9122] ]         ok
+       CN1c-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9123] 
+CN1c-UT NOCOUNT batch INSERT, execution 3 of 3                     last set [9123] [R[9123] ]         ok
+       log +0 for 3 rows inserted
+CN1z-UT NOCOUNT back OFF after the batch?                          OFF                                ok
+       CN2-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[9124,9125] 
+CN2-UT NOCOUNT batch UPDATE 2 rows                                last set [9124,9125] [R[9124,9125] ] ok
+       CN3-UT  execute=SUCCESS  first SQLRowCount=0  results: R[] 
+CN3-UT NOCOUNT batch UPDATE 0 rows                                SUCCESS last set [] n=0            ok
+       D1-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D1-UT  INSERT 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       D2-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D2-UT  UPDATE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       D3-UT  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D3-UT  DELETE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       DN1-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN1-UT NOCOUNT INSERT 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN2-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN2-UT NOCOUNT UPDATE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN3-UT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN3-UT NOCOUNT DELETE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       E2-UT  SQLExecDirect=NEED_DATA  last SQLParamData=SUCCESS
+       E2-UT  execute=SUCCESS  first SQLRowCount=1  results: c1 
+E2-UT  LOB write (text, 1 row, data at exec)                      SQLRowCount=1 [c1 ] log +0         same as statement
+       F1-UT  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F1-UT  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'UNIT_TEST_FIELD_TEST_PK'. Cannot insert duplicate key in object 'DATA_MANAGER.UNIT_TEST_FIELD_TEST'. The duplicate key valu | 01000/3621: The statement has been terminated.
+F1-UT  NOCOUNT batch, duplicate key: error reported?              2627                               ok
+F1-UT  ... NOCOUNT afterwards                                     OFF                                info
+       F2-UT  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F2-UT  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'UNIT_TEST_FIELD_TEST_PK'. Cannot insert duplicate key in object 'DATA_MANAGER.UNIT_TEST_FIELD_TEST'. The duplicate key valu | 01000/3621: The statement has been terminated.
+F2-UT  batch, duplicate key: error reported?                      2627                               ok
+
+==== TT  DATA_MANAGER.MS_TRIGGER_TEST  (trigger WITHOUT SET NOCOUNT ON)
+       A1-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 
+A1-TT  plain INSERT 2 rows (log +6)                               first=6 [c6 c0 c2 ]                DIFFERS (finding)
+       A2-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 
+A2-TT  plain UPDATE 2 rows (log +6)                               first=6 [c6 c0 c2 ]                DIFFERS (finding)
+       A3-TT  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA c0 c0 
+A3-TT  plain UPDATE 0 rows: does execute say NO_DATA?             NO_DATA first=-1 [NO_DATA c0 c0 ]  info
+       A4-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 
+A4-TT  plain DELETE 2 rows (log +6)                               first=6 [c6 c0 c2 ]                DIFFERS (finding)
+       B1-TT  execute=ERROR  first SQLRowCount=-1  results: ERR 
+       B1-TT  error at execute: 42000/334: The target table 'DATA_MANAGER.MS_TRIGGER_TEST' of the DML statement cannot have any enabled triggers if the statement contains an OUTPUT clause without INTO cl | 42000/8180: Statement(s) could not be prepared.
+B1-TT  INSERT ... OUTPUT inserted.[K] (today)                     error 334                          ok (334 as expected)
+       B2-TT  execute=ERROR  first SQLRowCount=-1  results: ERR 
+       B2-TT  error at execute: 42000/334: The target table 'DATA_MANAGER.MS_TRIGGER_TEST' of the DML statement cannot have any enabled triggers if the statement contains an OUTPUT clause without INTO cl | 42000/8180: Statement(s) could not be prepared.
+B2-TT  UPDATE ... OUTPUT inserted.[K] (today)                     error 334                          ok (334 as expected)
+       C1a-TT  execute=SUCCESS  first SQLRowCount=3  results: c3 c0 c1 R[9121] 
+C1a-TT batch INSERT, execution 1 of 3                             last set [9121] [c3 c0 c1 R[9121] ] ok
+       C1b-TT  execute=SUCCESS  first SQLRowCount=3  results: c3 c0 c1 R[9122] 
+C1b-TT batch INSERT, execution 2 of 3                             last set [9122] [c3 c0 c1 R[9122] ] ok
+       C1c-TT  execute=SUCCESS  first SQLRowCount=3  results: c3 c0 c1 R[9123] 
+C1c-TT batch INSERT, execution 3 of 3                             last set [9123] [c3 c0 c1 R[9123] ] ok
+       log +9 for 3 rows inserted (expect 9)
+       C2-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 R[9124,9125] 
+C2-TT  batch UPDATE 2 rows                                        last set [9124,9125] [c6 c0 c2 R[9124,9125] ] ok
+       C3-TT  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA c0 c0 R[] 
+C3-TT  batch UPDATE 0 rows                                        NO_DATA last set [] n=0            ok
+       CN1a-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[9121] 
+CN1a-TT NOCOUNT batch INSERT, execution 1 of 3                     last set [9121] [R[9121] ]         ok
+       CN1b-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[9122] 
+CN1b-TT NOCOUNT batch INSERT, execution 2 of 3                     last set [9122] [R[9122] ]         ok
+       CN1c-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[9123] 
+CN1c-TT NOCOUNT batch INSERT, execution 3 of 3                     last set [9123] [R[9123] ]         ok
+       log +9 for 3 rows inserted (expect 9)
+CN1z-TT NOCOUNT back OFF after the batch?                          OFF                                ok
+       CN2-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[9124,9125] 
+CN2-TT NOCOUNT batch UPDATE 2 rows                                last set [9124,9125] [R[9124,9125] ] ok
+       CN3-TT  execute=SUCCESS  first SQLRowCount=0  results: R[] 
+CN3-TT NOCOUNT batch UPDATE 0 rows                                SUCCESS last set [] n=0            ok
+       D1-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 R[2] 
+D1-TT  INSERT 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c6 c0 c2 R[2] ]      ok (statement's own)
+       D2-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 R[2] 
+D2-TT  UPDATE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c6 c0 c2 R[2] ]      ok (statement's own)
+       D3-TT  execute=SUCCESS  first SQLRowCount=6  results: c6 c0 c2 R[2] 
+D3-TT  DELETE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c6 c0 c2 R[2] ]      ok (statement's own)
+       DN1-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN1-TT NOCOUNT INSERT 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN2-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN2-TT NOCOUNT UPDATE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN3-TT  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN3-TT NOCOUNT DELETE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       E1-TT  SQLExecDirect=NEED_DATA  last SQLParamData=SUCCESS
+       E1-TT  execute=SUCCESS  first SQLRowCount=3  results: c3 c0 c1 
+E1-TT  LOB write (varbinary, 1 row, data at exec)                 SQLRowCount=3 [c3 c0 c1 ] log +3   DIFFERS (finding)
+       E2-TT  SQLExecDirect=NEED_DATA  last SQLParamData=SUCCESS
+       E2-TT  execute=SUCCESS  first SQLRowCount=3  results: c3 c0 c1 
+E2-TT  LOB write (text, 1 row, data at exec)                      SQLRowCount=3 [c3 c0 c1 ] log +3   DIFFERS (finding)
+       F1-TT  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F1-TT  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'PK_MS_TRIGGER_TEST'. Cannot insert duplicate key in object 'DATA_MANAGER.MS_TRIGGER_TEST'. The duplicate key value is (9151 | 01000/3621: The statement has been terminated.
+F1-TT  NOCOUNT batch, duplicate key: error reported?              2627                               ok
+F1-TT  ... NOCOUNT afterwards                                     OFF                                info
+       F2-TT  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F2-TT  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'PK_MS_TRIGGER_TEST'. Cannot insert duplicate key in object 'DATA_MANAGER.MS_TRIGGER_TEST'. The duplicate key value is (9151 | 01000/3621: The statement has been terminated.
+F2-TT  batch, duplicate key: error reported?                      2627                               ok
+
+==== NC  DATA_MANAGER.MS_TRIGGER_NC_TEST  (trigger WITH SET NOCOUNT ON)
+       A1-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A1-NC  plain INSERT 2 rows (log +6)                               first=2 [c2 ]                      same as statement
+       A2-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A2-NC  plain UPDATE 2 rows (log +6)                               first=2 [c2 ]                      same as statement
+       A3-NC  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA 
+A3-NC  plain UPDATE 0 rows: does execute say NO_DATA?             NO_DATA first=-1 [NO_DATA ]        info
+       A4-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 
+A4-NC  plain DELETE 2 rows (log +6)                               first=2 [c2 ]                      same as statement
+       B1-NC  execute=ERROR  first SQLRowCount=-1  results: ERR 
+       B1-NC  error at execute: 42000/334: The target table 'DATA_MANAGER.MS_TRIGGER_NC_TEST' of the DML statement cannot have any enabled triggers if the statement contains an OUTPUT clause without INTO | 42000/8180: Statement(s) could not be prepared.
+B1-NC  INSERT ... OUTPUT inserted.[K] (today)                     error 334                          ok (334 as expected)
+       B2-NC  execute=ERROR  first SQLRowCount=-1  results: ERR 
+       B2-NC  error at execute: 42000/334: The target table 'DATA_MANAGER.MS_TRIGGER_NC_TEST' of the DML statement cannot have any enabled triggers if the statement contains an OUTPUT clause without INTO | 42000/8180: Statement(s) could not be prepared.
+B2-NC  UPDATE ... OUTPUT inserted.[K] (today)                     error 334                          ok (334 as expected)
+       C1a-NC  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9121] 
+C1a-NC batch INSERT, execution 1 of 3                             last set [9121] [c1 R[9121] ]      ok
+       C1b-NC  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9122] 
+C1b-NC batch INSERT, execution 2 of 3                             last set [9122] [c1 R[9122] ]      ok
+       C1c-NC  execute=SUCCESS  first SQLRowCount=1  results: c1 R[9123] 
+C1c-NC batch INSERT, execution 3 of 3                             last set [9123] [c1 R[9123] ]      ok
+       log +9 for 3 rows inserted (expect 9)
+       C2-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 R[9124,9125] 
+C2-NC  batch UPDATE 2 rows                                        last set [9124,9125] [c2 R[9124,9125] ] ok
+       C3-NC  execute=NO_DATA  first SQLRowCount=-1  results: NO_DATA R[] 
+C3-NC  batch UPDATE 0 rows                                        NO_DATA last set [] n=0            ok
+       CN1a-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[9121] 
+CN1a-NC NOCOUNT batch INSERT, execution 1 of 3                     last set [9121] [R[9121] ]         ok
+       CN1b-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[9122] 
+CN1b-NC NOCOUNT batch INSERT, execution 2 of 3                     last set [9122] [R[9122] ]         ok
+       CN1c-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[9123] 
+CN1c-NC NOCOUNT batch INSERT, execution 3 of 3                     last set [9123] [R[9123] ]         ok
+       log +9 for 3 rows inserted (expect 9)
+CN1z-NC NOCOUNT back OFF after the batch?                          OFF                                ok
+       CN2-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[9124,9125] 
+CN2-NC NOCOUNT batch UPDATE 2 rows                                last set [9124,9125] [R[9124,9125] ] ok
+       CN3-NC  execute=SUCCESS  first SQLRowCount=0  results: R[] 
+CN3-NC NOCOUNT batch UPDATE 0 rows                                SUCCESS last set [] n=0            ok
+       D1-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D1-NC  INSERT 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       D2-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D2-NC  UPDATE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       D3-NC  execute=SUCCESS  first SQLRowCount=2  results: c2 R[2] 
+D3-NC  DELETE 2 rows; SELECT @@ROWCOUNT                           @@ROWCOUNT=2 [c2 R[2] ]            ok (statement's own)
+       DN1-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN1-NC NOCOUNT INSERT 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN2-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN2-NC NOCOUNT UPDATE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       DN3-NC  execute=SUCCESS  first SQLRowCount=-1  results: R[2] 
+DN3-NC NOCOUNT DELETE 2 rows; SELECT @@ROWCOUNT                   @@ROWCOUNT=2 [R[2] ]               ok (statement's own)
+       E1-NC  SQLExecDirect=NEED_DATA  last SQLParamData=SUCCESS
+       E1-NC  execute=SUCCESS  first SQLRowCount=1  results: c1 
+E1-NC  LOB write (varbinary, 1 row, data at exec)                 SQLRowCount=1 [c1 ] log +3         same as statement
+       E2-NC  SQLExecDirect=NEED_DATA  last SQLParamData=SUCCESS
+       E2-NC  execute=SUCCESS  first SQLRowCount=1  results: c1 
+E2-NC  LOB write (text, 1 row, data at exec)                      SQLRowCount=1 [c1 ] log +3         same as statement
+       F1-NC  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F1-NC  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'PK_MS_TRIGGER_NC_TEST'. Cannot insert duplicate key in object 'DATA_MANAGER.MS_TRIGGER_NC_TEST'. The duplicate key value is | 01000/3621: The statement has been terminated.
+F1-NC  NOCOUNT batch, duplicate key: error reported?              2627                               ok
+F1-NC  ... NOCOUNT afterwards                                     OFF                                info
+       F2-NC  execute=ERROR  first SQLRowCount=-1  results: ERR R[] 
+       F2-NC  error at execute: 23000/2627: Violation of PRIMARY KEY constraint 'PK_MS_TRIGGER_NC_TEST'. Cannot insert duplicate key in object 'DATA_MANAGER.MS_TRIGGER_NC_TEST'. The duplicate key value is | 01000/3621: The statement has been terminated.
+F2-NC  batch, duplicate key: error reported?                      2627                               ok
+
+rows left behind (all rolled back, expect 0): 0
+NOCOUNT at end: OFF
+
+DONE - 0 unexpected result(s). DIFFERS / info lines are findings, not failures.

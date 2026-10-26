@@ -285,12 +285,17 @@ static const char *ms_lob_placeholder(const char *dtype)
     return NULL;
 }
 
-/* Stage 4 (U2, 5c): "OUTPUT inserted.[KEY]" after the column list of an
+/* Stage 4 (U2, 5c): the OUTPUT clause after the column list of an
  * INSERT / the SET list of an UPDATE; nothing at the end. The key comes
  * from the driver's table_key(), which core puts in loc. A table with no
  * single-column key gets no OUTPUT clause: the statement still runs and
  * its row count is reported, but it cannot take a LOB write (5d). pos
- * (Oracle's RETURNING bind position) is not used. */
+ * (Oracle's RETURNING bind position) is not used.
+ *
+ * C5 (2026-10-26): "OUTPUT inserted.[KEY] INTO @dm_k (k)" for every table
+ * - OUTPUT without INTO fails on a table with an enabled trigger (error
+ * 334). dml_execute_returning_rowids (mssql_dml.c) runs a statement
+ * carrying it inside the batch that declares @dm_k and reads it back. */
 static int ms_row_locator_clauses(db_dml_kind_t kind,
                                   const db_row_locator_ctx_t *loc, int pos,
                                   char *mid, size_t mid_max,
@@ -315,7 +320,7 @@ static int ms_row_locator_clauses(db_dml_kind_t kind,
     }
     q[u++] = ']';
     q[u] = '\0';
-    return ms_fmt(mid, mid_max, "OUTPUT inserted.%s", q);
+    return ms_fmt(mid, mid_max, "OUTPUT inserted.%s INTO @dm_k (k)", q);
 }
 
 static int ms_row_limit_sql(const char *sql, int max_rows,
