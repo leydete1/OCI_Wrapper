@@ -609,13 +609,13 @@ static void shutdown_metrics_pool(oci_context_t *metrics_ctx,
 /*  -------------------------------------------------------            */
 /*  When the connection pool is in use, each XML file is processed     */
 /*  through a worker_ctx created with memset() zero.                   */
-/*  OCI_Pool_get_session() copies only the OCI handles (envhp, errhp, */
+/*  driver->get_session() copies only the connection handles (envhp,  */
 /*  svchp etc.) into worker_ctx - it does NOT copy logger pointers     */
 /*  or any other application-level fields.  Those fields remain NULL   */
 /*  after the memset, causing all module logging to be silently lost.  */
 /*                                                                      */
 /*  The fix is in the pool dispatch block in main() - immediately      */
-/*  after OCI_Pool_get_session() succeeds, every logger pointer and    */
+/*  after driver->get_session() succeeds, every logger pointer and     */
 /*  ctx.ini / ctx.resultset_cache must be explicitly copied from the   */
 /*  parent ctx into worker_ctx.  Any new logger added here must also   */
 /*  be added to that copy block or it will not write to its log file   */
@@ -1692,7 +1692,7 @@ int main(int argc, char *argv[])
      *  transaction.
      *
      *  Oracle transactions are bound to one session.  In pooled mode,
-     *  OCI_Pool_get_session() normally hands out a fresh borrowed
+     *  driver->get_session() normally hands out a fresh borrowed
      *  session per call - correct for independent, single-call units
      *  of work, but wrong once multiple DML calls must be wrapped in
      *  one logical transaction via tx_begin()/tx_commit().  If each
@@ -1734,7 +1734,7 @@ int main(int argc, char *argv[])
         /*
          * ---- Copy all shared pointers into the pinned worker context ----
          *
-         * OCI_Pool_get_session() copies only the OCI handles (envhp,
+         * driver->get_session() copies only the connection handles (envhp,
          * errhp, svchp etc.) into worker_ctx.  All logger pointers and
          * application-level fields remain NULL after the memset above
          * and must be explicitly copied here before any module code

@@ -18,6 +18,9 @@
  *   Test 3  connection string logged with PWD=***, never the password
  *   Test 4  commit: an INSERT is visible from an independent connection
  *   Test 5  rollback: an INSERT is gone, checked independently
+ *           (Z7, 25 Oct: Tests 4-5 write through dml_execute, which
+ *           switches to manual-commit; Test 4 also checks the connection
+ *           is back in autocommit after the commit)
  *   Test 6  commit with nothing pending returns 0
  *   Test 7  a failed commit returns -1, never DB_TX_RETRYABLE (D2)
  *
@@ -93,6 +96,19 @@ static int raw_exec(void *hdbc, const char *sql)
         fprintf(stderr, "  raw_exec failed: %s -- %s\n", sql, d);
     }
     SQLFreeHandle(SQL_HANDLE_STMT, st);
+    return rc;
+}
+
+/* Z7: a write goes through the driver's dml_execute, which switches the
+ * connection to manual-commit first - a raw INSERT on a connection that
+ * now sits in autocommit would commit at once. 0 = ok. */
+static int drv_write(const db_driver_t *d, oci_context_t *c, logger_t *lg, const char *sql)
+{
+    db_dml_request_t r = { sql, 0, NULL };
+    int  n = 0;
+    char e[1024] = "";
+    int  rc = d->dml_execute(c, lg, &r, &n, e, sizeof(e));
+    if (rc != 0) fprintf(stderr, "  drv_write failed: %s -- %s\n", sql, e);
     return rc;
 }
 
@@ -241,20 +257,25 @@ int main(int argc, char *argv[])
         /* ---- Test 4 ---- */
         printf("Test 4 (commit + independent check)  ... ");
         long n = -1;
-        if (raw_exec(ctx.svchp, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999101)") != 0 ||
+        if (drv_write(driver, &ctx, &conn_l, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999101)") != 0 ||
             driver->commit(&ctx, &conn_l) != 0 ||
             (n = raw_long(chk, "SELECT COUNT(*) FROM DATA_MANAGER.UNIT_TEST_FIELD_TEST WHERE NUMBER_COL = 999101")) != 1)
         {
             printf("FAILED - count after commit = %ld (expected 1)\n", n);
             failed = 1;
         }
+        else if (mssql_tx_in_manual(ctx.svchp) != 0)
+        {
+            printf("FAILED - connection not back in autocommit after commit (Z7)\n");
+            failed = 1;
+        }
         else
-            printf("OK (1 row, commit confirmed)\n");
+            printf("OK (1 row, commit confirmed; back in autocommit)\n");
 
         /* ---- Test 5 ---- */
         printf("Test 5 (rollback + independent check)... ");
         n = -1;
-        if (raw_exec(ctx.svchp, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999102)") != 0 ||
+        if (drv_write(driver, &ctx, &conn_l, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999102)") != 0 ||
             driver->rollback(&ctx, &conn_l) != 0 ||
             (n = raw_long(chk, "SELECT COUNT(*) FROM DATA_MANAGER.UNIT_TEST_FIELD_TEST WITH (READCOMMITTEDLOCK) WHERE NUMBER_COL = 999102")) != 0)
         {

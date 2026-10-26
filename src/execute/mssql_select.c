@@ -221,8 +221,10 @@ static const char *ms_field_type(SQLSMALLINT type, const char *type_name)
             return strcasecmp(type_name, "smalldatetime") == 0 ? "DATE" : "TIMESTAMP";
         case SQL_SS_TIMESTAMPOFFSET:
             return "TIMESTAMP";
+        case SQL_BINARY: case SQL_VARBINARY:   /* binary(n), varbinary(n), rowversion */
+            return "STRING";         /* C3 (25 Oct): hex text, as Oracle RAW - was UNKNOWN */
         default:
-            return "UNKNOWN";        /* binary, varbinary, rowversion ... */
+            return "UNKNOWN";
     }
 }
 

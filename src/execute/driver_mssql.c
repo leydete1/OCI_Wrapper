@@ -10,7 +10,10 @@
  *   get_session / release_session / session_is_alive /
  *   reconnect_session / health_check
  *                          MSSQL_Pool.c
- *   commit / rollback      SQLEndTran on the session's connection.
+ *   commit / rollback      SQLEndTran on the session's connection, then
+ *                          back to autocommit (Z7, 2026-10-25: connections
+ *                          sit in autocommit and each write transaction
+ *                          runs in manual-commit - MSSQL_Pool.h).
  *                          commit never returns DB_TX_RETRYABLE (D2): a
  *                          deadlock (1205) has already rolled the whole
  *                          transaction back, and a lost connection
@@ -115,18 +118,27 @@ static int mssql_health_check(oci_context_t *ctx)
 /* ================================================================== */
 /*  Transactions (P6)                                                   */
 /* ================================================================== */
+/* Z7 (2026-10-25): back to autocommit only after SQLEndTran succeeded.
+ * After a failed commit the connection stays in manual-commit - switching
+ * autocommit on would commit the failed work - and core's rollback then
+ * ends it. A failed switch back is logged (WARN) and does not fail the
+ * commit or rollback, which did happen. */
 static int mssql_commit(oci_context_t *ctx, logger_t *logger)
 {
     if (!ctx) return -1;
     logger_write(logger, LOG_DEBUG, __func__, 0, "COMMIT (SQLEndTran)");
-    return mssql_end_tran(ctx->svchp, 1, logger, __func__) == 0 ? 0 : -1;
+    if (mssql_end_tran(ctx->svchp, 1, logger, __func__) != 0) return -1;
+    mssql_tx_end_write(ctx->svchp, ctx->ini, logger, __func__);
+    return 0;
 }
 
 static int mssql_rollback(oci_context_t *ctx, logger_t *logger)
 {
     if (!ctx) return -1;
     logger_write(logger, LOG_DEBUG, __func__, 0, "ROLLBACK (SQLEndTran)");
-    return mssql_end_tran(ctx->svchp, 0, logger, __func__) == 0 ? 0 : -1;
+    if (mssql_end_tran(ctx->svchp, 0, logger, __func__) != 0) return -1;
+    mssql_tx_end_write(ctx->svchp, ctx->ini, logger, __func__);
+    return 0;
 }
 
 /* ================================================================== */

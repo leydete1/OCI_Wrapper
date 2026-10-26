@@ -9,11 +9,12 @@
  * db_driver_t. db_driver_get() (db_driver.c) returns it when db_type =
  * mssql; everything else goes through the returned function pointers.
  *
- * Stage 2 (2026-10-18): connect / disconnect / pool / session_is_alive /
- * reconnect_session / health_check / commit / rollback are real. Every
- * other hook - and every dialect hook - is present but fails with
- * "driver_mssql: <hook> not implemented yet (stage N)" until that stage
- * fills it in.
+ * Every hook and every dialect hook is implemented (Stages 2-6,
+ * 18-22 Oct 2026; see driver_mssql.c for which file holds each one).
+ *
+ * Transactions (Z7, 2026-10-25): connections sit in autocommit; each
+ * write transaction runs in manual-commit from its first write until
+ * commit() or rollback() - MSSQL_Pool.h.
  */
 
 #ifndef DRIVER_MSSQL_H

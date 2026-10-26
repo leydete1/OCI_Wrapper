@@ -1,126 +1,61 @@
 /*
  * db_driver.h
  *
- * Vendor-neutral database driver interface (db_driver_t).
+ * Vendor-neutral database driver interface (db_driver_t) and its SQL
+ * dialect (db_dialect_t). Two implementations: driver_oracle.c (OCI) and
+ * driver_mssql.c (ODBC, SQL Server). config.ini's db_type picks one per
+ * process - see db_driver_get() below. The design and its history are in
+ * db_driver_Interface_and_New_Driver_Guide (v2.1, 25 Oct 2026); that
+ * guide's Section 2 is the contract summary of this file.
  *
- * SCOPE, updated as each module's abstraction lands (see
- * DB_Driver_Abstraction_Notes.md for the running history):
- *   connect / disconnect / pooling / select (cursor) - proven, live
- *   DELETE's scalar-bind execute + commit/rollback - in progress,
- *     2026-09-16 (see dml_execute()/commit()/rollback() below)
- * Deliberately NOT included yet: INSERT's array-bind-batch and BLOB/CLOB
- * SET-value cases, UPDATE, DDL. dml_execute() below is intentionally
- * shaped to be reusable by UPDATE and INSERT's own scalar-bind case
- * once those modules get their own pass - see its own doc comment for
- * why it's scalar-only, one-shot, and not cursor-shaped like SELECT.
- * Adding a field to db_driver_t later is cheap; guessing every field's
- * final shape now and getting the boundary wrong is not - see notes
- * doc, section 2.
+ * Comment refresh (2026-10-25, clean-up C4): the top of this file used
+ * to describe the September state - SELECT without LOBs or binds, the
+ * context still Oracle-typed, DELETE the only DML. All of that has
+ * landed since; the per-struct and per-hook comments below keep their
+ * dated history.
  *
  * WHAT STAYS OUT OF THE DRIVER (core, generic, vendor-independent):
- *   - SQL parsing/validation (Level1/Level2 parsers)
+ *   - SQL parsing/validation (Level1/Level2), type classes, date
+ *     normalisation (ISO 8601 at the boundary)
  *   - request/response shaping, XML/JSON rendering
- *   - resultset cache, metadata cache lookups
- *   - CLOB/BLOB file-write/mime-type policy
+ *   - resultset cache, metadata cache
+ *   - CLOB/BLOB file naming, MIME type and file-write policy
  *   - dispatch, session/auth, metrics
- * A driver's execute_select() hands back rows + column metadata in the
- * existing format-agnostic resultset_t (OCI_Resultset_Types.h) and
- * nothing else. It does not know XML or JSON exist. Building the
- * response document from that resultset_t, and deciding whether to
- * serve/store a cached copy, both stay on the core side of this line -
- * see OCI_Resultset_Builder.h's own doc comment, which was written with
- * exactly this eventual caller in mind.
+ *   - when to commit (ctx->active_tx) and how often to retry a commit
+ *     (tx_commit_with_retry(), Transaction_Manager.h)
+ * Core builds every SQL statement; each vendor-specific fragment comes
+ * from the dialect (DIALECT, below). A driver hands back rows and column
+ * metadata in resultset_t and nothing else - it does not know XML or
+ * JSON exist.
  *
  * ACID TEST for anything considered for this struct: would the same
  * signature make sense for a SQL Server/ODBC call? If yes, it belongs
  * here. If it only makes sense for Oracle (OCI handle types, OCI-specific
  * modes/flags), it stays inside driver_oracle.c and never appears in
- * this header.
+ * this header. (driver_mssql, Oct 2026, implemented every hook without a
+ * signature change; it added one hook, table_key.)
  *
- * CONTEXT TYPE - deliberately NOT changed in this pass.
- * Every function below still takes oci_context_t* (OCI_Connection.h),
- * not a new db_context_t. oci_context_t is threaded through ~100 files
- * today; collapsing it into a driver-neutral db_context_t with an
- * opaque, driver-owned handle for envhp/errhp/srvhp/svchp/authp is a
- * separate, mechanical refactor to do only once this interface shape is
- * proven (notes doc, section 3 - "worth planning as its own pass after
- * the interface shape is validated by the PoC, not before"). Until that
- * pass, connect()/disconnect() are still allowed to reach into ctx's
- * five real OCI-handle fields directly; execute_select() is not - it
- * only reads ctx for logging/config/cache handles it already legitimately
- * needs, and returns data purely through resultset_t.
+ * CONTEXT TYPE. Every hook takes oci_context_t* (Connection.h) - the
+ * name is history. Since M2 (2026-10-17) its handle fields are void *;
+ * core never looks inside them, and each driver keeps its own handles
+ * there (Oracle: OCI handles; SQL Server: SQLHENV in envhp, the
+ * session's SQLHDBC in svchp).
  *
- * CONNECTION POOLING (added once connect/disconnect were validated -
- * see Driver_Connect_Test.c's PASS run).
- * connect()/disconnect() hide the pooled-vs-direct choice: a single
- * connection is just the pool_min_size=pool_max_size=1 degenerate case
- * conceptually, even though today's Oracle implementation genuinely is
- * two separate code paths (OCI_Connect vs OCI_Connect_pool) rather than
- * one path with size=1 - see driver_oracle.c for exactly where that
- * branch now lives, moved out of every caller (Bootstrap used to do
- * this if/else itself; now it just calls connect()). Callers never
- * branch on ctx->ini->use_connection_pool themselves any more.
- *
+ * CONNECTION POOLING. connect()/disconnect() hide the pooled-vs-direct
+ * choice (ctx->ini->use_connection_pool); callers never branch on it.
  * get_session()/release_session()/session_is_alive()/reconnect_session()/
- * health_check() are the worker-level borrow/return surface and are
- * only meaningful after a pooled connect() - direct mode has no worker
- * threads to borrow a session for (consumer_type=FILE, for one,
- * already refuses to start in direct mode today - see
- * Data_Manager_Bootstrap.c). Calling these after a direct-mode
- * connect() is undefined, same as calling OCI_Pool_get_session() on an
- * unpooled ctx is today - this interface does not change that
- * precondition, only where the call sites live.
+ * health_check() are the worker-level borrow/return surface, meaningful
+ * only after a pooled connect(), and since Stage 6 (2026-10-10) the only
+ * way core borrows a session.
  *
- * BINDS - added to db_select_request_t in Stage 5 (2026-10-08) for the
- * Security module's lookups, which filter on caller-supplied values
- * (a username at login) that must be bound, never concatenated into
- * the SQL. execute_query_batch() still builds a fully-substituted SQL
- * string and sets bind_count = 0. See db_select_request_t below.
- *
- * ASYNC BATCH CALLBACK - deliberately NOT in scope for this pass either.
- * execute_config_t's async_batch_callback (streaming partial resultsets
- * back mid-fetch) is a response-delivery concern, not a fetch-mechanics
- * one, but wiring it through a driver boundary cleanly needs its own
- * think once plain synchronous select is proven. Not part of
- * db_select_request_t or db_driver_t.execute_select in this pass.
- *
- * SELECT IS A CURSOR, NOT A SINGLE CALL - revised after reading
- * execute_query_batch() end to end (cut-point analysis, 2026-09-12).
- * The original single-shot execute_select(req, *out_rs) signature below
- * was wrong for production parity: execute_query_batch()'s fetch loop
- * already runs batch-by-batch (OCIStmtFetch2 with a batch size, not one
- * row and not the whole resultset), and the async-streaming path proves
- * this matters architecturally, not just internally - it builds,
- * renders, delivers, and discards a resultset_t PER BATCH, never
- * accumulating a whole-query one at all. A single-call interface can't
- * represent that without either buffering the entire result in the
- * driver first (defeats the point of batching) or the driver knowing
- * about response delivery (violates the driver/core boundary itself).
- * So the interface is a cursor: select_open() (prepare+describe, no
- * rows yet) -> select_fetch_batch() repeatedly (driver's natural batch
- * size each time) -> select_close(). Core decides what to do with each
- * batch - accumulate into one big resultset_t (today's sync path) or
- * render+deliver+discard immediately (today's async path) - the driver
- * never needs to know which.
- *
- * SCALARS ONLY IN THIS PASS - CLOB/BLOB are NOT being dropped, only
- * sequenced second (confirmed 2026-09-12). Reading the fetch loop
- * surfaced two real, vendor-specific complications living inside
- * CLOB/BLOB handling specifically: OCI silently cannot array-fetch a
- * CLOB (forces fetch_count=1 for the whole batch, an undocumented OCI
- * limitation - see driver_oracle.c), and CLOB's file-write/naming logic
- * was never factored out of the fetch loop the way BLOB's already was
- * (BLOB already delegates cleanly to OCI_Blob_Utils.c, which has zero
- * OCI calls in it - CLOB does the equivalent work inline instead). Both
- * are real, core-relevant behavior - not incidental - and mixing that
- * complexity into proving the cursor shape itself would make it hard
- * to tell which part broke if something did. select_open() reports an
- * explicit "not yet supported" error for any SELECT whose DESCRIBE
- * finds a CLOB/BLOB column (see below) - callers fall back to the
- * existing execute_query_batch() for those until v2 adds LOB support on
- * top of this same, by-then-proven cursor shape.
+ * SELECT IS A CURSOR, NOT A SINGLE CALL (2026-09-12). select_open()
+ * (prepare, bind, execute, describe) -> select_fetch_batch() repeatedly
+ * -> select_close(). Core decides whether to accumulate each batch or
+ * render and deliver it at once (sync vs async); the driver never knows
+ * which. LOB columns are supported (v2, 2026-09-14), and so are bind
+ * values and inline CLOB text (Stage 5, 2026-10-08) - see
+ * db_select_request_t.
  */
-
 
 #ifndef DB_DRIVER_H
 #define DB_DRIVER_H
@@ -201,24 +136,17 @@ typedef struct {
  * count - so this is a single request struct with no matching cursor
  * type at all.
  *
- * sql is expected fully-built, matching current behavior: today's
- * build_delete_sql() (OCI_Delete_Execute_Module.c) already wraps
- * DATE/TIMESTAMP/INTERVAL bind placeholders in Oracle-specific
- * TO_DATE()/TO_TIMESTAMP()/TO_YMINTERVAL()/TO_DSINTERVAL() syntax
- * *before* this struct is ever built - that SQL-dialect knowledge
- * deliberately stays in core for this pass (see ACID TEST above; a
- * second vendor would need different wrapping syntax, but there is no
- * second vendor's needs to design against yet, same reasoning as BINDS
- * below). bind_values are therefore always plain strings - the wrapper
- * function already turned any date/timestamp/interval value into
- * whatever string TO_DATE()/etc. expects; the driver never needs to
- * know a value was ever anything but a string.
+ * sql is expected fully-built. Any conversion a value needs (a DATE or
+ * TIMESTAMP placeholder, a binary value) is already in the SQL text,
+ * written by the driver's own dialect value_expr() when core built the
+ * statement (Stage 2, 2026-10-02 - before that the TO_DATE() wrapping was
+ * done in core). bind_values are therefore always plain strings - dates
+ * in canonical ISO 8601 - and the driver never needs to know a value was
+ * ever anything but a string.
  *
- * BINDS - unlike db_select_request_t, genuinely needed from day one
- * here: every WHERE-key value in a DELETE is bound (OCIBindByPos,
- * always SQLT_STR, matching build_delete_ctx_from_request()'s existing
- * behavior), there being no equivalent to select's "fully-substituted
- * SQL string" today for the write path.
+ * BINDS - needed from day one here (db_select_request_t gained them only
+ * in Stage 5): every WHERE-key value in a DELETE is bound, always as a
+ * string, matching build_delete_ctx_from_request()'s behaviour.
  */
 typedef struct {
     const char  *sql;          /* fully-built DELETE ... WHERE ... text,
@@ -725,7 +653,7 @@ typedef struct {
  *   select_fetch_batch() (which only ever have one caller and so could
  *   safely log via a hardcoded ctx->select_logger), this function is
  *   meant to be reused by UPDATE/INSERT's own scalar-bind case later
- *   (see SCOPE above) - each with its own logger (ctx->delete_logger/
+ *   (as it now is) - each with its own logger (ctx->delete_logger/
  *   ctx->update_logger/ctx->insert_logger). Hardcoding one inside the
  *   driver would silently mis-attribute every log line the moment a
  *   second caller arrives, so the caller passes its own logger in
@@ -1102,12 +1030,11 @@ typedef struct db_driver_t {
 /*
  * DB_SELECT_UNSUPPORTED_LOB
  *
- * select_open()'s specific return value meaning "this request has a
- * CLOB/BLOB column and this pass's driver doesn't support that through
- * the cursor interface yet" - a real, expected outcome in this pass,
- * not a generic error. Deliberately distinct from a plain non-zero
- * failure so core can tell "fall back to execute_query_batch() for
- * this one" apart from "something actually went wrong."
+ * select_open()'s return value meaning "this result has a column type
+ * this driver cannot fetch through the cursor". Neither driver returns
+ * it today: both have supported CLOB/BLOB since v2 (2026-09-14), and
+ * driver_mssql refuses CLR types with a plain -1. Kept defined, distinct
+ * from a plain failure, for a type a future driver cannot fetch.
  */
 #define DB_SELECT_UNSUPPORTED_LOB (-100)
 
@@ -1123,16 +1050,12 @@ typedef struct db_driver_t {
 /*
  * db_driver_get()
  *
- * Returns the populated db_driver_t for the currently-configured
- * db_type (ctx->ini->db_type once that config.ini key exists - not yet
- * added; see notes doc, section "Suggested order of attack", step 3).
- * NULL if db_type is unrecognized. Exactly one driver is ever live per
- * process, so this is a plain lookup at startup, not a per-call cost -
- * callers are expected to fetch it once and hold the pointer, same as
- * any other startup-resolved config.
- *
- * Deliberately not implemented in this header - lives in db_driver.c
- * once driver_oracle.c exists to populate the struct it returns.
+ * Returns the populated db_driver_t for ctx->ini->db_type ("oracle" or
+ * "mssql", checked by load_ini(); absent means oracle - driver_mssql
+ * Stage 2, 2026-10-18). NULL if db_type is mssql in a program that does
+ * not link driver_mssql.c; every caller treats NULL as an error. Exactly
+ * one driver is live per process, so callers may fetch it once and hold
+ * the pointer. Implemented in db_driver.c.
  */
 const db_driver_t *db_driver_get(const oci_context_t *ctx);
 

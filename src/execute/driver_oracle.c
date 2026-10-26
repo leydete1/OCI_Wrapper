@@ -331,16 +331,33 @@ struct db_select_cursor_t {
 /* Mirrors build_row_xml_batch()'s own type_str switch exactly (see
  * OCI_Execute_Query_Batch_Module.c) so db_column_meta_t.field_type uses
  * the same vocabulary resultset_field_t.field_type already does. */
+/* C3 (2026-10-25): nine more types get a field type instead of UNKNOWN -
+ * the value itself is unchanged (always fetched as text):
+ *   BINARY_FLOAT, BINARY_DOUBLE                     NUMBER
+ *   TIMESTAMP WITH TIME ZONE / WITH LOCAL TIME ZONE TIMESTAMP
+ *   INTERVAL YEAR TO MONTH / DAY TO SECOND          STRING
+ *   RAW (hex text), ROWID, UROWID                   STRING
+ * driver_mssql reports binary(n)/varbinary(n)/rowversion as STRING too. */
+#define ORACLE_DESCRIBE_UROWID 208   /* OCI describe's data type code for UROWID */
 static const char *oracle_type_to_string(ub2 data_type)
 {
     switch (data_type)
     {
-        case SQLT_NUM:       return "NUMBER";
+        case SQLT_NUM:
+        case SQLT_IBFLOAT:
+        case SQLT_IBDOUBLE:  return "NUMBER";
         case SQLT_DAT:       return "DATE";
         case SQLT_CHR:
         case SQLT_AFC:
-        case SQLT_STR:       return "STRING";
-        case SQLT_TIMESTAMP: return "TIMESTAMP";
+        case SQLT_STR:
+        case SQLT_INTERVAL_YM:
+        case SQLT_INTERVAL_DS:
+        case SQLT_BIN:
+        case SQLT_RDD:
+        case ORACLE_DESCRIBE_UROWID: return "STRING";
+        case SQLT_TIMESTAMP:
+        case SQLT_TIMESTAMP_TZ:
+        case SQLT_TIMESTAMP_LTZ: return "TIMESTAMP";
         case SQLT_BLOB:      return "BLOB";
         case SQLT_CLOB:      return "CLOB";
         default:             return "UNKNOWN";
@@ -1211,7 +1228,22 @@ static int oracle_fetch_blob_field(oci_context_t *ctx, db_select_cursor_t *cur,
         item.output_file_destination = ctx->ini->BLOB_output_dir;
     else { item.output_file_destination = strdup("N/A"); dest_is_heap = 1; }
 
-    write_blob_to_file(&item, ctx->ini->BLOB_output_dir, ctx);
+    /* C2 (2026-10-25): the write is checked. A BLOB that cannot be written
+     * fails the fetch, as on SQL Server - before, the field described a
+     * file that was never written and the request still succeeded. */
+    if (write_blob_to_file(&item, ctx->ini->BLOB_output_dir, ctx) != 0)
+    {
+        logger_write(ctx->select_logger, LOG_ERROR, __func__, 0,
+                     "BLOB file could not be written (column %s, file %s, dir %s) - fetch failed",
+                     item.column_name, item.file_name, ctx->ini->BLOB_output_dir);
+        free(item.file_name);
+        free(item.mime_type);
+        free(item.blob_data);
+        if (url_is_heap)  free(item.output_file_url);
+        if (dest_is_heap) free(item.output_file_destination);
+        OCIDescriptorFree(item.lob_loc, OCI_DTYPE_LOB);
+        return -1;
+    }
 
     resultset_set_blob_field(rs_row, (int)col_idx, item.column_name,
                               item.file_name, item.output_file_destination,

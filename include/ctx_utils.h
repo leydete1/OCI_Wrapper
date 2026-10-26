@@ -20,15 +20,16 @@
 /*
  * copy_shared_ctx_fields()
  *
- * OCI_Pool_get_session() only populates the OCI connection handles
- * (envhp/errhp/svchp etc.) and pool bookkeeping - every logger
+ * driver->get_session() (OCI_Pool_get_session() on Oracle, MSSQL_Pool_get_session()
+ * on SQL Server) only populates the connection handles
+ * (envhp/svchp etc.) and pool bookkeeping - every logger
  * pointer, the ini pointer, and the caches remain NULL after that
  * call and must be copied in explicitly from a context that already
  * has them (typically the master ctx set up once in main()).
  *
  * Used by every long-running thread that borrows its own pooled
  * session (worker.c, file_consumer_runner.c) right after
- * OCI_Pool_get_session() succeeds.
+ * driver->get_session() succeeds.
  *
  * main()'s own single worker_ctx (used by the legacy fixture-directory
  * test harness in pool mode) still has its own separate inline copy of

@@ -1,6 +1,10 @@
 /*
  * Driver_Select_Test.c
  *
+ * Note (2026-10-25): get_multi_metadata() and get_request_metadata(),
+ * named below, are now oracle_define_columns() and oracle_describe_table()
+ * inside driver_oracle.c (Oracle dialect extraction, Stage 4a, 6 Oct).
+ *
  * Validates db_driver_t's new select_open()/select_fetch_batch()/
  * select_close() cursor against a real, already-populated table -
  * OCI_LOB_TEST (see Create_Oracle_Test_Table.txt: ID NUMBER,

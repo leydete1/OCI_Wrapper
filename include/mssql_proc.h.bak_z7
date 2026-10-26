@@ -1,0 +1,97 @@
+/*
+ * mssql_proc.h   (driver_mssql Stage 6, 2026-10-21, points X1-X6;
+ *                 Fix 1-2, 2026-10-22: X6 amended)
+ *
+ * Stored procedures through ODBC, behind driver_mssql's
+ * dml_execute_procedure / select_open_from_cursor / cursor_handle_free
+ * (db_driver.h has the contract).
+ *
+ * SQL Server has no REF CURSOR: a procedure returns rows by running
+ * SELECTs, and the caller reads the result sets in order. And ODBC gives
+ * OUT parameter values only after the last result set has been read. So:
+ *
+ *   X1 call text   the dialect's "{CALL owner.proc(?, ?)}" with the "?"
+ *                  of every CURSOR parameter removed (a CURSOR is not a
+ *                  parameter on SQL Server). Prepared as UTF-16.
+ *   X2 binds       by position, CURSORs skipped:
+ *                    IN (any type)    text, SQL_C_CHAR -> nvarchar
+ *                                     (nvarchar(max) beyond 4000 units);
+ *                                     SQL Server converts it to the
+ *                                     parameter's type, as Oracle binds a
+ *                                     pure-IN NUMBER as a string
+ *                    OUT/IN_OUT INT   SQL_C_SLONG -> int
+ *                    OUT/IN_OUT STR   SQL_C_WCHAR -> nvarchar(max), into a
+ *                                     buffer the size of the caller's
+ *                                     out_value; returned as UTF-8
+ *                  A returned value that does not fit fails the call - it
+ *                  is never cut short. NULL sets out_is_null.
+ *   X3 results     each result set with columns, in order, goes to the
+ *                  next CURSOR parameter, in request order. Row-count
+ *                  results are skipped. A CURSOR with no result set left
+ *                  for it is NULL (out_is_null = 1, as Oracle's never-
+ *                  opened cursor). A result set with no CURSOR left for
+ *                  it is discarded with a WARN (Q1).
+ *   X4 buffering   each result set is read in full while it is current
+ *                  (mssql_select_buffer_result(): the SELECT fetch code,
+ *                  long columns to files), at most query_max_record_count
+ *                  rows (Q3) - more fails the call. Then the OUT values.
+ *                  A CURSOR's out_cursor_handle is that held result;
+ *                  select_open_from_cursor() opens it (batch size
+ *                  query_fetch_batch_size), select_fetch_batch() returns
+ *                  its batches, select_close() / cursor_handle_free()
+ *                  free it.
+ *   X5 errors      an error at SQLExecute or at any later result
+ *                  (THROW / RAISERROR after rows were returned) fails the
+ *                  call; whatever was held is freed and no handle is
+ *                  returned.
+ *   X6 transaction never commits or rolls back the caller's work. With no
+ *                  managed transaction (ctx->active_tx NULL) the procedure
+ *                  owns its transaction (Fix 2, 22 Oct): the connection's
+ *                  open read transaction is rolled back (only reads can be
+ *                  pending - every write outside a managed transaction is
+ *                  committed by its own module), the call runs in autocommit
+ *                  and manual-commit is restored afterwards, success or
+ *                  failure (a failure to restore fails the call). In
+ *                  manual-commit mode the calling statement itself opens a
+ *                  transaction, so a procedure that commits would always end
+ *                  with error 266 (Fix 1, a rollback alone, was not enough).
+ *                  Skipped when the connection is configured for autocommit.
+ *                  Inside a managed transaction nothing is touched: a
+ *                  procedure that commits there fails with 266, and SQL
+ *                  Server has already committed the caller's work by then -
+ *                  such procedures are called with transaction
+ *                  required="0", as DDL is. A procedure that does not commit,
+ *                  called with required="0", has its work committed
+ *                  statement by statement (Oracle would leave it pending).
+ *
+ * Every failure is logged on the caller's logger with the call text and
+ * kept for the calling thread - mssql_proc_last_error().
+ */
+
+#ifndef MSSQL_PROC_H
+#define MSSQL_PROC_H
+
+#include "db_driver.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int  mssql_proc_execute(oci_context_t *ctx, logger_t *logger,
+                        db_proc_execute_request_t *req);
+
+int  mssql_proc_open_cursor(oci_context_t *ctx, void *cursor_handle,
+                            db_select_cursor_t **out_cursor,
+                            db_column_meta_t **out_columns,
+                            int *out_column_count, int *out_batch_size);
+
+void mssql_proc_cursor_free(void *cursor_handle);
+
+/* The text of the last failure on the calling thread ("" if none). */
+const char *mssql_proc_last_error(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MSSQL_PROC_H */

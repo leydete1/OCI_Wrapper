@@ -21,6 +21,11 @@
  * with 22001 (data longer than the column size, checked in bytes), and
  * the server refuses ntext into a UTF-8 column (4189).
  *
+ * Z7 (2026-10-25): every write - dml_execute, dml_execute_returning_rowids,
+ * lob_write_by_rowid - first switches the connection to manual-commit
+ * (mssql_tx_begin_write, MSSQL_Pool.h); commit() / rollback() switch it
+ * back. A write is never run if the switch fails.
+ *
  * Never includes an Oracle header.
  */
 
@@ -290,6 +295,14 @@ int mssql_dml_execute(oci_context_t *ctx, logger_t *logger,
     SQLLEN  *inds = NULL;
     int      rc   = -1;
 
+    /* Z7: a write runs in manual-commit; core commits or rolls back. */
+    if (mssql_tx_begin_write(ctx->svchp, ctx->ini, logger, __func__) != 0)
+    {
+        dml_fail_text(logger, __func__, out_error_message, out_error_message_size,
+                      "dml_execute: could not switch to manual-commit - statement not run");
+        return -1;
+    }
+
     if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, (SQLHDBC)ctx->svchp, &stmt)))
     {
         dml_fail(logger, __func__, SQL_HANDLE_DBC, ctx->svchp, "SQLAllocHandle", req->sql,
@@ -449,6 +462,10 @@ int mssql_dml_execute_returning_rowids(oci_context_t *ctx, logger_t *logger,
     keybuf_t keys  = { 0 };
     int      rc    = -1;
 
+    /* Z7: a write runs in manual-commit; core commits or rolls back. */
+    if (mssql_tx_begin_write(ctx->svchp, ctx->ini, logger, __func__) != 0)
+        return -1;
+
     if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, (SQLHDBC)ctx->svchp, &stmt)))
     {
         dml_fail(logger, __func__, SQL_HANDLE_DBC, ctx->svchp, "SQLAllocHandle", req->sql, NULL, 0);
@@ -556,6 +573,11 @@ int mssql_lob_write_by_rowid(oci_context_t *ctx, logger_t *logger,
     if (bracket(qkey, sizeof(qkey), key) != 0) return -1;
     snprintf(sql, sizeof(sql), "UPDATE %s SET %s = ? WHERE %s = ?",
              req->table_fq, req->column_name, qkey);
+
+    /* Z7: a write runs in manual-commit (normally already switched by the
+     * INSERT/UPDATE that returned this row's key). */
+    if (!ctx->svchp || mssql_tx_begin_write(ctx->svchp, ctx->ini, logger, __func__) != 0)
+        return -1;
 
     size_t chunk = ctx->ini && ctx->ini->chunk_read_size ? (size_t)ctx->ini->chunk_read_size : 65536;
     FILE  *fp    = NULL;

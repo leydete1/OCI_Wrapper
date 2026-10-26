@@ -1,6 +1,10 @@
 /*
  * Driver_Metadata_Test.c
  *
+ * Note (2026-10-25): get_multi_metadata() and get_request_metadata(),
+ * named below, are now oracle_define_columns() and oracle_describe_table()
+ * inside driver_oracle.c (Oracle dialect extraction, Stage 4a, 6 Oct).
+ *
  * Stage 4a update (Oracle dialect extraction, 2026-10-06). The table
  * describe now lives in the driver (db_driver_t.describe_table,
  * driver_oracle.c oracle_describe_table) and get_request_metadata() is

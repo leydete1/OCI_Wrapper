@@ -1,6 +1,10 @@
 /*
  * Driver_Procedure_Test.c
  *
+ * Note (2026-10-25): get_multi_metadata() and get_request_metadata(),
+ * named below, are now oracle_define_columns() and oracle_describe_table()
+ * inside driver_oracle.c (Oracle dialect extraction, Stage 4a, 6 Oct).
+ *
  * Validates db_driver_t's dml_execute_procedure()/select_open_from_cursor()
  * against real stored procedures already in the schema (see
  * Create_Oracle_Test_Table.txt / Create_Unit_Test_Table.txt for their

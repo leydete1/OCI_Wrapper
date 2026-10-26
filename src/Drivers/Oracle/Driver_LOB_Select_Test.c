@@ -71,6 +71,14 @@
  *            at the end of the run, same as every other harness in
  *            this series.)
  *
+ *   Test 6 - (C2, 2026-10-25) the BLOB output folder does not exist:
+ *            the fetch must fail - before, it succeeded and the field
+ *            described a file that was never written - and the
+ *            connection must still answer afterwards (COUNT(*) again).
+ *
+ * Note (2026-10-25): get_multi_metadata(), named below, became
+ * oracle_define_columns() inside driver_oracle.c in Stage 4a (6 Oct).
+ *
  * Vendor-internal leak notes: same accepted category as every previous
  * harness - not chased here, see Driver_Connect_Test.c's header for the
  * full reasoning. What DOES matter for this run specifically: the
@@ -91,6 +99,7 @@
 
 #define CONFIG_INI "/home/leyden100/eclipse-workspace/OCI_Wrapper/Props/config.ini"
 
+#include <unistd.h>   /* getpid() - Test 6 */
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -561,6 +570,44 @@ int main(void)
         free(cols5);
 
         printf("Test 5 rows fetched                 ... OK (%d)\n", rows5);
+    }
+
+    /* ---- Test 6 (C2, 2026-10-25): a BLOB that cannot be written ---- */
+    printf("Test 6 (BLOB file not writable)     ... ");
+    {
+        app_config_t *wini = worker_ctx.ini ? worker_ctx.ini : &config;
+        char saved_dir[sizeof(wini->BLOB_output_dir)];
+        memcpy(saved_dir, wini->BLOB_output_dir, sizeof(saved_dir));
+        snprintf(wini->BLOB_output_dir, sizeof(wini->BLOB_output_dir),
+                 "/nonexistent_dir_c2_%d", (int)getpid());
+
+        db_select_request_t req6 = {0};
+        req6.sql              = "SELECT ID, DESCRIPTION, FILE_NAME, PHOTO FROM OCI_LOB_TEST ORDER BY ID";
+        req6.fetch_array_size = 2;
+        db_select_cursor_t *cur6 = NULL;
+        db_column_meta_t   *cols6 = NULL;
+        int col_count6 = 0, batch_size6 = 0, fetch_rc = 0, rows6 = 0;
+
+        int rc6 = driver->select_open(&worker_ctx, &req6, &cur6, &cols6, &col_count6, &batch_size6);
+        if (rc6 == 0)
+        {
+            resultset_t *rs6 = NULL;
+            fetch_rc = driver->select_fetch_batch(cur6, &rs6, &rows6, NULL);
+            if (rs6) resultset_free(rs6);
+            driver->select_close(cur6);
+            free(cols6);
+        }
+        memcpy(wini->BLOB_output_dir, saved_dir, sizeof(saved_dir));
+
+        int after = -1;
+        if (rc6 != 0)
+        { printf("FAILED - select_open rc=%d\n", rc6); failed = 1; }
+        else if (fetch_rc == 0)
+        { printf("FAILED - the fetch succeeded with no BLOB file written (%d rows)\n", rows6); failed = 1; }
+        else if (direct_row_count(&worker_ctx, "OCI_LOB_TEST", &after) != 0 || after != lob_test_count)
+        { printf("FAILED - connection not usable afterwards\n"); failed = 1; }
+        else
+            printf("OK (fetch failed; connection still answers, %d rows)\n", after);
     }
 
     driver->release_session(&ctx, &worker_ctx);

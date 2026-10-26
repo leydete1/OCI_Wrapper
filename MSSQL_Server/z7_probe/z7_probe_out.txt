@@ -1,0 +1,39 @@
+MSSQL_Z7_Probe - Sun Oct 25 11:38:54 2026
+server localhost,1433  database DataManager  login DATA_MANAGER  (APP=DataSol_Z7_Probe)
+
+Test  What                                                           Seen                         Result
+P1    manual-commit, nothing run yet                                 @@TRANCOUNT=1                UNEXPECTED
+P2    manual-commit, after SELECT from a table (Z7)                  @@TRANCOUNT=1                ok
+P3    manual-commit, after SELECT 1 (ping / health check)            @@TRANCOUNT=1                UNEXPECTED
+P3b   manual-commit, after SELECT SYSDATETIME() (no table)           @@TRANCOUNT=1                UNEXPECTED
+P4    manual-commit, after a catalog-view query (table_key-like)     @@TRANCOUNT=1                ok
+P4b   manual-commit, after INFORMATION_SCHEMA query (describe_table) @@TRANCOUNT=1                ok
+P5    autocommit, after SELECT from a table                          @@TRANCOUNT=0                ok
+P6    switching autocommit OFF opens nothing by itself               @@TRANCOUNT=1                UNEXPECTED
+P7a   manual-commit, after INSERT into #z7                           @@TRANCOUNT=1                ok
+P7b   switch autocommit ON with the INSERT open                      SQL_SUCCESS_WITH_INFO        ok
+P7c   after the switch                                               @@TRANCOUNT=0                ok
+P7d   row still there after a later rollback (switch committed it)   rows=1                       ok
+P8a   write, then SQLEndTran(COMMIT)                                 SQL_SUCCESS                  ok
+P8b   back in autocommit                                             @@TRANCOUNT=0                ok
+P8c   write, SQLEndTran(ROLLBACK), autocommit: row 3 gone            rows=2                       ok
+P9a   SQLEndTran(COMMIT) in autocommit, nothing open                 SQL_SUCCESS                  ok
+P9b   SQLEndTran(ROLLBACK) in autocommit, nothing open               SQL_SUCCESS                  ok
+      P10: second statement while rows are unread: SQL_ERROR SQLSTATE HY000 [native 0]: Connection is busy with results for another command
+      P10: switch autocommit ON with rows unread: SQL_SUCCESS_WITH_INFO 
+P10   switch ON while a result set is open (information)             SQL_SUCCESS_WITH_INFO        ok
+      P10: rows read after the switch attempt: 0
+P10   same switch after the statement is freed                       SQL_SUCCESS                  ok
+      P11: second statement while rows are unread: SQL_ERROR SQLSTATE HY000 [native 0]: Connection is busy with results for another command
+      P11: switch autocommit OFF with rows unread: SQL_ERROR SQLSTATE HY000 [native 0]: Connection is busy with results for another command
+P11   switch OFF while a result set is open (information)            SQL_ERROR                    ok
+      P11: rows read after the switch attempt: 56584
+P11   same switch after the statement is freed                       SQL_SUCCESS                  ok
+
+P12   cost, average of 300 (microseconds)
+      read in manual-commit (as today, transaction left open)       147
+      rollback + ON + read + OFF   (switch around each read)        268
+      read with the connection left in autocommit                    67
+      one OFF + ON pair on its own                                   88
+
+RESULT: 4 unexpected

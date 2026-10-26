@@ -47,14 +47,18 @@
  *   Test 17  50 calls with two CURSORs, one opened and one released
  *            with cursor_handle_free; a failed open releases its handle
  *            - no leaks (ASan); connection still answers
- *   Test 18  (Fix 1-2) a read, then a procedure that commits its own
- *            work, with no managed transaction: called in autocommit, no
- *            error 266, its COMMIT holds
+ *   Test 18  (Fix 1-2, Z7) a read, then a procedure that commits its own
+ *            work, with no managed transaction: autocommit before and
+ *            after (Z7), no error 266, its COMMIT holds
  *   Test 19  (Fix 1) the same inside a managed transaction: the driver
  *            leaves the transaction alone and 266 is reported
- *   Test 20  (Fix 2) after a call that succeeded and one that failed, the
- *            connection is back in manual-commit: a row written and rolled
- *            back is gone
+ *   Test 20  (Fix 2, Z7) after a call that succeeded and one that failed,
+ *            a row written and rolled back is gone
+ *   Test 21  (Z7) a call inside a managed transaction switches the
+ *            connection to manual-commit; rollback returns it to autocommit
+ *   Test 22  (Z7) a write left pending with no managed transaction: the
+ *            next procedure call rolls it back (WARN) and runs in
+ *            autocommit - no 266
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -714,10 +718,13 @@ int main(int argc, char *argv[])
     g_fail = 0;
     logpos = h_log_size(config.procedure_log_file_name);
     {
-        /* A read first: SQL Server opens a transaction for it (autocommit
-         * off), as the gateway's own lookups do before a procedure. */
+        /* A read first, as the gateway's own lookups do before a
+         * procedure. Z7: the connection sits in autocommit, so the read
+         * opens no transaction and the call needs no switch. */
         if (h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999701", 0, NULL) != 1)
             bad("row 999701 missing%s", "");
+        if (mssql_tx_in_manual(ctx.svchp) != 0 || h_trancount(&ctx) != 0)
+            bad("not in autocommit with nothing open before the call (Z7)%s", "");
         memset(K, 0, sizeof(*K));
         call(K, OWNER "MS_TEST_SELF_COMMIT");
         if (K->rc != 0) bad("call failed: %s", K->error);
@@ -729,12 +736,14 @@ int main(int argc, char *argv[])
             if (h_query(&ctx, "SELECT VARCHAR2_COL FROM " T_FIELD " WHERE NUMBER_COL = ?", 1, k1, v, 1) != 1 ||
                 strcmp(v[0], "self-commit"))
                 bad("the procedure's change is not committed (VARCHAR2_COL '%s')", v[0]);
-            if (!h_log_has(config.procedure_log_file_name, logpos, "call runs in autocommit"))
-                bad("no 'call runs in autocommit' line in %s", config.procedure_log_file_name);
+            if (mssql_tx_in_manual(ctx.svchp) != 0 || h_trancount(&ctx) != 0)
+                bad("not in autocommit with nothing open after the call (Z7)%s", "");
+            if (h_log_has(config.procedure_log_file_name, logpos, "found in manual-commit"))
+                bad("unexpected 'found in manual-commit' WARN in %s", config.procedure_log_file_name);
         }
         call_done(K);
     }
-    if (!g_fail) printf("OK (read first, then the call: no 266; its COMMIT held)\n");
+    if (!g_fail) printf("OK (read first, then the call: no 266; its COMMIT held; autocommit throughout)\n");
     failed |= g_fail;
 
     /* ---- Test 19 ---- */
@@ -761,7 +770,7 @@ int main(int argc, char *argv[])
     failed |= g_fail;
 
     /* ---- Test 20 ---- */
-    printf("Test 20 (manual-commit restored)     ... ");
+    printf("Test 20 (writes after a call)        ... ");
     g_fail = 0;
     for (int fail_call = 0; fail_call <= 1 && !g_fail; fail_call++)
     {
@@ -778,10 +787,54 @@ int main(int argc, char *argv[])
         long n = h_count(&ctx, fail_call ? "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999731"
                                          : "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999730", 0, NULL);
         if (n != 0)
-            bad(fail_call ? "after a failed call the connection is still in autocommit%s"
-                          : "after a successful call the connection is still in autocommit%s", "");
+            bad(fail_call ? "after a failed call a later write is not held for rollback%s"
+                          : "after a successful call a later write is not held for rollback%s", "");
     }
     if (!g_fail) printf("OK (after success and after failure: rollback still undoes)\n");
+    failed |= g_fail;
+
+    /* ---- Test 21 ---- */
+    printf("Test 21 (Z7: call inside a tx)       ... ");
+    g_fail = 0;
+    {
+        static int dummy_tx;
+        D->rollback(&ctx, &L.dml);
+        ctx.active_tx = (void *)&dummy_tx;       /* a managed transaction is open */
+        memset(K, 0, sizeof(*K));
+        call(K, OWNER "UNIT_TEST_NOOP_PROC");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        else if (mssql_tx_in_manual(ctx.svchp) != 1 || h_trancount(&ctx) != 1)
+            bad("the call did not switch to manual-commit inside the managed transaction%s", "");
+        call_done(K);
+        ctx.active_tx = NULL;
+        D->rollback(&ctx, &L.dml);
+        if (mssql_tx_in_manual(ctx.svchp) != 0) bad("not back in autocommit after the rollback%s", "");
+    }
+    if (!g_fail) printf("OK (manual-commit for the call; autocommit after rollback)\n");
+    failed |= g_fail;
+
+    /* ---- Test 22 ---- */
+    printf("Test 22 (Z7: left in manual-commit)  ... ");
+    g_fail = 0;
+    logpos = h_log_size(config.procedure_log_file_name);
+    {
+        /* A write left without commit or rollback, then a procedure that
+         * commits, with no managed transaction: the driver rolls the left
+         * write back (WARN) and runs the call in autocommit - no 266. */
+        const char *r22[] = { "999740", "left pending" };
+        if (exec_sql("INSERT INTO " T_FIELD " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, r22) != 0)
+            bad("insert failed%s", "");
+        memset(K, 0, sizeof(*K));
+        call(K, OWNER "MS_TEST_SELF_COMMIT");
+        if (K->rc != 0) bad("call failed: %s", K->error);
+        call_done(K);
+        if (!h_log_has(config.procedure_log_file_name, logpos, "found in manual-commit"))
+            bad("no 'found in manual-commit' WARN in %s", config.procedure_log_file_name);
+        if (mssql_tx_in_manual(ctx.svchp) != 0) bad("not in autocommit after the call%s", "");
+        if (h_count(&ctx, "SELECT COUNT(*) FROM " T_FIELD " WHERE NUMBER_COL = 999740", 0, NULL) != 0)
+            bad("the left write was not rolled back%s", "");
+    }
+    if (!g_fail) printf("OK (WARN; left write rolled back; call in autocommit)\n");
     failed |= g_fail;
 
     cleanup_rows();

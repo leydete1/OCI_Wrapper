@@ -147,6 +147,30 @@ H_FN int h_exec(oci_context_t *ctx, const char *sql, char *err, size_t errsz)
     return rc;
 }
 
+/* Z7 (25 Oct): one whole number from a single-row query, with plain ODBC
+ * on any connection handle (a checker connection, or ctx->svchp) - never
+ * through the driver. -1 on failure. */
+H_FN long h_raw_long(void *hdbc, const char *sql)
+{
+    SQLHSTMT   st = SQL_NULL_HSTMT;
+    SQLINTEGER v = -1;
+    SQLLEN     ind = 0;
+    if (!hdbc || !SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, (SQLHDBC)hdbc, &st))) return -1;
+    if (!(SQL_SUCCEEDED(SQLExecDirect(st, (SQLCHAR *)sql, SQL_NTS)) &&
+          SQL_SUCCEEDED(SQLFetch(st)) &&
+          SQL_SUCCEEDED(SQLGetData(st, 1, SQL_C_SLONG, &v, 0, &ind)) && ind != SQL_NULL_DATA))
+        v = -1;
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    return (long)v;
+}
+
+/* Z7: transactions open on ctx's own connection. SELECT @@TRANCOUNT reads
+ * no table, so in autocommit it opens nothing itself. */
+H_FN long h_trancount(oci_context_t *ctx)
+{
+    return h_raw_long(ctx->svchp, "SELECT @@TRANCOUNT");
+}
+
 /* Size of a log file now, and whether text logged after that point
  * contains needle - for an error the driver only logs (lob_write_by_rowid
  * has no error-text output). A rotated (smaller) file is read whole. */

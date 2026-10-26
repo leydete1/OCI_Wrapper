@@ -17,6 +17,9 @@
  *   - no POOL_INIT metrics record: the pool start-up is logged instead
  *     (metrics_write() for pool start-up only ever reached the metrics
  *     log file, not the metrics table).
+ *   - Z7 (2026-10-25): connections sit in autocommit and switch to
+ *     manual-commit only for a write (mssql_tx_begin_write /
+ *     mssql_tx_end_write), so an idle connection holds no transaction.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -84,6 +87,49 @@ static uint64_t now_us(void)
 /* ================================================================== */
 /*  M7 - diagnostic text                                               */
 /* ================================================================== */
+
+/* C1 (25 Oct): UTF-16 diagnostic text to UTF-8. Surrogate pairs are
+ * joined; a lone surrogate becomes U+FFFD. Writes at most out_size - 1
+ * bytes and never cuts a character in two; always terminated. */
+static void diag_utf16_to_utf8(const SQLWCHAR *w, SQLSMALLINT wlen, char *out, size_t out_size)
+{
+    size_t o = 0;
+    for (int i = 0; i < wlen && w[i]; i++)
+    {
+        unsigned long cp = (unsigned long)w[i];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < wlen &&
+            w[i + 1] >= 0xDC00 && w[i + 1] <= 0xDFFF)
+        {
+            cp = 0x10000UL + ((cp - 0xD800UL) << 10) + ((unsigned long)w[i + 1] - 0xDC00UL);
+            i++;
+        }
+        else if (cp >= 0xD800 && cp <= 0xDFFF)
+            cp = 0xFFFD;
+
+        unsigned char b[4];
+        size_t n;
+        if (cp < 0x80)        { b[0] = (unsigned char)cp; n = 1; }
+        else if (cp < 0x800)  { b[0] = (unsigned char)(0xC0 | (cp >> 6));
+                                b[1] = (unsigned char)(0x80 | (cp & 0x3F)); n = 2; }
+        else if (cp < 0x10000){ b[0] = (unsigned char)(0xE0 | (cp >> 12));
+                                b[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                                b[2] = (unsigned char)(0x80 | (cp & 0x3F)); n = 3; }
+        else                  { b[0] = (unsigned char)(0xF0 | (cp >> 18));
+                                b[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+                                b[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                                b[3] = (unsigned char)(0x80 | (cp & 0x3F)); n = 4; }
+        if (o + n >= out_size) break;
+        memcpy(out + o, b, n);
+        o += n;
+    }
+    out[o] = '\0';
+}
+
+/* Every diagnostic record, as "SQLSTATE x [native n]: text". C1 (25 Oct):
+ * read with SQLGetDiagRecW and converted to UTF-8, so non-ASCII text in a
+ * server message (an object name, a THROW message) arrives intact - the
+ * narrow call passes it through the client code page, as the narrow
+ * statement calls did (Stage 5 Fix 1). */
 void mssql_diag(int handle_type, void *handle, char *out, size_t out_size)
 {
     if (!out || out_size == 0) return;
@@ -93,20 +139,31 @@ void mssql_diag(int handle_type, void *handle, char *out, size_t out_size)
     size_t used = 0;
     for (SQLSMALLINT rec = 1; rec < 20; rec++)
     {
-        SQLCHAR     state[6] = {0};
-        SQLINTEGER  native   = 0;
-        SQLCHAR     msg[1024];
-        SQLSMALLINT len      = 0;
+        SQLWCHAR    wstate[6] = {0};
+        SQLINTEGER  native    = 0;
+        SQLWCHAR    wmsg[1024];
+        SQLSMALLINT len       = 0;
 
-        SQLRETURN r = SQLGetDiagRec((SQLSMALLINT)handle_type, (SQLHANDLE)handle,
-                                    rec, state, &native, msg,
-                                    (SQLSMALLINT)sizeof(msg), &len);
+        SQLRETURN r = SQLGetDiagRecW((SQLSMALLINT)handle_type, (SQLHANDLE)handle,
+                                     rec, wstate, &native, wmsg,
+                                     (SQLSMALLINT)(sizeof(wmsg) / sizeof(wmsg[0])), &len);
         if (r != SQL_SUCCESS && r != SQL_SUCCESS_WITH_INFO)
             break;
 
+        char state[6];
+        for (int k = 0; k < 5; k++) state[k] = (char)(wstate[k] & 0x7F);
+        state[5] = '\0';
+
+        SQLSMALLINT wlen = len;
+        if (wlen < 0) wlen = 0;
+        if (wlen > (SQLSMALLINT)(sizeof(wmsg) / sizeof(wmsg[0])) - 1)
+            wlen = (SQLSMALLINT)(sizeof(wmsg) / sizeof(wmsg[0])) - 1;
+        char msg[3072];
+        diag_utf16_to_utf8(wmsg, wlen, msg, sizeof(msg));
+
         /* Drop the "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
          * prefix: every leading [...] group. */
-        const char *text = (const char *)msg;
+        const char *text = msg;
         while (*text == '[')
         {
             const char *close = strchr(text, ']');
@@ -116,10 +173,19 @@ void mssql_diag(int handle_type, void *handle, char *out, size_t out_size)
         while (*text == ' ') text++;
 
         int n = snprintf(out + used, out_size - used, "%sSQLSTATE %s [native %d]: %s",
-                         used ? " | " : "", (const char *)state, (int)native, text);
+                         used ? " | " : "", state, (int)native, text);
         if (n < 0 || (size_t)n >= out_size - used)
         {
-            out[out_size - 1] = '\0';
+            /* Cut short: end on a whole UTF-8 character. */
+            size_t e = out_size - 1;                  /* the terminator */
+            size_t i = e;
+            while (i > 0 && ((unsigned char)out[i - 1] & 0xC0) == 0x80) i--;
+            if (i > 0)
+            {
+                unsigned char lead = (unsigned char)out[i - 1];
+                size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+                if ((i - 1) + need > e) out[i - 1] = '\0';   /* incomplete - drop it */
+            }
             return;
         }
         used += (size_t)n;
@@ -289,9 +355,12 @@ void *mssql_open_connection(void *henv, const app_config_t *ini, logger_t *logge
         log_diag(logger, LOG_WARN, __func__, SQL_HANDLE_DBC, h,
                  "SQL_ATTR_CONNECTION_TIMEOUT not set (continuing)");
 
-    /* M4: autocommit off unless autocommit_mode = 1, as on Oracle. */
-    SQLULEN ac = ini->autocommit_mode ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF;
-    if (!SQL_SUCCEEDED(SQLSetConnectAttr(h, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)ac, 0)))
+    /* Z7 (2026-10-25): every connection starts in autocommit. With
+     * autocommit_mode = 0 the write hooks switch to manual-commit for each
+     * transaction (mssql_tx_begin_write) - see MSSQL_Pool.h. Before Z7 a
+     * connection started in manual-commit (M4), which kept a transaction
+     * open on it at all times. */
+    if (!SQL_SUCCEEDED(SQLSetConnectAttr(h, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0)))
     {
         log_diag(logger, LOG_ERROR, __func__, SQL_HANDLE_DBC, h,
                  "SQL_ATTR_AUTOCOMMIT could not be set");
@@ -316,7 +385,9 @@ void *mssql_open_connection(void *henv, const app_config_t *ini, logger_t *logge
                  "SQLDriverConnect info");
 
     logger_write(logger, LOG_INFO, __func__, 0,
-                 "Connected (autocommit %s)", ini->autocommit_mode ? "on" : "off");
+                 ini->autocommit_mode ? "Connected (autocommit_mode = 1: every statement commits)"
+                                      : "Connected (autocommit; manual-commit from each "
+                                        "transaction's first write - Z7)");
     return (void *)h;
 }
 
@@ -369,6 +440,63 @@ int mssql_end_tran(void *hdbc, int commit, logger_t *logger, const char *caller)
         mssql_diag(SQL_HANDLE_DBC, hdbc, diag, sizeof(diag));
         logger_write(logger, LOG_ERROR, caller, 0, "%s failed: %s",
                      commit ? "COMMIT" : "ROLLBACK",
+                     diag[0] ? diag : "(no diagnostic record)");
+        return -1;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Z7 (2026-10-25) - manual-commit only for writes (MSSQL_Pool.h)      */
+/* ------------------------------------------------------------------ */
+int mssql_tx_in_manual(void *hdbc)
+{
+    if (!hdbc) return -1;
+    SQLULEN ac = 0;      /* the driver may write 32 bits - the rest stays 0 */
+    if (!SQL_SUCCEEDED(SQLGetConnectAttr((SQLHDBC)hdbc, SQL_ATTR_AUTOCOMMIT, &ac, 0, NULL)))
+        return -1;
+    return ac == SQL_AUTOCOMMIT_OFF ? 1 : 0;
+}
+
+int mssql_tx_begin_write(void *hdbc, const app_config_t *ini, logger_t *logger,
+                         const char *caller)
+{
+    if (!hdbc) return -1;
+    if (ini && ini->autocommit_mode) return 0;
+    if (mssql_tx_in_manual(hdbc) == 1) return 0;     /* this transaction's later writes */
+
+    SQLRETURN r = SQLSetConnectAttr((SQLHDBC)hdbc, SQL_ATTR_AUTOCOMMIT,
+                                    (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0);
+    if (!SQL_SUCCEEDED(r))
+    {
+        char diag[1024];
+        mssql_diag(SQL_HANDLE_DBC, hdbc, diag, sizeof(diag));
+        logger_write(logger, LOG_ERROR, caller, 0,
+                     "could not switch to manual-commit before the write - not run: %s",
+                     diag[0] ? diag : "(no diagnostic record)");
+        return -1;
+    }
+    logger_write(logger, LOG_DEBUG, caller, 0,
+                 "manual-commit from this write until commit or rollback");
+    return 0;
+}
+
+int mssql_tx_end_write(void *hdbc, const app_config_t *ini, logger_t *logger,
+                       const char *caller)
+{
+    if (!hdbc) return -1;
+    if (ini && ini->autocommit_mode) return 0;
+    if (mssql_tx_in_manual(hdbc) == 0) return 0;     /* nothing was written */
+
+    SQLRETURN r = SQLSetConnectAttr((SQLHDBC)hdbc, SQL_ATTR_AUTOCOMMIT,
+                                    (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+    if (!SQL_SUCCEEDED(r))
+    {
+        char diag[1024];
+        mssql_diag(SQL_HANDLE_DBC, hdbc, diag, sizeof(diag));
+        logger_write(logger, LOG_WARN, caller, 0,
+                     "could not switch back to autocommit - the connection stays in "
+                     "manual-commit until the next commit or rollback: %s",
                      diag[0] ? diag : "(no diagnostic record)");
         return -1;
     }
@@ -770,6 +898,8 @@ void MSSQL_Pool_release_session(oci_context_t *ctx, oci_context_t *worker_ctx)
         if (mssql_end_tran(slot->hdbc, 0, log, __func__) != 0)
             logger_write(log, LOG_WARN, __func__, 0,
                          "Rollback on return failed for slot %d (continuing)", idx);
+        else
+            mssql_tx_end_write(slot->hdbc, &pool->cfg, log, __func__);   /* Z7 */
     }
 
     pthread_mutex_lock(&pool->mutex);

@@ -14,7 +14,8 @@
  *   Test 2  borrow 4 (the maximum): 4 different slots, 4 different @@SPID
  *   Test 3  a 5th borrow times out after ~2 s and returns -1
  *   Test 4  8 threads x 50 borrow/release: no slot ever lent twice at once
- *   Test 5  rollback on return: uncommitted INSERT is gone (independent check)
+ *   Test 5  rollback on return: uncommitted INSERT is gone (independent
+ *           check), and the slot is back in autocommit (Z7, 25 Oct)
  *   Test 6  session_is_alive = 1 on a borrowed session
  *   Test 7  reconnect_session closes the caller's connection and hands
  *           back a different live one (different @@SPID)
@@ -82,6 +83,17 @@ static int init_ctx(const char *ini_path, oci_context_t *ctx, app_config_t *conf
         return -1;
     ctx->connectionpool_logger = pool_l;
     return 0;
+}
+
+/* Z7: a write through the driver's dml_execute (manual-commit first). */
+static int drv_write(const db_driver_t *d, oci_context_t *c, logger_t *lg, const char *sql)
+{
+    db_dml_request_t r = { sql, 0, NULL };
+    int  n = 0;
+    char e[1024] = "";
+    int  rc = d->dml_execute(c, lg, &r, &n, e, sizeof(e));
+    if (rc != 0) fprintf(stderr, "  drv_write failed: %s -- %s\n", sql, e);
+    return rc;
 }
 
 static int raw_exec(void *hdbc, const char *sql)
@@ -287,17 +299,20 @@ int main(int argc, char *argv[])
         memset(&s, 0, sizeof(s));
         long n = -1;
         if (driver->get_session(&base, &s) != 0 ||
-            raw_exec(s.svchp, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999201)") != 0)
+            drv_write(driver, &s, &conn_l, "INSERT INTO DATA_MANAGER.UNIT_TEST_FIELD_TEST (NUMBER_COL) VALUES (999201)") != 0)
         {
             printf("FAILED - borrow or INSERT failed\n");
             failed = 1;
         }
         else
         {
+            void *slot_hdbc = s.svchp;
             driver->release_session(&base, &s);
             n = raw_long(chk, "SELECT COUNT(*) FROM DATA_MANAGER.UNIT_TEST_FIELD_TEST WITH (READCOMMITTEDLOCK) WHERE NUMBER_COL = 999201");
-            if (n != 0) { printf("FAILED - count %ld after release (expected 0)\n", n); failed = 1; }
-            else          printf("OK (uncommitted row gone)\n");
+            int manual = mssql_tx_in_manual(slot_hdbc);    /* Z7: back in autocommit */
+            if (n != 0)      { printf("FAILED - count %ld after release (expected 0)\n", n); failed = 1; }
+            else if (manual) { printf("FAILED - released slot left in manual-commit (Z7)\n"); failed = 1; }
+            else               printf("OK (uncommitted row gone; slot back in autocommit)\n");
         }
     }
 

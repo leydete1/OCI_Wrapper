@@ -12,7 +12,8 @@
  *                               pool_connection_timeout, grows up to
  *                               pool_max_size)
  *   MSSQL_Pool_release_session() give it back (rollback first when
- *                               rollback_on_return_to_pool = 1)
+ *                               rollback_on_return_to_pool = 1, then back
+ *                               to autocommit - Z7)
  *   MSSQL_Pool_session_is_alive() SQL_ATTR_CONNECTION_DEAD, no round trip
  *   MSSQL_Pool_reconnect_session() replace the caller's connection with a
  *                               NEW one (the old one is closed, not
@@ -30,6 +31,17 @@
  *
  * Every slot is its own SQLHDBC - its own physical connection (the
  * 2026-08-06 ORA-03114 lesson from Connection_Pool.c).
+ *
+ * Transactions (Z7, 2026-10-25). With autocommit_mode = 0 every
+ * connection sits in AUTOCOMMIT and switches to manual-commit only for a
+ * write: mssql_tx_begin_write() before the first write of a transaction,
+ * mssql_tx_end_write() after the SQLEndTran that ends it. Reads therefore
+ * never hold a transaction open on an idle connection - as on Oracle,
+ * where a SELECT starts no transaction. (In manual-commit mode ODBC
+ * Driver 18 keeps a transaction open at all times: it begins one when
+ * manual-commit is set and again after every commit or rollback - probe
+ * P1/P6, 25 Oct.) autocommit_mode = 1: every statement commits on its
+ * own, and neither function changes anything.
  *
  * Settings (app_config_t): dbname = database, username, password,
  * mssql_server, mssql_port, mssql_trust_server_certificate,
@@ -106,5 +118,33 @@ int mssql_ping(void *hdbc, logger_t *logger);
  * 0 = done, -1 = failed (error logged on logger).
  */
 int mssql_end_tran(void *hdbc, int commit, logger_t *logger, const char *caller);
+
+/*
+ * Z7 (2026-10-25) - manual-commit only for writes; see the header note.
+ *
+ * mssql_tx_begin_write()
+ *   Called by every write hook before it runs anything. Switches hdbc to
+ *   manual-commit unless it already is (SQLGetConnectAttr - no round
+ *   trip). 0 = ready, -1 = the switch failed (logged at ERROR on logger):
+ *   the caller must fail without running the write, so a write never
+ *   runs in autocommit by accident. ini may be NULL (= autocommit_mode 0).
+ *
+ * mssql_tx_end_write()
+ *   Called only after an SQLEndTran (commit or rollback) that SUCCEEDED:
+ *   switches hdbc back to autocommit unless it already is. Never call it
+ *   with a write pending - switching autocommit on commits whatever is
+ *   open (probe P7). 0 = done, -1 = the switch failed (logged at WARN):
+ *   the connection stays in manual-commit, as before Z7, and the switch
+ *   is tried again at the next commit or rollback.
+ *
+ * mssql_tx_in_manual()
+ *   1 if hdbc is in manual-commit, 0 if in autocommit, -1 if it cannot
+ *   be read.
+ */
+int mssql_tx_begin_write(void *hdbc, const app_config_t *ini, logger_t *logger,
+                         const char *caller);
+int mssql_tx_end_write  (void *hdbc, const app_config_t *ini, logger_t *logger,
+                         const char *caller);
+int mssql_tx_in_manual  (void *hdbc);
 
 #endif /* MSSQL_POOL_H */

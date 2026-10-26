@@ -26,18 +26,32 @@ Verify_Round_5_Clob.xml
   Same 2 rows, 501 then 502. The fixture has ORDER BY NUMBER_COL since
   23 Oct (point Z4, fixture MD5 2f3822848e8a3cebd5f08bb9792cc61b).
 
-Request_Test_Select_2.json  (point Z5)
-  Same row (NUMBER_COL 4242) and the same values. Differences:
+Request_Test_Select_2.json  (point Z5; updated 26 Oct for C3)
+  Same row (NUMBER_COL 4242) and the same values. Since C3 (25 Oct) both
+  databases give the same field_type for the float, interval, RAW and
+  time-zone columns; what still differs is the text of the values and
+  DATE_COL's type:
   - table definition: FIELD_TEST_ID (identity) exists on SQL Server only;
-    ROWID_COL and UROWID_COL exist on Oracle only
-  - BINARY_FLOAT_COL / BINARY_DOUBLE_COL (real / float): field_type NUMBER,
-    plain text 2.5 / 1.4142135623000001 (Oracle: UNKNOWN, 2.5E+000 /
+    ROWID_COL and UROWID_COL exist on Oracle only (STRING, empty)
+  - BINARY_FLOAT_COL / BINARY_DOUBLE_COL (real / float): NUMBER on both;
+    plain text 2.5 / 1.4142135623000001 (Oracle: 2.5E+000 /
     1.4142135623000001E+000 - the same digits)
-  - DATE_COL, TIMESTAMP_COL, TIMESTAMP_TZ_COL, TIMESTAMP_LTZ_COL:
-    field_type TIMESTAMP with ISO text, e.g. 2030-01-02 08:30:00.123456
-    (Oracle: DATE / TIMESTAMP / UNKNOWN with NLS text, 02-JAN-30 ...)
-  - INTERVAL_YM_COL / INTERVAL_DS_COL: field_type STRING, the same text
-    (stored as text on SQL Server; Oracle: UNKNOWN)
-  RAW_COL is UNKNOWN / CAFEBABE on both.
+  - DATE_COL: TIMESTAMP with ISO text, 2030-01-02 00:00:00 (Oracle: DATE,
+    02-JAN-30)
+  - TIMESTAMP_COL, TIMESTAMP_TZ_COL, TIMESTAMP_LTZ_COL: TIMESTAMP on both;
+    ISO text, e.g. 2030-01-02 08:30:00.123456 (Oracle: NLS text,
+    02-JAN-30 08.30.00.123456 AM ...)
+  - INTERVAL_YM_COL / INTERVAL_DS_COL: STRING on both, the same text
+    (stored as text on SQL Server)
+  - RAW_COL: STRING / CAFEBABE on both
+  Both baselines were promoted on 25 Oct after review (C3 changed only
+  the field_type labels); backups *.bak_cu1.
+
+Verify_Round_9_Blob.xml  (point C7, 26 Oct)
+  Not one of the six above - it gives the same response as Oracle. The
+  fixture gained ORDER BY NUMBER_COL (fixture MD5
+  0e3b00bded54783cfa50fe85d204ad12): without it Oracle returned 902 before
+  901 on 25 Oct. The response repeats the SQL in <sql_query>, so the
+  baseline was promoted here and in ../baseline (backups *.bak_c7).
 
 Fixtures not run on SQL Server at all: see ../mssql_excluded.txt.

@@ -35,6 +35,10 @@
  *                     only sends BLOB-kind columns here - text LOBs are
  *                     bound in the statement itself (U6).
  *
+ * Z7 (2026-10-25): each write first switches the connection to
+ * manual-commit, if it is not already; commit() / rollback() switch it
+ * back to autocommit (MSSQL_Pool.h). Reads never open a transaction.
+ *
  * Never includes an Oracle header.
  */
 

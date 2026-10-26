@@ -9,10 +9,11 @@
  *
  * Usage:  MSSQL_Driver_Transaction_Test [config_mssql.ini]
  *
- * Reserved UNIT_TEST_FIELD_TEST.NUMBER_COL: 999301 and 999302. Removed
- * at start and end.
+ * Reserved UNIT_TEST_FIELD_TEST.NUMBER_COL: 999301-999309. Removed at
+ * start and end.
  *
- *   Test 1   both sessions connect; the two rows set up and committed
+ *   Test 1   both sessions connect (Z7: B starts in autocommit, with
+ *            @@TRANCOUNT 0); the two rows set up and committed
  *   Test 2   deadlock: B (DEADLOCK_PRIORITY LOW) holds 999302, A holds
  *            999301 then waits for 999302, B asks for 999301. B is the
  *            victim: dml_execute returns -1 with [native 1205]; A's
@@ -24,6 +25,20 @@
  *            SET LOCK_TIMEOUT 1000, gets -1 with [native 1222] after
  *            about a second, not a hang; A rolls back
  *   Test 5   session A ended cleanly (exit status 0)
+ *
+ * Z7 (25 Oct) - connections sit in autocommit; a write switches to
+ * manual-commit until commit() / rollback(). Reserved 999303-999309.
+ *   Test 6   after a read: autocommit, @@TRANCOUNT 0
+ *   Test 7   a write: manual-commit, @@TRANCOUNT 1, not visible to a
+ *            checker; after commit: visible, autocommit, @@TRANCOUNT 0
+ *   Test 8   a write then rollback: undone, back in autocommit
+ *   Test 9   inside a managed transaction: a read before the first write
+ *            opens nothing; a read after it sees its own write and is in
+ *            the transaction; rollback undoes it
+ *   Test 10  a commit that fails leaves the connection in manual-commit
+ *            (switching autocommit on would commit the failed work)
+ *   Test 11  autocommit_mode = 1: a write commits at once and the
+ *            connection never switches
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -171,6 +186,8 @@ int main(int argc, char *argv[])
     printf("Test 1 (two sessions, rows set up)   ... ");
     g_fail = 0;
     if (D->connect(B) != 0 || !B->svchp) bad("session B connect failed; see %s", config.connection_log_file_name);
+    else if (mssql_tx_in_manual(B->svchp) != 0 || h_trancount(B) != 0)
+        bad("a new connection is not in autocommit with nothing open (Z7)%s", "");
     char r = recv_byte(in);
     if (r != 'R') bad("session A did not connect (%s)", r ? "reported a failure" : "no answer");
     if (g_fail)
@@ -266,6 +283,136 @@ int main(int argc, char *argv[])
     }
     if (!g_fail) printf("OK\n");
     failed |= g_fail;
+
+    /* ================================================================
+     * Z7 (25 Oct): connections sit in autocommit; a write switches to
+     * manual-commit until commit() or rollback(). Checked on B's own
+     * connection (mode and @@TRANCOUNT) and, for what is committed, on an
+     * independent checker connection that reads only committed data.
+     * ================================================================ */
+    void *chk = mssql_open_connection(B->envhp, &config, &L.conn);
+    if (!chk) { printf("checker connection failed - Tests 6-11 not run\n"); failed = 1; }
+    else
+    {
+        exec_sql(B, "DELETE FROM " T_UNIT " WHERE NUMBER_COL BETWEEN 999303 AND 999309", 0, NULL, NULL, 0);
+        D->commit(B, &L.dml);
+        char m[256];
+
+        /* ---- Test 6 ---- */
+        printf("Test 6 (Z7: idle after a read)       ... ");
+        g_fail = 0;
+        if (h_query(B, "SELECT COUNT(*) FROM " T_UNIT, 0, NULL, v, 1) != 1) bad("read failed%s", "");
+        if (mssql_tx_in_manual(B->svchp) != 0) bad("connection in manual-commit after a read%s", "");
+        long tc = h_trancount(B);
+        if (tc != 0) { snprintf(m, sizeof(m), "@@TRANCOUNT %ld after a read (want 0)", tc); bad("%s", m); }
+        if (!g_fail) printf("OK (autocommit, @@TRANCOUNT 0)\n");
+        failed |= g_fail;
+
+        /* ---- Test 7 ---- */
+        printf("Test 7 (Z7: write, then commit)      ... ");
+        g_fail = 0;
+        {
+            const char *r7[] = { "999303", "z7" };
+            if (exec_sql(B, "INSERT INTO " T_UNIT " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, r7, err, sizeof(err)) != 0)
+                bad("insert failed: %s", err);
+            long t1 = h_trancount(B), c1 = h_raw_long(chk, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999303");
+            if (mssql_tx_in_manual(B->svchp) != 1 || t1 != 1)
+            { snprintf(m, sizeof(m), "after the write: manual-commit %d, @@TRANCOUNT %ld (want 1, 1)", mssql_tx_in_manual(B->svchp), t1); bad("%s", m); }
+            if (c1 != 0) bad("the checker sees the row before the commit%s", "");
+            if (D->commit(B, &L.dml) != 0) bad("commit failed%s", "");
+            long t2 = h_trancount(B), c2 = h_raw_long(chk, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999303");
+            if (mssql_tx_in_manual(B->svchp) != 0 || t2 != 0)
+            { snprintf(m, sizeof(m), "after the commit: manual-commit %d, @@TRANCOUNT %ld (want 0, 0)", mssql_tx_in_manual(B->svchp), t2); bad("%s", m); }
+            if (c2 != 1) { snprintf(m, sizeof(m), "the checker sees %ld rows after the commit (want 1)", c2); bad("%s", m); }
+        }
+        if (!g_fail) printf("OK (manual-commit while pending; committed; back in autocommit)\n");
+        failed |= g_fail;
+
+        /* ---- Test 8 ---- */
+        printf("Test 8 (Z7: write, then rollback)    ... ");
+        g_fail = 0;
+        {
+            if (set_value(B, "999303", "rolled back", err, sizeof(err)) != 0) bad("update failed: %s", err);
+            if (mssql_tx_in_manual(B->svchp) != 1) bad("not in manual-commit after the write%s", "");
+            if (D->rollback(B, &L.dml) != 0) bad("rollback failed%s", "");
+            if (mssql_tx_in_manual(B->svchp) != 0 || h_trancount(B) != 0) bad("not back in autocommit after the rollback%s", "");
+            if (h_raw_long(chk, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999303 AND VARCHAR2_COL = 'z7'") != 1)
+                bad("the rolled-back update is visible%s", "");
+        }
+        if (!g_fail) printf("OK (update undone; back in autocommit)\n");
+        failed |= g_fail;
+
+        /* ---- Test 9 ---- */
+        printf("Test 9 (Z7: managed tx read/write)   ... ");
+        g_fail = 0;
+        {
+            static int dummy_tx;
+            B->active_tx = (void *)&dummy_tx;
+            if (h_query(B, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999304", 0, NULL, v, 1) != 1 || strcmp(v[0], "0"))
+                bad("first read: '%s' (want 0)", v[0]);
+            if (h_trancount(B) != 0) bad("a read before the first write opened a transaction%s", "");
+            const char *r9[] = { "999304", "z7 tx" };
+            if (exec_sql(B, "INSERT INTO " T_UNIT " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, r9, err, sizeof(err)) != 0)
+                bad("insert failed: %s", err);
+            if (h_query(B, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999304", 0, NULL, v, 1) != 1 || strcmp(v[0], "1"))
+                bad("read after the write: '%s' (want 1 - its own write)", v[0]);
+            if (h_trancount(B) != 1) bad("the read after the write is not in the transaction%s", "");
+            B->active_tx = NULL;
+            D->rollback(B, &L.dml);
+            if (h_raw_long(chk, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999304") != 0)
+                bad("row 999304 survived the rollback%s", "");
+        }
+        if (!g_fail) printf("OK (read outside, write and read inside; rolled back)\n");
+        failed |= g_fail;
+
+        /* ---- Test 10 ---- */
+        printf("Test 10 (Z7: commit fails - stays)   ... ");
+        g_fail = 0;
+        {
+            /* A commit that fails: a connection handle that was never
+             * connected, set to manual-commit, then commit(). SQLEndTran
+             * fails there (08003); the driver must not then switch the
+             * handle to autocommit. (A live commit failure cannot be made
+             * on demand as DATA_MANAGER.) */
+            void *dead = NULL;
+            if (SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DBC, (SQLHENV)B->envhp, (SQLHDBC *)&dead)))
+            {
+                oci_context_t dctx;
+                memset(&dctx, 0, sizeof(dctx));
+                dctx.svchp = dead;
+                dctx.ini   = &config;
+                SQLSetConnectAttr((SQLHDBC)dead, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0);
+                int rc = D->commit(&dctx, &L.dml);
+                if (rc == 0) bad("commit on an unconnected handle succeeded%s", "");
+                if (mssql_tx_in_manual(dead) != 1) bad("switched to autocommit after a failed commit%s", "");
+                SQLFreeHandle(SQL_HANDLE_DBC, (SQLHDBC)dead);
+            }
+            else bad("could not allocate a handle%s", "");
+        }
+        if (!g_fail) printf("OK (commit -1; left in manual-commit)\n");
+        failed |= g_fail;
+
+        /* ---- Test 11 ---- */
+        printf("Test 11 (Z7: autocommit_mode = 1)    ... ");
+        g_fail = 0;
+        {
+            config.autocommit_mode = 1;
+            const char *r11[] = { "999305", "autocommit" };
+            if (exec_sql(B, "INSERT INTO " T_UNIT " (NUMBER_COL, VARCHAR2_COL) VALUES (?, ?)", 2, r11, err, sizeof(err)) != 0)
+                bad("insert failed: %s", err);
+            if (mssql_tx_in_manual(B->svchp) != 0) bad("switched to manual-commit with autocommit_mode = 1%s", "");
+            if (h_raw_long(chk, "SELECT COUNT(*) FROM " T_UNIT " WHERE NUMBER_COL = 999305") != 1)
+                bad("the row is not committed at once%s", "");
+            if (D->commit(B, &L.dml) != 0) bad("commit (nothing pending) failed%s", "");
+            config.autocommit_mode = 0;
+        }
+        if (!g_fail) printf("OK (committed at once; never manual-commit)\n");
+        failed |= g_fail;
+
+        exec_sql(B, "DELETE FROM " T_UNIT " WHERE NUMBER_COL BETWEEN 999303 AND 999309", 0, NULL, NULL, 0);
+        D->commit(B, &L.dml);
+        mssql_close_connection(chk, &L.conn);
+    }
 
     exec_sql(B, "DELETE FROM " T_UNIT " WHERE NUMBER_COL IN (999301, 999302)", 0, NULL, NULL, 0);
     D->commit(B, &L.dml);

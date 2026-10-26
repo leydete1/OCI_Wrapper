@@ -1,6 +1,7 @@
 /*
  * mssql_proc.h   (driver_mssql Stage 6, 2026-10-21, points X1-X6;
- *                 Fix 1-2, 2026-10-22: X6 amended)
+ *                 Fix 1-2, 2026-10-22: X6 amended;
+ *                 Z7, 2026-10-25: X6 rewritten)
  *
  * Stored procedures through ODBC, behind driver_mssql's
  * dml_execute_procedure / select_open_from_cursor / cursor_handle_free
@@ -44,25 +45,23 @@
  *                  (THROW / RAISERROR after rows were returned) fails the
  *                  call; whatever was held is freed and no handle is
  *                  returned.
- *   X6 transaction never commits or rolls back the caller's work. With no
- *                  managed transaction (ctx->active_tx NULL) the procedure
- *                  owns its transaction (Fix 2, 22 Oct): the connection's
- *                  open read transaction is rolled back (only reads can be
- *                  pending - every write outside a managed transaction is
- *                  committed by its own module), the call runs in autocommit
- *                  and manual-commit is restored afterwards, success or
- *                  failure (a failure to restore fails the call). In
- *                  manual-commit mode the calling statement itself opens a
- *                  transaction, so a procedure that commits would always end
- *                  with error 266 (Fix 1, a rollback alone, was not enough).
- *                  Skipped when the connection is configured for autocommit.
- *                  Inside a managed transaction nothing is touched: a
- *                  procedure that commits there fails with 266, and SQL
- *                  Server has already committed the caller's work by then -
- *                  such procedures are called with transaction
- *                  required="0", as DDL is. A procedure that does not commit,
- *                  called with required="0", has its work committed
- *                  statement by statement (Oracle would leave it pending).
+ *   X6 transaction never commits or rolls back the caller's work (Z7,
+ *                  2026-10-25 - replaces Fix 2). Connections sit in
+ *                  autocommit and switch to manual-commit only for a write
+ *                  (MSSQL_Pool.h). Inside a managed transaction the call is
+ *                  a write: the connection switches to manual-commit first
+ *                  and core commits or rolls back. A procedure that commits
+ *                  there fails with 266, and SQL Server has already
+ *                  committed the caller's work by then - such procedures
+ *                  are called with transaction required="0", as DDL is.
+ *                  With no managed transaction (ctx->active_tx NULL) the
+ *                  call runs in autocommit and owns its transaction; a
+ *                  connection found in manual-commit there is rolled back
+ *                  and returned to autocommit first (WARN). A procedure
+ *                  that does not commit, called with required="0", has its
+ *                  work committed statement by statement (Oracle would
+ *                  leave it pending). Nothing is switched when the
+ *                  connection is configured for autocommit.
  *
  * Every failure is logged on the caller's logger with the call text and
  * kept for the calling thread - mssql_proc_last_error().

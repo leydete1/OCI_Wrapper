@@ -1,6 +1,10 @@
 /*
  * Driver_Transaction_Test.c
  *
+ * Note (2026-10-25): get_multi_metadata() and get_request_metadata(),
+ * named below, are now oracle_define_columns() and oracle_describe_table()
+ * inside driver_oracle.c (Oracle dialect extraction, Stage 4a, 6 Oct).
+ *
  * Follow-up proposal item 2 (2026-09-20) - standalone-harness pass for
  * OCI_Transaction_Manager.c, second module after OCI_Table_Metadata_Module.c
  * (see Driver_Metadata_Test.c). Chosen next because it is genuinely

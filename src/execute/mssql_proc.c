@@ -1,6 +1,7 @@
 /*
  * mssql_proc.c   (driver_mssql Stage 6, 2026-10-21, points X1-X6;
- *                 Fix 1-2, 2026-10-22: X6 amended)
+ *                 Fix 1-2, 2026-10-22: X6 amended;
+ *                 Z7, 2026-10-25: X6 rewritten - see the call below)
  *
  * Stored procedures through ODBC - see mssql_proc.h for what each call
  * does and why the result sets are read before the OUT values.
@@ -284,7 +285,7 @@ int mssql_proc_execute(oci_context_t *ctx, logger_t *logger, db_proc_execute_req
     logger_write(logger, LOG_INFO, __func__, 0,
                  "procedure call: %s - %d parameter(s) bound, %d CURSOR(s)", call, nbind, ncursor);
 
-    int        rc = -1, autocommit_on = 0;
+    int        rc = -1;
     SQLHSTMT   st = SQL_NULL_HSTMT;
     px_slot_t *sl = calloc(n > 0 ? (size_t)n : 1, sizeof(*sl));
     if (!sl)
@@ -304,35 +305,44 @@ int mssql_proc_execute(oci_context_t *ctx, logger_t *logger, db_proc_execute_req
         goto Done;
     }
 
-    /* X6 (Fix 2): with no managed transaction the procedure owns its
-     * transaction, so it is called in autocommit mode. In manual-commit
-     * mode the statement that calls it opens a transaction (ODBC: "the
-     * command sent after SQLEndTran starts the next transaction"), so a
-     * procedure that commits would always end with error 266. First the
-     * connection's open transaction is rolled back - only reads can be
-     * pending, every write outside a managed transaction having been
-     * committed by its own module - so that switching autocommit on (which
-     * commits whatever is open) commits nothing. Manual-commit is restored
-     * after the call, success or failure (Done below). Not done when the
-     * connection is configured for autocommit, or inside a managed
-     * transaction, where nothing is touched. */
-    if (!ctx->active_tx && !(ctx->ini && ctx->ini->autocommit_mode))
+    /* X6 (Z7, 2026-10-25 - replaces Fix 2's switch around the call).
+     * Connections sit in autocommit and switch to manual-commit only for a
+     * write (MSSQL_Pool.h).
+     *   Inside a managed transaction: the call is part of it, so the
+     *   connection switches to manual-commit first, as for any write; core
+     *   commits or rolls back. A procedure that commits there still fails
+     *   with 266 - such procedures are called with required="0".
+     *   With no managed transaction: the call runs in autocommit and owns
+     *   its own transaction - nothing to switch. If the connection is
+     *   found in manual-commit here (a write left without commit or
+     *   rollback, or a failed switch back), it is rolled back and returned
+     *   to autocommit first, with a WARN - as Fix 2 always did - because a
+     *   procedure that commits would otherwise end with 266.
+     * Nothing is changed when the connection is configured for autocommit. */
+    if (!(ctx->ini && ctx->ini->autocommit_mode))
     {
-        SQLRETURN er = SQLEndTran(SQL_HANDLE_DBC, (SQLHDBC)ctx->svchp, SQL_ROLLBACK);
-        if (SQL_SUCCEEDED(er))
-            er = SQLSetConnectAttr((SQLHDBC)ctx->svchp, SQL_ATTR_AUTOCOMMIT,
-                                   (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
-        if (!SQL_SUCCEEDED(er))
+        if (ctx->active_tx)
         {
-            char diag[1024];
-            mssql_diag(SQL_HANDLE_DBC, ctx->svchp, diag, sizeof(diag));
-            px_fail(logger, call, "could not end the open read transaction and switch to "
-                    "autocommit before the call: %s", diag[0] ? diag : "(no diagnostic record)");
-            goto Done;
+            if (mssql_tx_begin_write(ctx->svchp, ctx->ini, logger, __func__) != 0)
+            {
+                px_fail(logger, call, "could not switch to manual-commit for the call "
+                        "inside the managed transaction - not run");
+                goto Done;
+            }
         }
-        autocommit_on = 1;
-        logger_write(logger, LOG_DEBUG, __func__, 0,
-                     "no managed transaction - read transaction rolled back, call runs in autocommit");
+        else if (mssql_tx_in_manual(ctx->svchp) != 0)
+        {
+            logger_write(logger, LOG_WARN, __func__, 0,
+                         "connection found in manual-commit with no managed transaction - "
+                         "rolled back and returned to autocommit before the call");
+            if (mssql_end_tran(ctx->svchp, 0, logger, __func__) != 0 ||
+                mssql_tx_end_write(ctx->svchp, ctx->ini, logger, __func__) != 0)
+            {
+                px_fail(logger, call, "could not return the connection to autocommit "
+                        "before the call - not run");
+                goto Done;
+            }
+        }
     }
 
     r = mssql_prepare_utf8(st, call);
@@ -558,28 +568,6 @@ Done:
     }
     free(sl);
     if (st) SQLFreeHandle(SQL_HANDLE_STMT, st);
-
-    /* Fix 2: back to manual-commit, whatever happened. A connection left
-     * in autocommit would silently change every later request on it, so
-     * a failure here fails the call and is logged as such. */
-    if (autocommit_on)
-    {
-        SQLRETURN ar = SQLSetConnectAttr((SQLHDBC)ctx->svchp, SQL_ATTR_AUTOCOMMIT,
-                                         (SQLPOINTER)SQL_AUTOCOMMIT_OFF, 0);
-        if (!SQL_SUCCEEDED(ar))
-        {
-            char diag[1024];
-            mssql_diag(SQL_HANDLE_DBC, ctx->svchp, diag, sizeof(diag));
-            px_fail(logger, call, "could not switch the connection back to manual-commit "
-                    "after the call - it is left in autocommit: %s",
-                    diag[0] ? diag : "(no diagnostic record)");
-            if (rc == 0)
-                for (int i = 0; i < n; i++)
-                    if (params[i].out_cursor_handle)
-                        mssql_select_close(params[i].out_cursor_handle);
-            rc = -1;
-        }
-    }
 
     if (rc != 0)
         for (int i = 0; i < n; i++)

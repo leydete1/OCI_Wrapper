@@ -31,6 +31,9 @@
  *            inline succeeds; an UPDATE is refused (229), and so is a
  *            LOB write - also with 229, read from the update log; rolled
  *            back
+ *   Test 9   (Z7, 25 Oct) a LOB write as a transaction's first write
+ *            switches to manual-commit itself: rolled back, the row keeps
+ *            Test 3's 1000 bytes
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -372,6 +375,27 @@ int main(int argc, char *argv[])
         if (!g_fail) printf("OK (INSERT inline; UPDATE 229; LOB write refused; rolled back)\n");
         free(text);
     }
+    failed |= g_fail;
+
+    /* ---- Test 9 ---- */
+    printf("Test 9 (Z7: LOB write first, undone) ... ");
+    g_fail = 0;
+    if (!blob_key[0]) bad("no row from Test 2%s", "");
+    else
+    {
+        /* The row holds Test 3's 1000 bytes, committed; the connection is
+         * in autocommit. A LOB write as the transaction's first write must
+         * switch to manual-commit itself, so a rollback undoes it. */
+        if (mssql_tx_in_manual(ctx.svchp) != 0) bad("not in autocommit before the write%s", "");
+        if (lob_write(1, T_LOB, "PHOTO", blob_key, f_big, NULL, 0, &bytes) != 0)
+            bad("lob_write_by_rowid failed%s", "");
+        if (mssql_tx_in_manual(ctx.svchp) != 1) bad("the LOB write did not switch to manual-commit%s", "");
+        D->rollback(&ctx, &L.dml);
+        h_sha256_hex(small, sizeof(small), want);
+        server_hash("PHOTO", T_LOB, "ID", blob_key, hash, len);
+        if (strcmp(hash, want) || atol(len) != 1000) bad("the rolled-back LOB write stayed: DATALENGTH %s", len);
+    }
+    if (!g_fail) printf("OK (manual-commit for the write; rollback kept the 1000 bytes)\n");
     failed |= g_fail;
 
     cleanup();

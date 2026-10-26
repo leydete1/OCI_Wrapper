@@ -35,6 +35,11 @@
  *            unread - no leaks (ASan), connection still answers
  *   Test 16  add_seconds_expr with a bigint column as the seconds (as
  *            session_reconcile_orphans uses OCI_SESSION.TTL_SECONDS)
+ *   Test 17  (C1, 25 Oct) error text with non-ASCII characters - an
+ *            object name with U+00C4, U+00E9 and U+1D11E - comes back exactly,
+ *            as UTF-8 (diagnostics read with SQLGetDiagRecW)
+ *
+ *   Test 2 (C3, 25 Oct): varbinary(n) is field type STRING, not UNKNOWN.
  *
  * Prints PASS or FAIL as the last line; exit code 0 / 1.
  */
@@ -256,7 +261,7 @@ int main(int argc, char *argv[])
                                    "NVARCHAR2_COL", "DATE_COL", "TIMESTAMP_COL",
                                    "TIMESTAMP_TZ_COL", "INTERVAL_DS_COL", "RAW_COL" };
         static const char *T[] = { "NUMBER", "NUMBER", "STRING", "STRING", "STRING",
-                                   "TIMESTAMP", "TIMESTAMP", "TIMESTAMP", "STRING", "UNKNOWN" };
+                                   "TIMESTAMP", "TIMESTAMP", "TIMESTAMP", "STRING", "STRING" };   /* C3: varbinary(n) STRING */
         if (R.ncols != 10) bad("%s columns, want %s", R.ncols == 0 ? "0" : "not 10", "10");
         for (int c = 0; c < 10 && c < R.ncols; c++)
         {
@@ -615,6 +620,24 @@ int main(int argc, char *argv[])
         else eq("CAST('2030-01-02 00:00:00') + 42 s", R.v[0][0], "2030-01-02 00:00:42");
     }
     if (!g_fail) printf("OK (NUMBER_COL bigint 42 -> 00:00:42)\n");
+    failed |= g_fail;
+
+    /* ---- Test 17 ---- */
+    printf("Test 17 (C1: non-ASCII error text)   ... ");
+    g_fail = 0;
+    {
+        /* U+00C4, U+00E9 and U+1D11E (a UTF-16 surrogate pair) in a
+         * bracketed object name: SQL Server quotes it back in error 208. Read narrow, the text went through the client
+         * code page; read as UTF-16 (C1) it must come back exactly. */
+        run(&R2, "SELECT X FROM DATA_MANAGER.[NO_SUCH_T\xc3\x84" "BLE_\xc3\xa9_\xf0\x9d\x84\x9e]", 1, 0, 0, NULL);
+        if (R2.rc == 0) bad("missing table: want a failure%s%s", "", "");
+        else
+        {
+            has("error 208", R2.error, "[native 208]");
+            has("object name in UTF-8", R2.error, "NO_SUCH_T\xc3\x84" "BLE_\xc3\xa9_\xf0\x9d\x84\x9e");
+        }
+    }
+    if (!g_fail) printf("OK (208 quotes the name exactly)\n");
     failed |= g_fail;
 
     mssql_end_tran(ctx.svchp, 0, &conn_l, "harness end");

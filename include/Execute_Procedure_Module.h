@@ -18,8 +18,11 @@
  *   NUMBER    - bound as SQLT_INT  (integer) or SQLT_FLT (float)
  *   INTEGER   - bound as SQLT_INT
  *   VARCHAR2  - bound as SQLT_STR
- *   DATE      - bound as SQLT_STR  with TO_DATE wrapper on IN
- *   TIMESTAMP - bound as SQLT_STR  with TO_TIMESTAMP wrapper on IN
+ *   DATE      - bound as SQLT_STR, no TO_DATE wrapper (2026-10-25: this
+ *               said "with TO_DATE wrapper"; the code has never applied
+ *               one - Oracle converts the string with the session's
+ *               NLS_DATE_FORMAT)
+ *   TIMESTAMP - bound as SQLT_STR, no TO_TIMESTAMP wrapper (as DATE)
  *   CURSOR    - bound as SQLT_RSET (SYS_REFCURSOR)
  *               OUT only; triggers full batch fetch producing a
  *               resultset fragment identical to execute_query_batch's

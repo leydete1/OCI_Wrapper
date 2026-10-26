@@ -10,6 +10,9 @@
      (file_name/file_path/file_size) - NOT empty. Under the old bug,
      row 902 would come back with an empty/unpopulated BLOB_COL,
      silently, with no error anywhere in the response or logs.
+
+   ORDER BY NUMBER_COL (point C7, 2026-10-26): the response is compared
+   strictly, and without it the database may return 902 before 901.
 ========================================================================
 -->
 
@@ -18,7 +21,7 @@
     <session_id>-</session_id>
     <transaction required="1">
         <operation type="SELECT">
-            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902)</sql>
+            <sql>SELECT NUMBER_COL, VARCHAR2_COL, BLOB_COL FROM OCI_FIELD_TEST WHERE NUMBER_COL IN (901, 902) ORDER BY NUMBER_COL</sql>
         </operation>
     </transaction>
 </request>

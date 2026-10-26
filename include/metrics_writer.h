@@ -33,10 +33,10 @@
  *   like every other dedicated thread in this project (File Consumer,
  *   Session Manager) - flagged deliberately, since this exact gap (a
  *   new thread given no session of its own) has bitten this project
- *   before. The actual bulk INSERT is a Stage 3 concern (the table
- *   doesn't exist yet) - this stage's DB thread batches correctly and
- *   logs what it would have written; see metrics_writer.c's own note
- *   at the insert call site.
+ *   before. Each batch is inserted into OCI_METRICS one row at a time
+ *   through driver->dml_execute() and committed through
+ *   tx_commit_with_retry() (Oracle dialect extraction 3b, 4 Oct; this
+ *   used to describe the INSERT as a stub awaiting the table).
  *
  * Both destinations independently toggleable (metrics_file_enabled,
  * metrics_db_enabled in config.ini) - either, both, or neither. With
